@@ -118,7 +118,7 @@ Thứ tự gợi ý; mỗi phase là một PR, chạy đủ test + checker trư�
 
 | Run | Skill | Mode | Status | Findings |
 |---|---|---|---|---|
-| 1 | `/plan-devex-review` (rút gọn) | DX POLISH | DONE_WITH_CONCERNS | 9 chặn cứng (B1–B9), 8 trục chấm, tổng 3/10 |
+| 1 | `/plan-devex-review` (rút gọn) | DX POLISH | DONE_WITH_CONCERNS | 8 chặn cứng (B1–B7, B9; B8 đã kiểm là an toàn), 8 trục chấm, tổng 3/10 |
 
 VERDICT: Chưa sẵn sàng làm bộ cài. Cần P1 (nền tảng: đường dẫn, khóa một bản, kho bí mật, đường dẫn template khi đóng gói) trước mọi việc khác; B4 là rủi ro tạo ticket trùng.
 
