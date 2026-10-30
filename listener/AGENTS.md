@@ -15,7 +15,7 @@ Mọi quyết định của bot phải dựa trên **file markdown cụ thể v�
 
 | Thư mục | Quyết định gì | Bot đọc lúc chạy? |
 |---|---|---|
-| [`rules/`](rules/README.md) | **Làm gì**: tạo ticket / hỏi / bỏ qua (bắt đầu từ README: quy tắc nạp rules vào bot và model). Riêng `roles.md`, `preflight.md`: quyền và cổng bật cho người + Agent | Sẽ đọc file quyết định khi chuyển ACTIVE (hiện DRAFT); không đọc `roles.md`, `preflight.md` |
+| [`rules/`](rules/README.md) | **Làm gì**: tạo ticket / hỏi / bỏ qua (bắt đầu từ README: quy tắc nạp rules vào bot và model). Riêng `roles.md`, `preflight.md`: quyền và cổng bật cho người + Agent | Khi opt-in được bật, đọc sáu file quyết định ACTIVE; không đọc `roles.md`, `preflight.md` |
 | `templates/github-ticket/` ([hướng dẫn](../Docs/templates/github-ticket/README.md)) | **Nói gì, trình bày ra sao**: form ticket, comment, câu reply (TG-33) | Có |
 | `prompts/` (vd [autonomous.md](prompts/autonomous.md)) | **Model trích dữ kiện thế nào** | Có |
 
@@ -38,7 +38,7 @@ Tài liệu Fleet cũ là lịch sử. Riêng §12.11 của [assistant-definitio
   - Quyết định: bảng I1–I3 (intent, command thắng model) và R1–R13 (đọc từ trên xuống, dòng đầu khớp thắng) trong [`rules/readiness.md`](rules/readiness.md).
   - Hỏi gì khi thiếu: [`rules/questions.md`](rules/questions.md). Bot nói ở đâu: [`rules/channels.md`](rules/channels.md) — **group gốc chỉ có reaction**, mọi tin chữ của bot ở group xử lý chung.
   - Ca mẫu đối chiếu X1–X24: [`rules/examples.md`](rules/examples.md). Trả lời "ca X xử lý thế nào" phải nêu mã luật đã khớp (vd `I2+R9`).
-  - Khi các file `rules/` còn `DRAFT`, bot chạy thật vẫn theo hành vi hiện tại (model trả `actionable`/`confidence`, bot trả lời ngay trong group gốc); bảng trong `rules/` là đích Owner đã chốt, dùng để đánh giá và soạn ticket tay.
+  - Sáu file quyết định đã ACTIVE theo Owner; cấu hình mặc định vẫn tắt và chưa có GO. Khi flag tắt, bot theo hành vi cũ; chỉ khi opt-in được phép mới dùng rules và group xử lý.
 - Gom/tách theo ngữ nghĩa và Reply thật; không gộp vì cùng sender, thời gian hay từ khóa. Ảnh, caption, reply phân tích chung một gói (TG-05, TG-06, TG-15).
 - Ticket đã có: open thì bổ sung; closed thì theo bảng **Vòng đời ticket** và **Ticket đã đóng**. Không tự reopen/đóng, không tạo trùng.
 - Repo, URL, nhãn, permission do config/code quyết định; model hoặc agent không tự chọn (TG-17, TG-31).

@@ -42,12 +42,14 @@ CATALOG = {
                     "scope_correction": _spec("title:T summary:B message_ids:T questions:L unresolved:L unresolved_image_urls:L unresolved_document_urls:L", "has_unresolved:T"),
                     **{f"append.{x}": _spec("url:T") for x in ("source", "recurrence", "related")}},
     "group-replies.md": {"notice.issue": _spec("issue_link:T"), "notice.needs_human": _spec("questions:L", "issue_link:T"),
-                         **{x: {} for x in ("notice.error", "notice.rate_limited", "notice.context_pending", "question.fallback", "question.legacy_pending", "question.technical_context", "followup.updated", "followup.split", "followup.recurrence")}},
+                         "ops.header": _spec("source_chat_name:T source_link:T topic_id:T sender_name:T"),
+                         "notice.hold_escalated": _spec("retry_count:T"),
+                         **{x: {} for x in ("notice.error", "notice.comment_ambiguous", "notice.attachment_ambiguous", "notice.rate_limited", "notice.context_pending", "question.fallback", "question.legacy_pending", "question.technical_context", "followup.updated", "followup.split", "followup.recurrence", "ask.object", "ask.observed", "ask.work", "ask.problem")}},
 }
 NAME = r"[a-z][a-z0-9_.]*"
 TOKEN = re.compile(r"{{(.*?)}}")
 ONE_LINE = {"_common.md": set(CATALOG["_common.md"]) - {"original", "footer"},
-            "group-replies.md": set(CATALOG["group-replies.md"]) - {"notice.needs_human"},
+            "group-replies.md": set(CATALOG["group-replies.md"]) - {"notice.needs_human", "ops.header"},
             "comments.md": {"append.source", "append.recurrence", "append.related"}}
 for _file in ("bug.md", "feedback.md", "task.md"):
     ONE_LINE[_file] = set(CATALOG[_file]) - {"body"}

@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 2 · status DRAFT · audience: code -->
+<!-- rule-file: readiness · version 3 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**

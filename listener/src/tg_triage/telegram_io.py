@@ -279,17 +279,22 @@ def make_media_downloader(client, loop, *, timeout=DOWNLOAD_TIMEOUT_SECONDS):
 
 
 async def enqueue_event(event, queue, chat_ids, store, *, stop=None, react=None,
-                        listen_all_groups=False, ignored_command_prefixes=()):
+                        listen_all_groups=False, ignored_command_prefixes=(),
+                        ops_chat_id=None, rules_pending=None, pending_expiry_days=None):
     if event.out or event.is_private:
         return
-    if listen_all_groups:
+    is_ops = rules_pending is not None and event.chat_id == ops_chat_id
+    if is_ops:
+        if not event.is_group:
+            return
+    elif listen_all_groups:
         # is_group: basic group và supergroup; kênh broadcast thì False/None.
         if not event.is_group:
             return
     elif event.chat_id not in chat_ids:
         return
     text = getattr(event, "raw_text", "") or ""
-    if isinstance(text, str) and any(
+    if not is_ops and isinstance(text, str) and any(
             re.match(r"^\s*" + re.escape(prefix) + r"(?:@[A-Za-z0-9_]+)?(?=\s|$)", text, re.I)
             for prefix in ignored_command_prefixes):
         LOG.info("decision=ignored_prefix chat_id=%s message_id=%s", event.chat_id, event.id)
@@ -299,7 +304,7 @@ async def enqueue_event(event, queue, chat_ids, store, *, stop=None, react=None,
     has_document, document_size, document_mime, document_name = _document_info(event)
     sender_id = getattr(event, "sender_id", None)
     reply_to_id = _reply_target(event)
-    if reply_to_id is not None:
+    if reply_to_id is not None and not is_ops:
         reply_to_id = store.group_notice_reply_target(event.chat_id, reply_to_id)
     message = IncomingMessage(event.chat_id, event.id, event.date or datetime.now(timezone.utc),
                               "không rõ người gửi", event.raw_text or "",
@@ -310,11 +315,13 @@ async def enqueue_event(event, queue, chat_ids, store, *, stop=None, react=None,
                               has_document=has_document, document_size=document_size,
                               document_mime=document_mime, document_name=document_name,
                               mentions_listener=_mentions_listener(event))
-    if not store.enqueue(message):
+    accepted = (rules_pending.accept_ops_message(message, pending_expiry_days)
+                if is_ops else store.enqueue(message))
+    if not accepted:
         return
     if stop is not None and stop.is_set():
         return  # Preserve catch-up updates during shutdown without metadata waits.
-    if react is not None and rules.is_command(message.text) and rules.command_type(message.text) != "question":
+    if rules_pending is None and react is not None and rules.is_command(message.text) and rules.command_type(message.text) != "question":
         # 12.13: /question is never a ticket, so it gets no heart. Chỉ tin mới (enqueue True); lỗi reaction đã được react() nuốt và log.
         if await reactions.react(react, message.chat_id, message.message_id, reactions.RECEIVED):
             _mark(store, message.chat_id, message.message_id, "received")
@@ -331,7 +338,8 @@ async def enqueue_event(event, queue, chat_ids, store, *, stop=None, react=None,
     name = " ".join(value for value in (
         getattr(sender, "first_name", None), getattr(sender, "last_name", None)) if value)
     name = name or getattr(sender, "title", None) or "không rõ người gửi"
-    message = replace(message, sender_name=name, chat_username=getattr(chat, "username", None))
+    message = replace(message, sender_name=name, chat_username=getattr(chat, "username", None),
+                      chat_title=getattr(chat, "title", None))
     store.update_metadata(message)
     if stop is not None and stop.is_set():
         return  # Durable queued data will be replayed next time.
@@ -430,14 +438,27 @@ async def _react_issue_created(pipeline, react, decision, chat_id, message_id):
     """
     if (react is not None and pipeline.config.mode == "live"
             and getattr(decision, "issue_number", None) is not None):
+        default_chat = getattr(decision, 'reaction_chat_id', None) or chat_id
+        composite = tuple(getattr(decision, 'reaction_targets', None) or ())
         targets = tuple(getattr(decision, "reaction_message_ids", None) or ()) or (
             getattr(decision, "reaction_message_id", None) or message_id,)
+        pairs = composite or tuple((default_chat,target) for target in targets)
         store = getattr(pipeline, "store", None)
-        for target in dict.fromkeys(targets):
-            if _already(store, chat_id, target, "ok"):
+        for target_chat,target in dict.fromkeys(pairs):
+            if _already(store, target_chat, target, "ok"):
                 continue   # one OK hand per message, also across restarts (12.10)
-            if await reactions.react(react, chat_id, target, reactions.ISSUE_CREATED):
-                _mark(store, chat_id, target, "ok")
+            if await reactions.react(react, target_chat, target, reactions.ISSUE_CREATED):
+                _mark(store, target_chat, target, "ok")
+
+
+def _reaction_source_chat(decision):
+    pairs = getattr(decision,'reaction_targets',None) or ()
+    if pairs: return pairs[0][0]
+    explicit = getattr(decision,'reaction_chat_id',None)
+    if type(explicit) is int: return explicit
+    key = getattr(decision,'case_key',None)
+    try: return int(key.rsplit(':',1)[0]) if key else None
+    except (ValueError, AttributeError): return None
 
 
 async def worker(queue, pipeline, stop=None, *, react=None, notice_send=None, notice_edit=None,
@@ -528,8 +549,9 @@ async def _paced_work(queue,pipeline,stop,react,interval,*,clock=time.monotonic,
                         excluded=frozenset(collector.pending)|frozenset(ready_chats)
                         for decision in await _in_thread(_sweep_cases,pipeline,excluded):
                             if decision.reaction_message_id is not None and decision.case_key:
-                                chat_id=int(decision.case_key.rsplit(':',1)[0])
-                                await _react_issue_created(pipeline,react,decision,chat_id,decision.reaction_message_id)
+                                chat_id=_reaction_source_chat(decision)
+                                if chat_id is not None:
+                                    await _react_issue_created(pipeline,react,decision,chat_id,decision.reaction_message_id)
                     finally:
                         RELEASED_SOURCES.reset(token)
                         sweep_pending=False
@@ -582,9 +604,10 @@ async def _work(queue, pipeline, stop, react, interval):
         if message is _TICK:
             for decision in await _in_thread(_sweep_cases, pipeline):
                 if decision.reaction_message_id is not None and decision.case_key:
-                    chat_id = int(decision.case_key.rsplit(":", 1)[0])
-                    await _react_issue_created(pipeline, react, decision, chat_id,
-                                               decision.reaction_message_id)
+                    chat_id = _reaction_source_chat(decision)
+                    if chat_id is not None:
+                        await _react_issue_created(pipeline, react, decision, chat_id,
+                                                   decision.reaction_message_id)
             continue
         try:
             decision = await _in_thread(_process_message, pipeline, message)
@@ -599,8 +622,18 @@ async def _work(queue, pipeline, stop, react, interval):
 def _sweep_cases(pipeline,exclude_chat_ids=()):
     """Close expired cases; a failure here must never stop the worker."""
     try:
-        return pipeline.close_due_cases(exclude_chat_ids=exclude_chat_ids) if exclude_chat_ids else pipeline.close_due_cases()
+        result = pipeline.close_due_cases(exclude_chat_ids=exclude_chat_ids) if exclude_chat_ids else pipeline.close_due_cases()
+        pending=getattr(pipeline,'rules_pending',None)
+        if pending is not None and pending.unresolved_ambiguity():
+            from .rules_pending_store import RulesHalt
+            raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+        return result
     except Exception as error:
+        from .rules_pending_store import RulesHalt
+        if isinstance(error, RulesHalt): raise
+        pending=getattr(pipeline,'rules_pending',None)
+        if pending is not None and pending.unresolved_ambiguity():
+            raise RulesHalt('unresolved ambiguous operation; Owner inspection required') from None
         LOG.error("Case sweep failed exception=%s", type(error).__name__)
         return []
 
@@ -611,8 +644,18 @@ def _process_message(pipeline, message):
     Trả Decision (hoặc None nếu trùng/lỗi) để worker async quyết định reaction.
     """
     try:
-        return pipeline.process(message)
+        result=pipeline.process(message)
+        pending=getattr(pipeline,'rules_pending',None)
+        if pending is not None and pending.unresolved_ambiguity():
+            from .rules_pending_store import RulesHalt
+            raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+        return result
     except Exception as error:
+        from .rules_pending_store import RulesHalt
+        if isinstance(error, RulesHalt): raise
+        pending=getattr(pipeline,'rules_pending',None)
+        if pending is not None and pending.unresolved_ambiguity():
+            raise RulesHalt('unresolved ambiguous operation; Owner inspection required') from None
         LOG.error("Message failed chat_id=%s message_id=%s exception=%s",
                   message.chat_id, message.message_id, type(error).__name__)
         try:
@@ -682,9 +725,14 @@ async def run(config, pipeline):
     cleanup_signals = lambda: None
 
     async def handler(event):
+        pending = getattr(pipeline, 'rules_pending', None)
+        snapshot = getattr(pipeline, 'rules_snapshot', None)
         await enqueue_event(event, queue, config.telegram.chat_ids, pipeline.store, stop=stop,
                             react=react, listen_all_groups=config.telegram.listen_all_groups,
-                            ignored_command_prefixes=config.telegram.ignored_command_prefixes)
+                            ignored_command_prefixes=config.telegram.ignored_command_prefixes,
+                            ops_chat_id=config.telegram.ops_chat_id if pending is not None else None,
+                            rules_pending=pending,
+                            pending_expiry_days=snapshot.limits['pending_expiry_days'] if snapshot is not None else None)
 
     tasks = []
     worker_task = None
@@ -700,11 +748,17 @@ async def run(config, pipeline):
     try:
         cleanup_signals = install_signal_handlers(stop)
         for message in pipeline.store.queued_messages():
-            if config.telegram.listen_all_groups or message.chat_id in config.telegram.chat_ids:
+            pending = getattr(pipeline, 'rules_pending', None)
+            is_ops = pending is not None and message.chat_id == config.telegram.ops_chat_id
+            if (is_ops and pending.is_bound_ops_reply(message.chat_id, message.message_id) or
+                    not is_ops and (config.telegram.listen_all_groups or message.chat_id in config.telegram.chat_ids)):
                 queue.put_nowait(message)
         # listen_all_groups: không lọc theo chat ở Telethon; enqueue_event lọc is_group.
+        subscribed = list(config.telegram.chat_ids)
+        if getattr(pipeline, 'rules_pending', None) is not None:
+            subscribed.append(config.telegram.ops_chat_id)
         builder = (events.NewMessage() if config.telegram.listen_all_groups
-                   else events.NewMessage(chats=list(config.telegram.chat_ids)))
+                   else events.NewMessage(chats=subscribed))
         client.add_event_handler(handler, builder)
         stopper = asyncio.create_task(stop.wait())
         startup = asyncio.create_task(initialize())

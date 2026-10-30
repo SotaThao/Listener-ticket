@@ -7,9 +7,9 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 - **hỏi lại** khi yêu cầu chưa rõ;
 - **bỏ qua** chat thường, cảm ơn, câu hỏi thông tin.
 
-> **Đây là bản sao chụp** từ repo `PersonalProjectJob/telegram-agent` (AgentBuilder) tại commit `d6e3ed8` (`main`, 2026-10-30). **Nguồn chính vẫn là repo đó** — sửa ở đó, repo này chưa nhận thay đổi ngược. Không mang lịch sử commit cũ.
+> **Listener-ticket là nguồn chính độc lập từ ngày 2026-10-30.** Repo được khởi tạo từ bản sao `PersonalProjectJob/telegram-agent` (AgentBuilder), commit `d6e3ed8` (`main`); lịch sử commit trước đó không được mang sang.
 
-> **Đang làm: bộ cài `install.exe` cho người không biết code.** Audit hạ tầng và việc cần làm: [`Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md`](Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md).
+> **Hiện tại: lõi rules đã ACTIVE và kiểm thử offline; setup máy còn Todo, chưa có GO vận hành.** Audit goal, giới hạn và việc còn lại: [`Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md`](Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md).
 
 ## Bắt đầu đọc từ đâu
 
@@ -18,12 +18,12 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 | Agent hoặc người tiếp nhận | [`listener/AGENTS.md`](listener/AGENTS.md) — tra vai, quyền, cổng bật trước khi làm bất cứ việc gì |
 | Vận hành | [`listener/README.md`](listener/README.md) (config, dry-run, trace, reformat) · [`deploy/README.md`](deploy/README.md) |
 | Nghiệp vụ | [Business DOCS — TG-01…TG-33](Docs/01-product/telegram-triage-noissue_business_261015_v1.0.0.md) (nguồn nghiệp vụ duy nhất) · [Overview](Docs/00-master/telegram-triage-noissue_overview_261027_v1.0.0.md) · [Rulebook](Docs/01-product/telegram-triage-noissue_rulebook_261027_v1.0.0.md) · [Luồng nghiệp vụ](Docs/01-product/telegram-triage-noissue_business-flow_261028_v1.0.0.md) |
-| Quy tắc quyết định (đích, DRAFT) | [`listener/rules/README.md`](listener/rules/README.md) |
+| Quy tắc quyết định (ACTIVE; bot tắt) | [`listener/rules/README.md`](listener/rules/README.md) |
 
 ## Cấu trúc
 
 ```
-listener/                 code (src/tg_triage), prompts, templates/github-ticket, rules (DRAFT), tests
+listener/                 code (src/tg_triage), prompts, templates/github-ticket, rules (6 ACTIVE; roles/preflight DRAFT), tests
 Docs/                     tài liệu Telegram triage (+ tài liệu Worker Agent Fleet cũ được trace tham chiếu)
 scripts/                  policy checker, reformat ticket, smoke model (fake tools)
 deploy/                   build_wheel.py, agentfleet_deploy.py (THINKPAD)

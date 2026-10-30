@@ -1,4 +1,4 @@
-<!-- rule-file: states · version 2 · status DRAFT · audience: code -->
+<!-- rule-file: states · version 3 · status ACTIVE · audience: code -->
 # Trạng thái kết quả
 
 Danh sách **đóng**: mỗi chủ đề nhận đúng một mã dưới đây, do code tính theo `readiness.md`. Model không trả trạng thái. Bot nói ở đâu: [`channels.md`](channels.md).

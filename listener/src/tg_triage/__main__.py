@@ -11,6 +11,8 @@ from pathlib import Path
 from .attachments import GhCliUploader
 from .classifier import load_prompt
 from .config import ConfigError, load_config, load_database_path
+from .decision_rules import RulesError, RulesSnapshot
+from .rules_pending_store import RulesHalt, check_before_recovery
 from .github_issues import GitHubIssues
 from .pipeline import Pipeline
 from .provider import build_provider
@@ -18,6 +20,16 @@ from .store import Store
 from .usage import UsageRecorder
 from .runtime import AlreadyRunning, ProcessLock, validate_data_directories
 from .ticket_templates import TemplateError, load_templates
+
+
+def _load_decision_rules():
+    source = Path(__file__).resolve().parents[2]
+    installed = Path(sys.prefix) / 'share' / 'tg-triage'
+    rules_dir = source / 'rules' if (source / 'rules').is_dir() else installed / 'rules'
+    templates_dir = source / 'templates' / 'github-ticket'
+    if not templates_dir.is_dir():
+        templates_dir = installed / 'templates' / 'github-ticket'
+    return RulesSnapshot(rules_dir, templates_dir)
 
 
 def _build_classifier(config, store):
@@ -72,9 +84,13 @@ def main(argv=None) -> int:
             return 0
         config = load_config(args.config)
         templates = load_templates() if args.command in ('run', 'check-config') else None
+        decision_rules = (_load_decision_rules()
+                          if config.decision_rules_enabled and args.command in ('run', 'check-config') else None)
         if args.command == "check-config":
             result = config.redacted()
             result['templates'] = {'fingerprint': templates.fingerprint}
+            if decision_rules is not None:
+                result['rules'] = {'fingerprint': decision_rules.fingerprint}
             print(json.dumps(result, ensure_ascii=False, indent=2))
         elif args.command == "login":
             validate_data_directories(config)
@@ -83,10 +99,14 @@ def main(argv=None) -> int:
                 asyncio.run(login(config))
         else:
             logging.getLogger(__name__).info('templates fingerprint=%s', templates.fingerprint)
+            if decision_rules is not None:
+                logging.getLogger(__name__).info('rules fingerprint=%s', decision_rules.fingerprint)
             validate_data_directories(config)
             # Lock before opening the store: a second process must not recover
             # another process's in-flight records.
             with ProcessLock(Path(config.db_path).parent):
+                if decision_rules is not None:
+                    check_before_recovery(config.db_path)
                 store = Store(config.db_path)
                 try:
                     if config.topic_memory_enabled or config.autonomous_enabled:
@@ -99,8 +119,9 @@ def main(argv=None) -> int:
                     # Issues use REST; image uploads use the gh CLI (Assistant definition 12.8).
                     uploader = (GhCliUploader(config.gh_repo, config.gh_token)
                                 if config.mode == "live" else None)
+                    pipeline_options = {'rules_snapshot': decision_rules} if decision_rules is not None else {}
                     asyncio.run(run(config, Pipeline(config, store, classifier, github,
-                                                     uploader=uploader)))
+                                                     uploader=uploader, **pipeline_options)))
                 finally:
                     store.close()
         return 0
@@ -111,6 +132,12 @@ def main(argv=None) -> int:
         return 2
     except TemplateError as error:
         print(f"TemplateError: {error}", file=sys.stderr)
+        return 2
+    except RulesError as error:
+        print(f"RulesError: {error}", file=sys.stderr)
+        return 2
+    except RulesHalt as error:
+        print(f"RulesHalt: {error}", file=sys.stderr)
         return 2
     except AlreadyRunning:
         print("AlreadyRunning: Telegram triage service is already running", file=sys.stderr)

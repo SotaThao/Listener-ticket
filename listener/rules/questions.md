@@ -1,4 +1,4 @@
-<!-- rule-file: questions · version 2 · status DRAFT · audience: code -->
+<!-- rule-file: questions · version 3 · status ACTIVE · audience: code -->
 # Hỏi khi thiếu (trạng thái `NEED_INFO`)
 
 Code chọn câu hỏi theo trường thiếu; **câu chữ** lấy từ khối template ghi ở cột "Khối template" (danh mục khối: `channels.md` · `blocks`). Model không viết câu hỏi. Câu hỏi **chỉ gửi ở group xử lý**, không bao giờ ở group gốc (`channels.md`).

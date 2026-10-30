@@ -64,9 +64,33 @@ Ensure `/var/lib/agentfleet/tg` is owned by `tglistener` with mode 700, and
 contain sensitive data. SQLite files are set to mode 600. Run a single service
 instance per database. On Linux, run/login reject data directories unless they
 have mode 0700 and belong to the current user. The CLI sets umask 0077. Run and login hold
-a non-blocking flock on `tg-triage.lock` in the database directory, acquired
-before recovery; a contended lock exits with code 3. Windows skips this OS lock.
+a non-blocking OS lock on `tg-triage.lock` in the database directory, acquired
+before recovery; a contended lock exits with code 3. Linux uses flock and Windows locks byte zero.
 CSV export does not perform recovery or change message decisions.
+
+The experimental `[thinking] decision_rules_enabled` setting defaults to `false`.
+With it off, existing intake and ANALYZE/STATUS behavior remain in use. With it on,
+`check-config` requires thinking and autonomous mode, a separate `telegram.ops_chat_id`,
+and a complete ACTIVE rules snapshot; it prints the rules fingerprint. `run` loads
+the same validated snapshot once at startup. On 2026-10-30 the Owner approved the six
+decision rules as ACTIVE and the eight ops template wordings. The bot remains off;
+roles and preflight remain DRAFT and no operational GO has been granted. In rules mode, informational questions and
+chat are CHAT; the separate legacy ANALYZE/STATUS behavior remains available with the
+flag off. A closed target is conservatively held for Owner review. Unread PDF/Office
+attachments may accompany a ticket when the caption independently supplies the required
+facts; requests that depend on unread content, or failed/oversized text extraction, hold.
+A later message may join an old pending
+topic only through an actual Reply; similarity or timing alone does not grant binding.
+An ops answer arriving while that topic has a reserved batch effect is retained in
+pending review for Owner inspection; it is not silently merged into the executing plan.
+In rules mode an unresolved reserved or ambiguous GitHub operation, batch group or
+ops notice stops the worker and prevents restart. Inspect the relevant operation and
+its external result with the Owner before recovery; untouched planned groups and queued
+messages stay recorded. No automatic reset or retry is performed. A crash before a
+warning is sent can leave only the startup halt diagnostic for the operator.
+An attachment release/upload with an unknown outcome halts immediately and requires
+Owner inspection; an internal batch checkpoint alone may be reconciled only when
+the write ledgers prove either no effect or a completed effect and sent notice.
 
 ## Provider configuration and telemetry
 

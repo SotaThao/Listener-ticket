@@ -70,7 +70,8 @@ class TicketTemplatesTests(unittest.TestCase):
 
     def test_bom_crlf_and_values_are_not_reparsed(self):
         path = self.directory / 'bug.md'
-        path.write_bytes(b'\xef\xbb\xbf' + path.read_bytes().replace(b'\n', b'\r\n'))
+        source = path.read_bytes().replace(b'\r\n', b'\n')
+        path.write_bytes(b'\xef\xbb\xbf' + source.replace(b'\n', b'\r\n'))
         templates = validate(self.directory)
         hostile = '{{summary}} {{#if x}} {{/block}} {{@steps}}'
         text = templates.render('bug.md', 'body', {'summary': hostile, 'evidence': '', 'notes': [],

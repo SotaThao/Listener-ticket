@@ -1,4 +1,4 @@
-<!-- rule-file: facts · version 2 · status DRAFT · audience: model + code -->
+<!-- rule-file: facts · version 3 · status ACTIVE · audience: model + code -->
 # Dữ kiện
 
 Hai loại dữ kiện, không lẫn nhau:

@@ -1,4 +1,4 @@
-<!-- rule-file: channels · version 1 · status DRAFT · audience: code -->
+<!-- rule-file: channels · version 3 · status ACTIVE · audience: code -->
 # Bot nói gì, ở đâu
 
 Owner chốt 2026-10-29: **group gốc chỉ có reaction**; mọi tin chữ của bot (câu hỏi, link ticket, báo lỗi, hết quota) gửi vào **một group xử lý chung** cho mọi group nguồn, để group gốc không bị loãng.
@@ -46,9 +46,9 @@ Danh mục mọi khối template rules dùng. `có` = đã có trong file templa
 | `followup.updated` | `group-replies.md` | `có` |
 | `question.fallback` | `group-replies.md` | `có` |
 | `notice.rate_limited` | `group-replies.md` | `có` |
-| `ops.header` | `group-replies.md` | `cần thêm` |
-| `ask.object` | `group-replies.md` | `cần thêm` |
-| `ask.observed` | `group-replies.md` | `cần thêm` |
-| `ask.work` | `group-replies.md` | `cần thêm` |
-| `ask.problem` | `group-replies.md` | `cần thêm` |
-| `notice.hold_escalated` | `group-replies.md` | `cần thêm` |
+| `ops.header` | `group-replies.md` | `có` |
+| `ask.object` | `group-replies.md` | `có` |
+| `ask.observed` | `group-replies.md` | `có` |
+| `ask.work` | `group-replies.md` | `có` |
+| `ask.problem` | `group-replies.md` | `có` |
+| `notice.hold_escalated` | `group-replies.md` | `có` |

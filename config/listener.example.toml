@@ -6,6 +6,8 @@ session_path = "/var/lib/agentfleet/tg/gateway.session"
 chat_ids = [-1001234567890]
 # true = listen to every group/supergroup (not private chats/channels); chat_ids must then be empty or omitted
 listen_all_groups = false
+# Required only when decision rules are enabled; must be distinct from source groups.
+# ops_chat_id = -1009876543210
 # Kept for compatibility; no longer used to drop short messages (the model judges them, 12.12).
 min_text_length = 8
 
@@ -99,6 +101,8 @@ enabled = true
 topic_memory_enabled = false
 # Semantic multi-topic routing and closed-ticket lifecycle; keep off until verified.
 autonomous_enabled = false
+# Six decision rules and eight wordings are Owner-approved; keep off until preflight and GO.
+decision_rules_enabled = false
 # Live autonomous Telegram: wait for conversation context, then classify by meaning.
 context_quiet_seconds = 30
 context_max_wait_seconds = 60

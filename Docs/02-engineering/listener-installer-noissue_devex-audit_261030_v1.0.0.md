@@ -8,7 +8,7 @@
 ## 1. Phạm vi, nguồn chính và bằng chứng
 
 - Owner chốt **Listener-ticket phát triển độc lập**. `PersonalProjectJob/telegram-agent` / AgentBuilder chỉ còn là nguồn lịch sử, không phải nguồn chính để sửa song song.
-- Báo cáo nằm trên branch tài liệu `docs/noissue_devex-audit-installer`. Snapshot đã kiểm được commit tại `095ca3f` trên branch `codex/noissue_listener-core-rules`, base `origin/main` `b2d051b`; Owner đã yêu cầu tích hợp mã và audit lên `main`. Worktree mã ban đầu là `Listener-ticket-core-rules`; kiểm lại HEAD của main để xác định bản publish. Chưa tạo release hoặc triển khai service.
+- Audit ban đầu được cập nhật trên branch tài liệu `docs/noissue_devex-audit-installer`; bản này được tích hợp cùng mã lên `main` theo yêu cầu Owner. Snapshot đã kiểm được commit tại `095ca3f` trên branch `codex/noissue_listener-core-rules`, base `origin/main` `b2d051b`; Owner đã yêu cầu tích hợp mã và audit lên `main`. Worktree mã ban đầu là `Listener-ticket-core-rules`; kiểm lại HEAD của main để xác định bản publish. Chưa tạo release hoặc triển khai service.
 - Owner đã duyệt: “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, vẫn giữ bot tắt. Tiếp tục kiểm tra bước tiếp theo như đề xuất.” Sáu file quyết định hiện header version 3 / ACTIVE; `roles.md`, `preflight.md` vẫn DRAFT.
 - Cấu hình ví dụ vẫn `mode="dry-run"`, `autonomous_enabled=false`, `decision_rules_enabled=false`. ACTIVE cho phép nạp rules khi opt-in; không tự bật tính năng hoặc service.
 - Owner hoãn cấu hình model/P8: “sẽ hỏi khi setup máy”. Không yêu cầu lại model trước thời điểm setup.

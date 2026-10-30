@@ -12,6 +12,12 @@ Thông tin cần làm rõ:
 {{#block notice.error}}
 Chưa xác nhận được kết quả tạo GitHub issue cho nội dung này. Nhờ Owner kiểm tra repo và hỗ trợ ngay trong group. Issue có thể đã được tạo; kiểm tra repo trước khi thử tạo lại.
 {{/block}}
+{{#block notice.comment_ambiguous}}
+Em chưa xác nhận được kết quả bổ sung ticket. Nhờ Owner kiểm tra ticket trước khi thử lại.
+{{/block}}
+{{#block notice.attachment_ambiguous}}
+Em chưa xác nhận được kết quả tải tệp đính kèm. Nhờ Owner kiểm tra tệp trên GitHub trước khi xử lý tiếp.
+{{/block}}
 {{#block notice.rate_limited}}
 Chưa tạo GitHub issue vì đã đạt giới hạn tạo issue. Nhờ Owner kiểm tra và xác nhận cách xử lý ngay trong group.
 {{/block}}
@@ -35,4 +41,25 @@ Em đã tách các yêu cầu thành từng ticket riêng rồi nhé 😊
 {{/block}}
 {{#block followup.recurrence}}
 Em đã tạo ticket cho lần lỗi tái diễn và gắn ticket liên quan rồi nhé 😊
+{{/block}}
+{{#block ops.header}}
+Nhóm nguồn: {{source_chat_name}}
+Tin gốc: {{source_link}}
+Chủ đề: {{topic_id}}
+Người gửi: {{sender_name}}
+{{/block}}
+{{#block ask.object}}
+Anh/Chị đang nói tới màn hình, chức năng hoặc thiết bị nào?
+{{/block}}
+{{#block ask.observed}}
+Hiện tại phần đó đang xảy ra lỗi hoặc hành vi gì?
+{{/block}}
+{{#block ask.work}}
+Anh/Chị muốn team thực hiện thay đổi cụ thể nào?
+{{/block}}
+{{#block ask.problem}}
+Anh/Chị đang gặp vấn đề hoặc nhu cầu cụ thể nào?
+{{/block}}
+{{#block notice.hold_escalated}}
+Chủ đề này chưa được phân tích thành công sau {{retry_count}} lần thử lại. Nhờ Owner kiểm tra; chưa tạo ticket.
 {{/block}}

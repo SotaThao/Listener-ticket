@@ -1,6 +1,6 @@
 # Quy tắc nạp rules vào bot và model
 
-> **Trạng thái: DRAFT — chờ Owner duyệt.** Runtime **chưa** đọc thư mục này. File này quy định **cách** bot nạp, kiểm và dùng các file quy tắc; nội dung quy tắc nằm ở các file khác trong thư mục.
+> **Trạng thái: sáu file quyết định ACTIVE theo duyệt Owner ngày 2026-10-30; bot vẫn tắt.** `roles.md` và `preflight.md` còn DRAFT; chưa có GO. Chế độ opt-in chỉ nạp bộ ACTIVE tại `check-config` và `run`. File này quy định **cách** bot nạp, kiểm và dùng các file quy tắc; nội dung quy tắc nằm ở các file khác trong thư mục.
 >
 > **Nguyên tắc (Owner, 2026-10-29):** mọi quyết định của bot dựa trên file markdown trong thư mục này với trạng thái liệt kê cụ thể. **Model chỉ trích dữ kiện; code áp quy tắc.** Đổi hoặc nâng cấp model chỉ làm dữ kiện chính xác hơn hoặc nhanh hơn, không đổi kết quả của cùng một bộ dữ kiện.
 >
@@ -12,12 +12,12 @@ File quyết định — bot nạp theo thứ tự:
 
 | File | Nội dung | Ai dùng | Thứ tự nạp | Trạng thái |
 |---|---|---|---|---|
-| [states.md](states.md) | 6 trạng thái kết quả, vòng đời pending, hạn 7 ngày, số lần thử `HOLD` | Code | 1 | DRAFT |
-| [facts.md](facts.md) | Dữ kiện model trích (`fields`), dữ kiện code tính (`code_facts`), command → intent, điều kiện CÓ V1–V4, chuẩn hóa N1–N5, giá trị chung chung | **Model** (`fields`, cách ghi giá trị) + Code | 2 | DRAFT |
-| [readiness.md](readiness.md) | Bảng `intent_resolve` I1–I3 và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | DRAFT |
-| [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4) | Code | 4 | DRAFT |
-| [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | DRAFT |
-| [examples.md](examples.md) | 24 ví dụ X1–X24 phủ mọi luật + 8 ca chuẩn hóa G1–G8 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | DRAFT |
+| [states.md](states.md) | 6 trạng thái kết quả, vòng đời pending, hạn 7 ngày, số lần thử `HOLD` | Code | 1 | ACTIVE |
+| [facts.md](facts.md) | Dữ kiện model trích (`fields`), dữ kiện code tính (`code_facts`), command → intent, điều kiện CÓ V1–V4, chuẩn hóa N1–N5, giá trị chung chung | **Model** (`fields`, cách ghi giá trị) + Code | 2 | ACTIVE |
+| [readiness.md](readiness.md) | Bảng `intent_resolve` I1–I3 và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
+| [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4) | Code | 4 | ACTIVE |
+| [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | ACTIVE |
+| [examples.md](examples.md) | 24 ví dụ X1–X24 phủ mọi luật + 8 ca chuẩn hóa G1–G8 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
 
 File cho **người và Agent** — không nằm trong trình tự nạp quyết định, không gửi model:
 
@@ -121,11 +121,13 @@ Không sửa file quy tắc trực tiếp trên máy chạy; không có thư m�
 
 `listener/pyproject.toml` thêm `"share/tg-triage/rules" = [các file .md trong thư mục này]`, giống prompts và templates. Bản cài tìm rules ở `sys.prefix/share/tg-triage/rules`.
 
-## 10. Còn chờ Owner trước khi ACTIVE
+## 10. Trạng thái phê duyệt và việc còn lại
 
 | Mục | File | Việc |
 |---|---|---|
-| Câu chữ 6 khối `cần thêm` | `channels.md` · `blocks` → `templates/github-ticket/group-replies.md` | Duyệt câu chữ `ops.header`, `ask.object`, `ask.observed`, `ask.work`, `ask.problem`, `notice.hold_escalated` |
+| Câu chữ 8 khối | `channels.md` · `blocks` → `templates/github-ticket/group-replies.md` | Owner đã duyệt `ops.header`, `ask.object`, `ask.observed`, `ask.work`, `ask.problem`, `notice.hold_escalated`, `notice.comment_ambiguous`, `notice.attachment_ambiguous` ngày 2026-10-30 |
 | Bảng quyền A01–A27 | `roles.md` · `actions` | Duyệt từng ô |
 | Mục kiểm P1–P13, điều kiện dừng H1–H7 | `preflight.md` | Duyệt danh sách và người ký |
 | Reply vào ticket đã đóng | `lifecycle.md` (chưa soạn) | Chuyển bảng Vòng đời ticket thành rules |
+
+Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, vẫn giữ bot tắt. Tiếp tục kiểm tra bước tiếp theo như đề xuất.” Việc này không cấp GO hoặc duyệt `roles.md` / `preflight.md`; phiếu P1–P13 vẫn phải hoàn tất.
