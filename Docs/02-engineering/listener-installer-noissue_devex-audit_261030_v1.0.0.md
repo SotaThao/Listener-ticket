@@ -1,134 +1,161 @@
-# Listener-ticket — Audit hạ tầng code trước khi làm bộ cài `install.exe`
+# Listener-ticket — Audit goal Telegram → ticket và điều kiện vận hành
 
-**Version**: v1.0.0 · **Ngày**: 2026-10-30 · **Owner**: AlexChu · **Reviewer**: Claude (`/plan-devex-review`, mode DX POLISH) · **Base**: `main` `b2d051b`
-**Trạng thái**: Audit xong. Chờ Owner chốt mục 8 trước khi agent sau bắt đầu code.
+**Version**: v1.0.2 · **Cập nhật**: 2026-10-30 18:13 Asia/Saigon · **Owner**: AlexChu · **Người cập nhật**: Codex
+**Kết luận**: Lõi đã triển khai và kiểm thử offline; sáu rules ACTIVE, tám mẫu tin được Owner duyệt. Chưa đủ bằng chứng chạy thật: **NO_GO**. Không bật/restart bot trong phiên.
 
-> **Cho agent tiếp nhận:** đọc theo thứ tự §1 (mục tiêu) → §4 (chặn cứng) → §7 (việc cần làm) → §8 (quyết định chờ Owner). Mọi phát hiện có `file:dòng` để kiểm lại. Quy tắc nghiệp vụ không đổi: [`listener/AGENTS.md`](../../listener/AGENTS.md), [Business DOCS](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md).
+> Bản này cập nhật audit v1.0.0 về bộ cài. Goal ưu tiên hiện tại là **Agent tự lắng nghe thông tin trong group Telegram và log ticket đúng nghiệp vụ**. Installer cho người không biết code là nhánh sau; không dùng điểm DX của bản cũ để kết luận chất lượng lõi hôm nay. Giữ tên file để các liên kết hiện hữu tiếp tục hoạt động.
 
-## 1. Mục tiêu đã chốt (Owner, 2026-10-30)
+## 1. Phạm vi, nguồn chính và bằng chứng
 
-| Mục | Chốt |
+- Owner chốt **Listener-ticket phát triển độc lập**. `PersonalProjectJob/telegram-agent` / AgentBuilder chỉ còn là nguồn lịch sử, không phải nguồn chính để sửa song song.
+- Báo cáo nằm trên branch tài liệu `docs/noissue_devex-audit-installer`. Snapshot đã kiểm được commit tại `095ca3f` trên branch `codex/noissue_listener-core-rules`, base `origin/main` `b2d051b`; Owner đã yêu cầu tích hợp mã và audit lên `main`. Worktree mã ban đầu là `Listener-ticket-core-rules`; kiểm lại HEAD của main để xác định bản publish. Chưa tạo release hoặc triển khai service.
+- Owner đã duyệt: “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, vẫn giữ bot tắt. Tiếp tục kiểm tra bước tiếp theo như đề xuất.” Sáu file quyết định hiện header version 3 / ACTIVE; `roles.md`, `preflight.md` vẫn DRAFT.
+- Cấu hình ví dụ vẫn `mode="dry-run"`, `autonomous_enabled=false`, `decision_rules_enabled=false`. ACTIVE cho phép nạp rules khi opt-in; không tự bật tính năng hoặc service.
+- Owner hoãn cấu hình model/P8: “sẽ hỏi khi setup máy”. Không yêu cầu lại model trước thời điểm setup.
+
+Bằng chứng dưới đây ở `.context/` **của worktree mã**, là artifact local được gitignore, chưa phải bằng chứng release công khai:
+
+| Kiểm tra đã chạy | Kết quả thật | Artifact |
+|---|---|---|
+| Full listener suite sau ACTIVE | `Ran 1393 tests in 169.375s; OK (skipped=2)` | `activation-full-tests.log` |
+| Rules / engine / bootstrap | 31 tests OK; riêng markdown 13 tests OK; K7 đạt | `rules-progress.txt`, `activation-preflight.md` |
+| Policy checker | PASS, 33 quy tắc / 56 file runtime-prompt-template | `activation-policy.log` |
+| Policy regression | 18 tests OK, 7.499s | `activation-policy-tests.log` |
+| Wheel trong venv tạm + CLI `check-config` nguồn/bản cài | PASS, RECORD đúng, import từ venv, hai fingerprint khớp | `activation-wheel-check.json`, `.log` |
+| Independent review | Read-only Codex Terra/high APPROVED sau sửa findings; reviewer đọc source được cung cấp, không tự chạy test/hash | `codex-review-final-r10.jsonl`, `codex-review-activation-r2.jsonl` |
+| Controller đối chiếu file | 34/34 hash khớp sau review; 22 file code/test/template/package không đổi ở lát ACTIVE | `activation-freeze-r3-hashes.json`, `activation-scope-proof.json` |
+| Diff whitespace | `git diff --check` exit 0 | `activation-diff-check.log` |
+
+Rules fingerprint: `d3f2f2c36255ef35728794f749980fd5c3e0845fe79050a9a85b1b4c553c81e6`.
+Template fingerprint: `8bc960370883bc8855a0e3e204f22656f957e5f0ae1998cbd8343ef184d9ef2f`.
+
+Kiểm wheel chỉ dùng config/credential tổng hợp; không chạy `run`, không gọi model/GitHub/Telegram, không tạo DB/session. **Offline PASS không chứng minh model trích đúng, config máy chạy đúng hoặc bot đã chạy thật.** Hai test skipped không được tính là PASS riêng lẻ.
+
+## 2. Phần đã đáp ứng goal ở mức code/offline
+
+| Nhu cầu | Đã có | Giới hạn bằng chứng |
+|---|---|---|
+| Tự nghe group, không cần tag để phát hiện công việc | Nền Telethon, lọc nhóm được cấu hình, lưu SQLite, gom batch và chống trùng | Chưa kiểm membership/kết nối máy triển khai |
+| Quyết định tạo ticket nhất quán | Model chỉ trích nhóm/dữ kiện; code áp markdown và sáu trạng thái READY/APPEND/NEED_INFO/MEDIA_ONLY/CHAT/HOLD; confidence không quyết định | P8 model thật chưa kiểm; không có cam kết chính xác 100% từ unit test |
+| Tạo/bổ sung ticket đúng nguồn | Renderer/reservation hiện hữu; APPEND cần Reply thật và bằng chứng target open cùng nguồn/repo tin cậy; source có định danh chat + message | Chưa kiểm token/quyền repo thật; ticket đóng còn HOLD |
+| Hỏi bổ sung đúng kênh | Group nguồn chỉ reaction trong rules mode; mọi tin chữ sang ops; Reply vào câu hỏi đã gửi được nối đúng pending | Tám mẫu đã duyệt; P12 trên group thật còn thiếu |
+| Giữ tin khi chưa đủ rõ | Pending bền vững, hỏi từng trường một lần, fallback một lần, retry có giới hạn, expiry bảy ngày | Một số tổ hợp lịch sử/budget thiếu bằng chứng giữ HOLD/manual |
+| Ảnh và tài liệu có provenance | Định danh kép chat/message, giữ ảnh của pending, đọc text ngắn có giới hạn; tài liệu chưa đọc không cấp dữ kiện giả | PDF/Office chưa đọc có thể đính kèm nếu caption tự đủ; không hứa hiểu nội dung chưa đọc |
+| Tránh ghi lặp khi crash | Checkpoint nhóm, ledger issue/comment/notice/upload, phân biệt claim nội bộ với thao tác ghi thật; unknown write dừng H4, không tự replay | H4 cần Owner kiểm tra repo; không tự sửa/reset DB để chạy tiếp |
+| Một tiến trình mỗi DB trên Windows | `ProcessLock` dùng `msvcrt`, test contention/release/kill với process thật | Chưa thử cùng service và quy trình restart trên máy đích |
+
+Nguồn mã để kiểm lại: `decision_rules.py`, `rules_extraction.py`, `rules_intake.py`, `rules_pending_store.py`, `runtime.py`, tích hợp `pipeline.py` / `telegram_io.py` trong worktree mã. Chế độ cũ khi flag OFF vẫn giữ; ANALYZE/STATUS không được coi là khả năng của đường intake rules mới.
+
+## 3. Phần dư so với goal hiện tại
+
+“Dư” ở đây nghĩa là chưa cần để chứng minh nghe group → log ticket an toàn; chưa có yêu cầu xóa các khả năng này.
+
+| Nhánh | Cách xử lý phạm vi |
 |---|---|
-| Cách làm | **A**: giữ code Python, đóng gói sẵn Python (Nuitka hoặc PyInstaller) + bộ cài (Inno Setup trên Windows). **Không** viết lại bằng C++/Go |
-| Người cài | **Quản lý team không biết code**, máy Windows. Không biết terminal, biến môi trường, systemd. Bỏ cuộc nếu gặp lỗi không hiểu |
-| Thời gian cài | **≤ 10 phút**, tính từ lúc chạy `install.exe` tới lúc thấy bot chạy |
-| Khoảnh khắc chứng minh | **Ticket thử thật**: wizard nhờ người dùng gửi 1 tin mẫu vào group, bot tạo ticket vào repo họ chọn và hiện link |
-| Repo làm việc | `SotaThao/Listener-ticket`. Nguồn chính của logic nghiệp vụ vẫn là `PersonalProjectJob/telegram-agent` (xem §8 D-8) |
+| `install.exe`, PyInstaller/Nuitka, Inno Setup, ký số | Để backlog installer riêng; không nằm trong gói 20h ở §7 |
+| Wizard sáu bước, Telegram OTP GUI, GitHub device flow, DPAPI | Hữu ích cho người cài không biết code; chưa cần cho operator cấu hình bản Python |
+| Mục tiêu cài ≤10 phút, SETUP có ảnh, UX lỗi/thống kê thời gian cài | Chưa đo lại; điểm DX 3/10 và TTHW >60 phút của v1.0.0 là nhận định lịch sử cho persona installer, không phải số đo runtime mới |
+| Windows Service/Task Scheduler hoàn chỉnh | Không cần để chứng minh logic offline; cơ chế chạy nền/restart thực tế của máy đã chọn vẫn phải kiểm trước GO |
+| Phân tích/status rộng, tối ưu chi phí, đa provider, routing nâng cao | Giữ ngoài gói kiểm chứng lõi; không mở rộng rules intake để đạt parity mọi tính năng cũ |
+| Viết lại C++/Go hoặc đồng bộ sửa hai repo nguồn | Không làm: Python hiện hữu và một nguồn chính Listener-ticket đã chốt |
 
-## 2. Persona
+Không xếp policy, provenance, lock, reservation, rollback hoặc preflight vào “dư”: đây là điều kiện bảo vệ ticket và dữ liệu.
 
-```
-NGƯỜI CÀI
-Ai:       Quản lý / chủ group Telegram của team phần mềm
-Bối cảnh: Muốn mọi bug, việc, góp ý trong group tự thành GitHub ticket
-Chịu được: ~10 phút, ~6 bước; bỏ khi gặp màn hình đen hoặc lỗi tiếng Anh kỹ thuật
-Mặc định: Có Telegram trên điện thoại, có tài khoản GitHub, máy Windows 10/11. Không có Python, Ollama, Linux
-```
+## 4. Bug, giới hạn và điều chỉnh audit cũ
 
-## 3. Trải nghiệm hôm nay (đi theo tài liệu thật)
+### 4.1 Bug đã sửa và kiểm lại
 
-> Tôi mở `README.md`. Bảng đầu tiên bảo tôi đọc `listener/AGENTS.md` và Business DOCS dài 2.000 dòng. Tôi chỉ muốn cài. Tôi kéo xuống mục "Kiểm tra" thì thấy `cd listener && PYTHONPATH=src python -m unittest…`. Máy tôi không có Python. Tôi mở `listener/README.md`, mục "Configuration and commands" nói config ở `/etc/tg-triage/listener.toml`, khóa bí mật đặt trong biến môi trường `TG_API_ID`, `TG_API_HASH`, `GH_TOKEN`. Tôi không biết `/etc` là gì trên Windows, không biết lấy `TG_API_HASH` ở đâu. `deploy/README.md` nói về `systemctl`, `/opt/agentfleet`, user `tglistener`. Tới đây là 15 phút và tôi chưa chạy được gì. Tôi đóng tab.
+| Nhóm lỗi đã phát hiện | Trạng thái hiện tại |
+|---|---|
+| ProcessLock không khóa trên Windows | Đã sửa, có kiểm tranh chấp process thật. Không còn giữ B4 như bug mở |
+| Validation null/falsy, tính bất biến snapshot | Đã sửa và reviewer kiểm lại |
+| Batch sai làm sửa một phần pending; mất câu trả lời đến đồng thời | Đã sửa guard/claim; regression fake xanh |
+| Ảnh pending lịch sử, message ID trùng giữa source/ops, reaction sai đích | Đã sửa định danh kép và lưu provenance; regression xanh |
+| Tài liệu chưa đọc bị dùng để hợp thức hóa dữ kiện model | Đã sửa grounding; không dùng boolean có tài liệu để tin mọi nội dung |
+| H4 kiểm quá muộn, worker/sweep tiếp tục sau ghi không rõ kết quả | Đã sửa tại ranh giới tác vụ và trước Store recovery; giữ DB/queue |
+| Recovery CHAT đã đóng hoặc APPEND có nhiều Reply cùng target bị chặn sai | Đã sửa, kiểm crash không repost |
+| Nhầm timeout `gh release view` là ghi ambiguous | Đã tách read failure trước write; uncertainty của create/upload vẫn dừng |
+| Tài liệu còn ghi mẫu tin chưa duyệt | Đã sửa sau Owner phê duyệt; activation review APPROVED |
 
-**TTHW hiện tại:** > 60 phút, và với persona này là **không hoàn thành được**.
+### 4.2 Bug còn mở được xác nhận
 
-## 4. Chặn cứng: không làm thì không có bộ cài Windows
+**Chưa có defect code tái hiện còn mở trong snapshot và phạm vi reviewer vừa kiểm.** Đây không phải kết luận “không còn bug”: chưa có kiểm model cấu hình thật, bản release hay group thật. P6 vẫn UNCHECKED vì chưa có xác nhận Owner về danh sách HIGH.
 
-| # | Chặn | Bằng chứng | Hệ quả nếu bỏ qua |
+| Mục còn thiếu | Phân loại đúng | Ảnh hưởng / cách giữ an toàn |
+|---|---|---|
+| Reply vào ticket đã đóng | Khoảng trống lifecycle của rules mode | HOLD `closed_target_not_supported`; không tự reopen hoặc tạo thay thế. Không nằm trong 20h hoàn thiện parity |
+| Thiếu budget/proof, nhiều pending lịch sử hoặc tổ hợp document lịch sử không được hỗ trợ | Giới hạn xử lý bảo thủ | HOLD/manual; không suy diễn để ép READY |
+| Câu trả lời ops đến khi một ghi đang in-flight | Giới hạn concurrency có chủ đích | Lưu bền vững, giữ cho Owner xem; không âm thầm bỏ tin |
+| Model/provider, quyền GitHub, membership Telegram, service thật | Rủi ro chưa kiểm | Giữ UNCHECKED/NO_GO tới khi có output máy |
+| `harness-verify` chỉ nhận project Node | Blocker công cụ verify, không phải bug listener | Exit 2 vì thiếu package.json; giữ Python checks riêng, không tạo package.json giả |
+
+### 4.3 Đính chính các finding installer v1.0.0
+
+- **B4**: `model_lock.py` đã có nhánh Windows từ trước. Bug thực tế là `runtime.ProcessLock`; đã sửa ở worktree mới. Không yêu cầu sửa lại ModelLock khi không có repro.
+- **Lỗi HIGH giới hạn ảnh** ghi trong preflight cũ là nhận định lịch sử; test hồi quy hiện xanh. Không ghi lại thành bug mở chỉ từ tài liệu ngày 29/10.
+- **B5**: fallback Ollama là cấu hình mặc định, không phải bắt buộc duy nhất; config hỗ trợ `fallback="none"`. Khi setup phải đối chiếu provider/fallback thật và consent.
+- **B7**: tìm data-files đã được kiểm qua wheel Python trong venv tạm. Chưa kiểm executable frozen; PASS wheel không đóng finding đóng gói `.exe`.
+- **D-8**: đã chốt Listener-ticket độc lập. **D-9**: đề xuất wizard chỉ có group nguồn đã lỗi thời cho rules mode: ops group riêng là điều kiện config bắt buộc khi opt-in. Các quyết định app Telegram/OAuth, installer, code-signing và ngoại lệ ticket setup thật chưa được duyệt chỉ vì rules ACTIVE.
+
+## 5. Phiếu preflight hiện tại và việc chờ setup máy
+
+| Mục | Trạng thái | Còn cần gì |
+|---|---|---|
+| P1 sáu rules ACTIVE | PASS | Owner duyệt, version3; không bao gồm roles/preflight |
+| P2 markdown | PASS | 13 tests OK, có K7 |
+| P3 nạp rules/template + fingerprint | PASS offline | Source/venv wheel tạm khớp; đối chiếu lại bản cài đích |
+| P4 toàn bộ test đúng commit release | UNCHECKED | Hiện chỉ có worktree 1.393 tests OK; cần SHA/gói release bất biến và test đúng bản đó |
+| P5 drift/policy | PASS | 33 rules/56 files, 18 tests |
+| P6 không HIGH mở | UNCHECKED | Owner xem danh sách rủi ro/finding và ký; không tự suy từ review APPROVED |
+| P7 smoke dùng fake external tools | UNCHECKED | Chạy script smoke quy định với đúng cấu hình/bản release; unit fake không thay P7 |
+| P8 model trích đúng toàn bộ ví dụ | UNCHECKED, Owner hoãn | Hỏi model/provider/config khi setup; chạy extraction thật và so 100% ví dụ; fail giữ NO_GO |
+| P9 config máy chạy | UNCHECKED | Repo, source chat, ops chat riêng, mode, autonomous/rules flags, media limit, consent, fallback |
+| P10 rollback | UNCHECKED | Giữ wheel trước, thử cài lại và giữ nguyên DB/config; ghi output |
+| P11 bản cài/service | UNCHECKED | Test bản cài, PID/service readback sau restart, fingerprint khớp P3; chỉ chạy khi được cấp quyền |
+| P12 group xử lý | UNCHECKED | Bot membership, tin chữ chỉ ops, reaction nguồn; kiểm nguồn/Reply/link đúng; chỉ gửi khi được Owner cho phép |
+| P13 GO | UNCHECKED | Owner ký sau mọi điều kiện trước; không tự bật |
+
+Thứ tự kiểm theo `rules/preflight.md`; không vượt một mục FAIL bằng cách tick PASS mục sau. Việc độc lập đã kiểm offline được ghi riêng, không thay phiếu release. Owner phải chốt bảng quyền/phiếu trước vận hành; agent không tự nhận OPERATOR. Không replay tin thật, không reset reservation, không tạo ticket thử thật theo đề xuất installer khi ngoại lệ đó chưa được duyệt.
+
+## 6. Hướng triển khai tiếp và ranh giới 20 giờ
+
+Gói tiếp theo là **kiểm thử và hoàn thiện khả năng vận hành lõi còn lại**, không tính lại implementation rules/lock đã hoàn tất và không bao gồm installer. Bắt đầu các bước phụ thuộc máy khi Owner cung cấp máy/cấu hình và quyền vận hành. Thời gian chờ credentials, quyền, Owner hoặc mua dịch vụ không phải giờ thực hiện.
+
+20h là **tổng estimate**, không phải timesheet, cam kết đủ cho mọi bug chưa biết hay bảo đảm GO. Nếu xuất hiện lỗi mới vượt khả năng sửa trong lát đã dự toán, ghi issue/repro và giữ NO_GO; không đổi số test, nén phạm vi hoặc tick khống để đủ giờ.
+
+## 7. Task Dev đề xuất — tổng đúng 20h
+
+Nơi tracking do Owner chỉ định: `vlink-group/vlink-nexora`, Backlog **#2178**, assignee **SotaThao**. Board chỉ dùng quản lý công việc; source code vẫn là Listener-ticket độc lập. Không sửa body Backlog lịch sử, không chuyển nguồn code sang Nexora.
+
+**Trạng thái ticket: đã tạo Task [#2488](https://github.com/vlink-group/vlink-nexora/issues/2488), giữ Todo theo chỉ định mới của Owner: “tạo ticket và giữ ticket todo cho phần setup máy”.** Năm Dev Task #2489–#2493 có estimate 4h mỗi việc. Các bước setup chưa thực hiện; tạo ticket không cấp quyền bật bot hoặc vận hành thật.
+
+| Lát công việc còn lại | Estimate | Kết quả phải có / phụ thuộc |
+|---|---:|---|
+| Chuẩn bị bản release, đối chiếu config và diễn tập rollback | 4h | SHA/gói được Owner cho phép tạo, config đã che bí mật, rollback có output; P4/P9/P10 |
+| Kiểm model cấu hình thật với ví dụ và smoke | 4h | Báo cáo từng ví dụ và kết quả smoke, sai ghi rõ; P7/P8; chờ setup máy |
+| Kiểm bản cài, service, khóa một bản và phục hồi | 4h | Test đúng bản cài, readback PID/fingerprint, contention/restart có bằng chứng; P11; cần OPERATOR được chỉ định |
+| Kiểm luồng Telegram → GitHub và hai group | 4h | Tin mới/bộ dữ liệu kiểm được duyệt, quyền issue/asset, Reply/source/reaction và ops đúng; P12; không tự gửi live |
+| Triage lỗi phát sinh, hồi quy có giới hạn và bàn giao preflight | 4h | Repro/fix trong phạm vi, regression, danh sách còn mở và phiếu GO/NO_GO để Owner quyết; P6/P13 |
+| **Tổng estimate Dev Task** | **20h** | **5 × 4h; không cộng Effort lần nữa ở Task/Backlog** |
+
+Tất cả là việc **chưa hoàn tất**, status Todo trên board; năm Dev Task nằm dưới Task #2488, Task nằm dưới Backlog #2178. Task cha dùng AC2, AC4, AC6 của Backlog #2178; không thêm AC hoặc sửa kết quả lịch sử khi chưa có yêu cầu. Parent/Backlog không set field Effort; kiểm tổng qua năm Dev Task trên board. Week hiện tại chỉ là nhãn tracking, không phải hứa setup xong trong tuần; không đặt due date hôm nay cho công việc còn chờ setup.
+
+## 8. Related Documents
+
+- [Master overview](../00-master/telegram-triage-noissue_overview_261027_v1.0.0.md)
+- [Business DOCS](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md)
+- [Luồng nghiệp vụ](../01-product/telegram-triage-noissue_business-flow_261028_v1.0.0.md)
+- [Rules spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md)
+- [QA](../03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md)
+- [Rules loader / approval](../../listener/rules/README.md), [Preflight](../../listener/rules/preflight.md), [Agent guide](../../listener/AGENTS.md)
+- [Backlog tracking do Owner chỉ định](https://github.com/vlink-group/vlink-nexora/issues/2178)
+
+Các link tương đối trên branch tài liệu có thể còn nội dung cũ; trạng thái mới phải đối chiếu worktree mã và manifest nêu §1. Không dùng tài liệu cũ để phủ nhận bằng chứng snapshot hoặc suy thêm quyền vận hành.
+
+## 9. Changelog
+
+| Version | Ngày / giờ Asia/Saigon | Người cập nhật | Nội dung |
 |---|---|---|---|
-| B1 | Đường dẫn Linux cố định | `listener/src/tg_triage/__main__.py:39` mặc định `/etc/tg-triage/listener.toml`; `deploy/agentfleet_deploy.py:35-38` cố định `/opt/agentfleet`, `/etc`, `/var/lib`; `systemctl` ở `:231-321` | Bản Windows không tìm thấy config, không có cách cài/nâng cấp |
-| B2 | Bí mật đọc từ biến môi trường | `config.py:240-263` đọc `TG_API_ID`, `TG_API_HASH`, `GH_TOKEN`, `GH_REPO` từ env (systemd `EnvironmentFile`) | Persona không đặt được env; nếu wizard ghi ra file text thì lộ token |
-| B3 | Đăng nhập Telegram chỉ qua terminal | `telegram_io.py:68-74` dùng `getpass` cho mã OTP và mật khẩu 2 lớp | Không có terminal trong bộ cài ⇒ không đăng nhập được |
-| B4 | **Khóa chạy một bản bị tắt trên Windows** | `runtime.py:40-44`: không import được `fcntl` thì `return self`, tức **không khóa gì**; `model_lock.py:127-142` cũng dùng `fcntl` | Hai bản chạy cùng lúc (cài lại, service + chạy tay) ⇒ **tạo ticket trùng** (vi phạm TG-24) |
-| B5 | Phụ thuộc Ollama cục bộ | `provider.py:9-11`: gọi cloud lỗi thì chạy lại trên Ollama cục bộ | Persona không có Ollama ⇒ lỗi cloud thành lỗi khó hiểu thay vì "đang thử lại" |
-| B6 | Không có service Windows | Chỉ có `systemd/tg-triage.service` | Bot tắt khi người dùng đăng xuất/khởi động lại |
-| B7 | Template/prompt tìm theo `sys.prefix/share/tg-triage` | `ticket_templates.py:221-226`, `listener/pyproject.toml` data-files | Bản đóng gói (frozen) có `sys.prefix` khác ⇒ không thấy template ⇒ **thoát mã 2** (TG-33 fail-closed) |
-| B8 | Nhóm Unix `tglistener` (**không chặn**, đã kiểm) | `provider.py:189` gọi `ai_transport.read_key` (`ai_transport.py:126`), hàm này đã bỏ qua kiểm nhóm khi `os.name == 'nt'`; `receipt.py:14-17`, `usage.py:105-116` cũng có nhánh `os.name != 'nt'` | Chỉ cần test file key trên Windows; quyền file Windows nên dựa vào kho bí mật (P1) thay vì mode `0600` |
-| B9 | Quyền GitHub token chưa được kiểm trước | Ảnh upload lên release asset của repo (`attachments.py`, `release_tag`) | Token chỉ có quyền issues ⇒ ticket tạo được nhưng **ảnh lỗi**. Wizard phải kiểm quyền issues + contents trước |
-
-## 5. Chấm điểm 8 trục DX
-
-| Trục | Điểm | Vì sao | 10 điểm trông như thế nào |
-|---|---|---|---|
-| 1. Bắt đầu (cài + chạy lần đầu) | **1/10** | B1–B7; TTHW > 60 phút; cần Linux + Python + systemd + Ollama | `install.exe` → wizard 6 bước → link ticket thử trong ≤ 10 phút (§6) |
-| 2. Giao diện CLI/config | **4/10** | CLI có `run`, `login`, `check-config`, `trace`, `export-csv` (`__main__.py:37`), mặc định hợp lý cho operator Linux; config TOML 9 bảng | Wizard cho persona; CLI giữ nguyên cho IT, thêm `--config` mặc định theo hệ điều hành |
-| 3. Thông báo lỗi | **4/10** | Lỗi đúng và chặt nhưng viết cho dev: `"TG_API_ID: required positive integer"` (`config.py:252`), `"GH_TOKEN: required in live mode"` (`:261`) | Wizard dịch mọi `ConfigError` thành: chuyện gì xảy ra + vì sao + bấm gì để sửa, tiếng Việt |
-| 4. Tài liệu | **3/10** | Tài liệu nghiệp vụ rất đầy đủ nhưng không có trang cài đặt cho người không code; README gốc trỏ vào tài liệu 2.000 dòng | `SETUP.md` 1 trang có ảnh từng bước wizard + mục "lỗi thường gặp" |
-| 5. Nâng cấp | **5/10** Linux · **1/10** Windows | Linux có `agentfleet_deploy.py` với backup + test trên máy đích + rollback tự động; Windows không có gì | Bộ cài mới chạy đè: giữ DB và config, chạy preflight, lỗi thì tự quay về bản cũ |
-| 6. Môi trường phát triển | **6/10** | 1.269 test chạy offline, chạy xanh trên Windows; checker policy; không CI trong repo mới | GitHub Actions chạy test + checker + build installer trên `windows-latest` mỗi PR |
-| 7. Cộng đồng / tìm trợ giúp | **3/10** | Không có issue template, không có mục hỗ trợ | Nút "Gửi chẩn đoán" trong app (dùng `trace`, đã che bí mật) + issue template |
-| 8. Đo trải nghiệm | **1/10** | Không có số liệu thời gian cài, tỉ lệ cài lỗi | Log cục bộ thời gian từng bước wizard; preflight ghi kết quả vào file |
-
-**Tổng: 3/10.** Logic lõi tốt (test, an toàn ticket, template). Toàn bộ khoảng trống nằm ở lớp nền tảng và cài đặt.
-
-## 6. Hành trình đích (≤ 10 phút)
-
-| Bước | Người dùng làm | Thời gian | Điều kiện kỹ thuật |
-|---|---|---|---|
-| 1 | Tải và chạy `install.exe` (chữ ký số, không cần quyền admin nếu chọn cài cho 1 user) | 1 phút | Ký số để tránh cảnh báo SmartScreen (D-5) |
-| 2 | **Telegram:** nhập số điện thoại → mã OTP → mật khẩu 2 lớp nếu có | 2 phút | B3: callback đăng nhập không dùng terminal; `api_id` theo D-1 |
-| 3 | **Chọn group nguồn** từ danh sách group đã tham gia | 1 phút | Liệt kê dialog qua Telethon; chỉ group, không chat riêng |
-| 4 | **GitHub:** hiện mã thiết bị → mở trang GitHub → chọn repo; wizard kiểm quyền issues + contents | 2 phút | Device flow (D-2); B9 |
-| 5 | **Model:** dán API key cloud (mặc định) hoặc dùng Ollama nếu phát hiện có sẵn; bật đồng ý gửi ảnh/tài liệu | 1 phút | B5, D-3 |
-| 6 | **Preflight tự động** (check-config, template, kết nối Telegram/GitHub/model, khóa một bản), rồi **gửi tin mẫu** vào group → thấy link **ticket thử** | 3 phút | `preflight.md` tự động hóa; ticket thử theo D-4 |
-
-Mọi bước có nút "Quay lại" và giữ dữ liệu đã nhập. Lỗi ở bước nào hiện tại bước đó, kèm cách sửa.
-
-## 7. Việc cần làm (cho agent tiếp nhận)
-
-Thứ tự gợi ý; mỗi phase là một PR, chạy đủ test + checker trước khi mở PR.
-
-| Phase | Việc | File chính | Xong khi |
-|---|---|---|---|
-| P1 Nền tảng | Lớp đường dẫn theo hệ điều hành (config, data, log) thay `/etc`, `/var/lib`; vẫn nhận `--config` và env cho IT | `__main__.py`, `config.py`, mới `platform_paths.py` | Test chạy được trên cả Linux + Windows với đường dẫn mặc định khác nhau |
-| P1 | **Khóa một bản trên Windows** (`msvcrt.locking` hoặc named mutex) cho `runtime.py` và `model_lock.py` | `runtime.py`, `model_lock.py` | Test: bản thứ hai trên Windows ra `AlreadyRunning` (B4) |
-| P1 | Kho bí mật: Windows DPAPI (ctypes `CryptProtectData`), Linux file `0600`; env vẫn ghi đè được | mới `secrets_store.py`, `config.py`, `provider.py:189` | Token không bao giờ nằm trong file text; test đọc/ghi/xoay vòng |
-| P1 | Tìm template/prompt khi chạy bản đóng gói (`sys._MEIPASS` / thư mục cạnh exe) | `ticket_templates.py:221-226`, nơi nạp prompts | `check-config` của bản đóng gói thoát 0 (B7) |
-| P2 Wizard | Giao diện thiết lập (đề xuất: trang web cục bộ bằng `http.server` stdlib, D-6), 6 bước §6 | mới `setup_wizard/` | Chạy được toàn bộ §6 với Telegram/GitHub giả (fake) trong test |
-| P2 | Đăng nhập Telegram không qua terminal | `telegram_io.py:68-74` | Callback nhận OTP/2FA từ wizard; test với client giả |
-| P2 | GitHub device flow + kiểm quyền repo | mới `github_auth.py` | Thiếu quyền contents ⇒ wizard báo rõ trước khi cài xong (B9) |
-| P3 Service | Windows: Task Scheduler (chạy khi khởi động, tự khởi động lại) hoặc Windows Service (D-7); Linux: giữ systemd | mới `service/` | Khởi động lại máy, bot tự chạy; log ra file |
-| P4 Đóng gói | Spec Nuitka/PyInstaller + script Inno Setup; gói templates, prompts, rules | mới `packaging/` | `install.exe` cài trên Windows sạch (VM không có Python) |
-| P4 | Gỡ cài đặt + nâng cấp giữ DB/config, rollback khi preflight lỗi | `packaging/`, `deploy/` | Kịch bản nâng cấp v1 → v2 → lỗi → về v1 không mất dữ liệu |
-| P5 Kiểm tra | Preflight tự động + ticket thử (D-4) + nút "Gửi chẩn đoán" (dùng `trace`, che bí mật) | `setup_wizard/`, `trace.py` | Persona hoàn thành §6 trong ≤ 10 phút trên máy thật |
-| P5 | CI GitHub Actions: test + checker + build installer trên `windows-latest`, `ubuntu-latest` | mới `.github/workflows/` | PR đỏ khi test hoặc build lỗi |
-| P5 | `SETUP.md` 1 trang cho persona + lỗi thường gặp; README gốc trỏ vào đó đầu tiên | `SETUP.md`, `README.md` | Người không code làm theo được mà không đọc tài liệu khác |
-
-**Ràng buộc giữ nguyên:** không đổi logic nghiệp vụ TG-01…TG-33; mọi câu chữ gửi người dùng qua template (TG-33); không replay tin cũ (TG-32, xem D-4); test hiện có phải xanh; checker policy PASS.
-
-## 8. Quyết định chờ Owner chốt
-
-| # | Câu hỏi | Đề xuất | Vì sao |
-|---|---|---|---|
-| D-1 | `api_id`/`api_hash` Telegram: một bộ của ứng dụng dùng chung, hay mỗi người tự lấy ở my.telegram.org? | **Dùng chung** (đăng ký 1 lần cho app) | Tự lấy thêm ~5 phút và là bước persona dễ bỏ cuộc nhất. Cần chấp nhận rủi ro bộ dùng chung bị Telegram giới hạn |
-| D-2 | GitHub: device flow (cần đăng ký 1 OAuth App/GitHub App) hay dán token thủ công? | **Device flow** | Không phải copy token; quyền được giới hạn ngay từ app |
-| D-3 | Model mặc định cho persona: cloud (cần API key) hay Ollama cục bộ? Khi cloud lỗi mà không có Ollama thì làm gì? | **Cloud mặc định**; không có Ollama ⇒ giữ pending + thử lại, **không** rơi về Ollama | Persona không cài Ollama được (B5) |
-| D-4 | Ticket thử lúc cài có vi phạm TG-32 ("không tạo issue thật để kiểm thử") không? | **Ngoại lệ có nhãn `listener-setup-test`**, chỉ cho tin mới người dùng gửi trong wizard, không replay tin cũ; ghi vào Business DOCS | Đây là khoảnh khắc chứng minh đã chốt; cần căn cứ nghiệp vụ |
-| D-5 | Chứng chỉ ký số cho `install.exe` | **Có** (code signing) | Không ký ⇒ Windows SmartScreen chặn, persona tưởng là virus |
-| D-6 | Giao diện wizard: trang web cục bộ (stdlib) hay cửa sổ desktop (tkinter / thư viện mới)? | **Web cục bộ** | Không thêm dependency, dễ test, dùng lại được cho Linux |
-| D-7 | Windows: Task Scheduler hay Windows Service (`pywin32`, thêm dependency)? | **Task Scheduler** trước | Không cần quyền admin, không thêm dependency; đổi sau được |
-| D-8 | Từ giờ phát triển ở repo nào? Bộ cài cần sửa code lõi (B1–B9) | **Chọn một nguồn chính** trước P1 | Sửa lõi ở hai repo ⇒ hai bản lệch nhau |
-| D-9 | Nhóm xử lý (`rules/channels.md`, DRAFT) có vào wizard v1 không? | **Không**, v1 chỉ group nguồn | Code chưa triển khai; thêm sau khi rules ACTIVE |
-
-## 9. Ghi chú quy trình
-
-- Skill `/plan-devex-review` chạy dạng rút gọn: Bash trên máy audit hỏng, nên phần khởi động gstack, so sánh đối thủ bằng WebSearch và các bước hỏi theo từng phát hiện không chạy. Persona, thời gian mục tiêu, khoảnh khắc chứng minh và mức review đã hỏi Owner trực tiếp (§1). Các phát hiện còn lại được gom vào §8 thay vì hỏi từng câu, để giữ quota và để agent sau nhận đủ ngữ cảnh.
-- Bằng chứng đọc từ repo này tại `b2d051b`; 1.269 test và checker đã chạy xanh trên Windows lúc tách repo.
-
-## GSTACK REVIEW REPORT
-
-| Run | Skill | Mode | Status | Findings |
-|---|---|---|---|---|
-| 1 | `/plan-devex-review` (rút gọn) | DX POLISH | DONE_WITH_CONCERNS | 8 chặn cứng (B1–B7, B9; B8 đã kiểm là an toàn), 8 trục chấm, tổng 3/10 |
-
-VERDICT: Chưa sẵn sàng làm bộ cài. Cần P1 (nền tảng: đường dẫn, khóa một bản, kho bí mật, đường dẫn template khi đóng gói) trước mọi việc khác; B4 là rủi ro tạo ticket trùng.
-
-**UNRESOLVED DECISIONS:**
-- D-1 api_id Telegram dùng chung hay mỗi người tự lấy
-- D-2 GitHub device flow hay token thủ công
-- D-3 model mặc định và hành vi khi cloud lỗi
-- D-4 ticket thử và TG-32
-- D-5 chứng chỉ ký số
-- D-6 công nghệ giao diện wizard
-- D-7 Task Scheduler hay Windows Service
-- D-8 repo nguồn chính
-- D-9 group xử lý trong wizard v1
+| v1.0.2 | 2026-10-30 18:20 | Codex | Owner yêu cầu commit/push main; ghi commit mã 095ca3f, tạo Task setup #2488 cùng năm Dev Task Todo, giữ 20h estimate và NO_GO. |
+| v1.0.1 | 2026-10-30 18:13 | Codex | Đổi trọng tâm về goal nghe group → ticket; phân loại đáp ứng/dư/bug/giới hạn/setup; sửa B4/B5/B7, D8/D9; ghi ACTIVE/approval, bằng chứng 1.393 tests, NO_GO và estimate 20h. |
+| v1.0.0 | 2026-10-30, giờ chưa ghi | Claude | Audit DX bộ cài trước implementation, base b2d051b. Tám trục và điểm tổng 3/10 là lịch sử, chưa đo lại bằng installer thật. |
