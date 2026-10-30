@@ -1,0 +1,104 @@
+mode = "dry-run"
+
+[telegram]
+ignored_command_prefixes = ["/nailhub"] # Other service commands are ignored before storage/triage.
+session_path = "/var/lib/agentfleet/tg/gateway.session"
+chat_ids = [-1001234567890]
+# true = listen to every group/supergroup (not private chats/channels); chat_ids must then be empty or omitted
+listen_all_groups = false
+# Kept for compatibility; no longer used to drop short messages (the model judges them, 12.12).
+min_text_length = 8
+
+[telegram.proxy]
+host = ""
+port = 443
+
+# Model server address and the confidence below which a model answer is not trusted as a ticket.
+# Issue rules (Assistant definition 12.13): a /command with content or a Telegram tag always makes an issue;
+# a bug, task or feedback the model is sure about (confidence >= the threshold) makes one without any tag;
+# a question (or /question) and plain chat make none; an unsure untagged group waits as pending_review.
+[ollama]
+url = "http://127.0.0.1:11434"
+confidence_threshold = 0.7
+
+# The model that judges chat / bug / task / feedback (Assistant definition 12.12).
+# Providers: ollama, anthropic, openai, deepseek, compatible. Cloud requires explicit consent.
+# think = true turns the model's reasoning on; the reasoning is never logged or put in an issue.
+# timeout_seconds must be long enough for reasoning on a CPU-only machine (default 600): measure it on the
+# real host before fixing the final value. `model` / `timeout_seconds` under [ollama] (older layout) are
+# still read when absent here.
+[model]
+provider = "ollama"
+model = "qwen3.5:9b"
+think = true
+timeout_seconds = 600
+num_predict = 2048
+cloud_consent = false
+# base_url = "https://api.openai.com/v1" # Must match selected provider; custom uses public HTTPS only.
+# key_file = "/etc/tg-triage/private/model-key.json" # mode0600 JSON {"scope":"openai|https://api.openai.com/v1","key":"..."}; never put keys in TOML.
+# Images reach a hosted model (deepseek / openai / compatible) only when cloud_consent AND cloud_image_consent are
+# both true; otherwise a case with images is judged by local Ollama vision and no image leaves this host.
+# cloud_image_consent = false
+# Backup: when the hosted call fails (any provider error, broken JSON, unusable answer, missing key/consent) the same
+# request runs on local Ollama (the url and timeout of [ollama] / [model]). fallback = "ollama" | "none".
+# fallback = "ollama"
+# fallback_model = "qwen3.5:9b"
+# fallback_think = true
+# Cost per 1M tokens at peak hours; outside peak_hours_utc (and all weekend) the price is multiplied by offpeak_factor.
+# Defaults are deepseek-flash in USD (api-docs.deepseek.com/quick_start/pricing, measured 2026-10-15); openai /
+# anthropic / compatible have no built-in price (cost 0 until set here). Local Ollama always costs 0.
+# [model.pricing]
+# currency = "USD"
+# input_cache_hit = 0.006
+# input_cache_miss = 0.3
+# output = 1.2
+# offpeak_factor = 0.5
+# peak_hours_utc = ["01:00-04:00", "06:00-10:00"] # Monday-Friday, UTC, HH:MM-HH:MM
+
+[github]
+max_issues_per_hour = 20
+
+# Case aggregation (Assistant definition 12.1): one case = one GitHub issue.
+# A reply joins the case of the replied message; otherwise the same sender (including a
+# forward) within window_minutes of the case's last message. Commands (/bug ...) never wait.
+# window_minutes = 0 disables waiting: every message becomes its own case.
+# Topic split (Assistant definition 12.9): when a window closes, the model splits it into topics and
+# every ticket / needs-human topic becomes its own issue holding only its own messages. A window longer
+# than max_messages_per_window is cut into consecutive chunks of at most that many messages; each chunk
+# is sent to the model and verified on its own (every message id exactly once, otherwise one retry and
+# then ONE needs-human ticket for the chunk). Only effective when max_messages_per_case is larger.
+[aggregation]
+window_minutes = 2
+max_messages_per_case = 20
+max_messages_per_window = 40
+
+# Image attachments (Assistant definition 12.8): JPG/PNG/WEBP are uploaded with `gh release upload`
+# to release tag attachments-<case_key>. Images land in the target repo (public repo = public
+# images): confirm the repo is private first. max_per_case = 0 turns image upload off.
+# Documents (Assistant definition 12.14) use the same release and the same max_bytes (per file) and
+# max_per_hour (every `gh release upload`, images and documents together). max_documents_per_case is
+# counted separately from max_per_case; 0 turns document upload off.
+# The accepted document types are FIXED IN CODE and cannot be configured here: pdf, docx, xlsx, pptx,
+# txt, csv, md, json, html, zip. The type is read from the file name and the MIME, and both must agree.
+# Executable/script types (exe, bat, cmd, sh, ps1, msi, apk, js, vbs, jar, dll, scr, com, app, dmg,
+# reg, lnk, php, py) and every other extension are refused. Files are never opened or run.
+[attachments]
+max_bytes = 10485760
+max_per_case = 5
+max_per_hour = 60
+max_documents_per_case = 5
+
+[storage]
+db_path = "/var/lib/agentfleet/tg/triage.sqlite3"
+
+# Bounded context controller; absence defaults true. Set false and restart to use the legacy
+# semantic path. Existing decisions/operation reservations remain in SQLite during rollback.
+[thinking]
+enabled = true
+# Opt-in additive topic projection; does not replace aggregation or grant routing authority.
+topic_memory_enabled = false
+# Semantic multi-topic routing and closed-ticket lifecycle; keep off until verified.
+autonomous_enabled = false
+# Live autonomous Telegram: wait for conversation context, then classify by meaning.
+context_quiet_seconds = 30
+context_max_wait_seconds = 60

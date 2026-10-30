@@ -1,0 +1,24 @@
+[Unit]
+Description=Telegram Triage Agent
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=tglistener
+Group=tglistener
+SupplementaryGroups=agentfleet
+EnvironmentFile=/etc/agentfleet/tg-triage.env
+ExecStart=/opt/agentfleet/listener/.venv/bin/python -m tg_triage run --config /etc/tg-triage/listener.toml
+Restart=always
+RestartSec=10
+RestartPreventExitStatus=2
+UMask=0077
+TimeoutStopSec=150
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/agentfleet/tg /run/agentfleet
+
+[Install]
+WantedBy=multi-user.target

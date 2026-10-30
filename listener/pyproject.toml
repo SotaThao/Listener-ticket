@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-triage"
+version = "1.0.0"
+description = "Telegram group triage using local Ollama and GitHub issues"
+requires-python = ">=3.11"
+dependencies = ["telethon>=1.45,<2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/tg-triage/prompts" = ["prompts/classify.md", "prompts/case.md", "prompts/topics.md", "prompts/followup.md", "prompts/thinking-topics.md", "prompts/autonomous.md"]
+"share/tg-triage/templates/github-ticket" = ["templates/github-ticket/bug.md", "templates/github-ticket/feedback.md", "templates/github-ticket/task.md", "templates/github-ticket/needs-human.md", "templates/github-ticket/_common.md", "templates/github-ticket/comments.md", "templates/github-ticket/group-replies.md"]

@@ -1,0 +1,29 @@
+# Local agent state (harness task files) — không đưa vào PR
+.agent-tasks/
+.context/
+
+# Secrets — KHÔNG BAO GIỜ commit
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+secrets/
+
+# Runtime
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+logs/
+
+# Quy ước agent (cục bộ, không đưa vào git — giống vlink-nexora-fe)
+.agent-rules
+.agent-rules.d/
+.agent-rules.local
+
+# AgentFleet console local configs, revision store and credentials
+.agentfleet/
+
+# Portable source archives
+dist/
