@@ -9,6 +9,8 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 > **Đây là bản sao chụp** từ repo `PersonalProjectJob/telegram-agent` (AgentBuilder) tại commit `d6e3ed8` (`main`, 2026-10-30). **Nguồn chính vẫn là repo đó** — sửa ở đó, repo này chưa nhận thay đổi ngược. Không mang lịch sử commit cũ.
 
+> **Đang làm: bộ cài `install.exe` cho người không biết code.** Audit hạ tầng và việc cần làm: [`Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md`](Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md).
+
 ## Bắt đầu đọc từ đâu
 
 | Bạn là… | Đọc |
