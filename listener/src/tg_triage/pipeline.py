@@ -96,6 +96,7 @@ class Plan:
     details: object = None          # 12.15: optional model fields, only passed to the renderer
     document_reads: tuple = ()       # host read proofs, never model content or authority
     related_issue_number: int | None = None  # host-proven replied ticket; never a model target
+    evidence_messages: tuple | None = None  # original composite provenance, not managed source membership
 
 
 def _order(item):
@@ -218,11 +219,21 @@ def _legacy_analysis(value, messages):
 
 class Pipeline:
     def __init__(self, config, store, classifier, github=None, *, timer=time.monotonic,
-                 uploader=None, downloader=None, reactor=None, notice_sender=None, notice_editor=None):
+                 uploader=None, downloader=None, reactor=None, notice_sender=None, notice_editor=None,
+                 rules_snapshot=None):
         self.config = config
         self.reactor = reactor
         self.notice_sender = notice_sender
         self.notice_editor = notice_editor
+        self.rules_snapshot = rules_snapshot
+        self.rules_pending = None
+        if config.decision_rules_enabled:
+            if rules_snapshot is None:
+                raise ValueError('rules snapshot required')
+            from .rules_pending_store import RulesHalt, RulesPendingStore
+            self.rules_pending = RulesPendingStore(store)
+            if self.rules_pending.unresolved_ambiguity():
+                raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
         self.store = store
         self.classifier = classifier
         self.github = github
@@ -234,7 +245,7 @@ class Pipeline:
             self.store.enable_autonomy()
         self.attachments = AttachmentProcessor(
             config.attachments, store, repo=config.gh_repo,
-            downloader=downloader, uploader=uploader)
+            downloader=downloader, uploader=uploader, strict_uploads=config.decision_rules_enabled)
 
     def set_notice_editor(self, editor):
         """Bounded edit of an explicitly recovered analysis notice; never a new send."""
@@ -275,6 +286,9 @@ class Pipeline:
         # Keep the quota check and the HTTP side effect sequential even for callers
         # other than the single Telegram worker.
         with self._lock:
+            if self.rules_pending is not None and self.rules_pending.unresolved_ambiguity():
+                from .rules_pending_store import RulesHalt
+                raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
             return self._process(message)
 
     def close_due_cases(self,exclude_chat_ids=()) -> list:
@@ -283,6 +297,12 @@ class Pipeline:
         exclude_chat_ids=frozenset(exclude_chat_ids)
         aggregation = self.config.aggregation
         with self._lock:
+            if self.config.decision_rules_enabled:
+                if self.rules_pending.unresolved_ambiguity():
+                    from .rules_pending_store import RulesHalt
+                    raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+                from .rules_intake import sweep
+                return sweep(self, exclude_chat_ids=frozenset(exclude_chat_ids))
             from .followups import sweep
             sweep(self,exclude_chat_ids=exclude_chat_ids) if exclude_chat_ids else sweep(self)
             if self.config.autonomous_enabled:
@@ -321,6 +341,9 @@ class Pipeline:
                      "decision=duplicate issue_number=None latency_ms=0",
                      message.chat_id, message.message_id)
             return None
+        if self.config.decision_rules_enabled:
+            from .rules_intake import process
+            return process(self, message, start)
         if self.config.autonomous_enabled:
             from .autonomous import process
             return process(self, message, start)
@@ -433,6 +456,11 @@ class Pipeline:
             return self.attachments.process(case_key, messages, live=live,
                                             prepared=self._prepared_images,document_reads=document_reads)
         except Exception as error:
+            from .attachments import AttachmentAmbiguous
+            if isinstance(error,AttachmentAmbiguous):
+                from .rules_intake import attachment_halt_warning
+                attachment_halt_warning(self,messages)
+                raise
             LOG.warning("Attachments failed exception=%s", type(error).__name__)
             return AttachmentResult(notes=[f"Ảnh đính kèm không tải được: {type(error).__name__}"])
 
@@ -855,7 +883,7 @@ class Pipeline:
             return result
         self._acknowledge(plan)   # ticket / needs_human, live or dry-run, before any issue
         if self.config.mode == "dry-run":
-            found = self._images(plan.key, plan.messages, live=False,document_reads=plan.document_reads)
+            found = self._images(plan.key, plan.evidence_messages or plan.messages, live=False,document_reads=plan.document_reads)
             result = replace(result, decision="dry_run_" + plan.action, images=found.dry_run_count,
                              documents=found.documents_dry_run)
             self.store.finish(first, result)
@@ -865,14 +893,14 @@ class Pipeline:
             found = AttachmentResult()
             if self.store.count_recent_issues() < self.config.max_issues_per_hour:
                 # Images go first so the issue can embed their URLs (12.8).
-                found = self._images(plan.key, plan.messages, live=True,document_reads=plan.document_reads)
+                found = self._images(plan.key, plan.evidence_messages or plan.messages, live=True,document_reads=plan.document_reads)
             trusted = (plan.clarify is None or plan.action != "needs_human" or plan.typed)
             issue = format_issue(
                 first, plan.classification if trusted else None, plan.tier,
                 plan.action == "needs_human", self.config.ollama.model,
-                case_messages=plan.messages, key_message_ids=plan.key_ids, images=found.images,
+                case_messages=plan.evidence_messages or plan.messages, key_message_ids=plan.key_ids, images=found.images,
                 documents=found.documents, notes=found.notes, clarify=plan.clarify, text=plan.text,
-                max_quoted=len(plan.messages), details=plan.details if plan.details is not None else {})
+                max_quoted=len(plan.evidence_messages or plan.messages), details=plan.details if plan.details is not None else {})
             if type(plan.related_issue_number) is int and plan.related_issue_number>0:
                 issue=replace(issue,body=_related_body(issue.body,self.config.gh_repo,plan.related_issue_number))
             if not self.store.reserve_github_call(first, self.config.max_issues_per_hour):
@@ -888,6 +916,8 @@ class Pipeline:
                                  reaction_message_ids=(first.message_id,), images=len(found.images),
                                  documents=len(found.documents))
         except Exception as error:
+            from .attachments import AttachmentAmbiguous
+            if isinstance(error,AttachmentAmbiguous): raise
             LOG.error("Message processing failed chat_id=%s message_id=%s exception=%s",
                       first.chat_id, first.message_id, type(error).__name__)
             diagnostic = self.store.fail_message(first, type(error).__name__)
@@ -913,6 +943,7 @@ class Pipeline:
         base = min(results, key=lambda item: _RANK.get(item.decision, 9))
         created = next((item for item in results if item.issue_number is not None), None)
         targets = tuple(value for item in results for value in item.reaction_message_ids)
+        composite_targets = tuple(value for item in results for value in getattr(item, 'reaction_targets', ()))
         return replace(
             base, case_key=case_key,
             issue_number=created.issue_number if created else None,
@@ -920,7 +951,8 @@ class Pipeline:
             error=next((item.error for item in results if item.error), None),
             images=sum(item.images or 0 for item in results),
             documents=sum(item.documents or 0 for item in results),
-            reaction_message_id=targets[0] if targets else None, reaction_message_ids=targets)
+            reaction_message_id=targets[0] if targets else None, reaction_message_ids=targets,
+            reaction_targets=composite_targets)
 
     def _analyze_case(self, case_key, start, trigger=None, rule_cache=None):
         from .thinking import decision_turn

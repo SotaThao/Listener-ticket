@@ -61,8 +61,19 @@ class AttachmentError(RuntimeError):
     """Attachment failure whose message never carries remote output or credentials."""
 
 
+from .rules_pending_store import RulesHalt
+
+
+class AttachmentAmbiguous(RulesHalt):
+    """A release/upload write was attempted but its outcome is not verified."""
+
+
 class UploadError(AttachmentError):
     pass
+
+
+class ReleaseReadError(UploadError):
+    """The release lookup failed before any release or upload write began."""
 
 
 class DownloaderUnavailable(AttachmentError):
@@ -161,7 +172,11 @@ class GhCliUploader:
         return completed.returncode
 
     def ensure_release(self, tag):
-        if self._run("release", "view", tag, "--repo", self.repo) == 0:
+        try:
+            viewed = self._run("release", "view", tag, "--repo", self.repo)
+        except UploadError:
+            raise ReleaseReadError('release lookup failed before write') from None
+        if viewed == 0:
             return
         code = self._run("release", "create", tag, "--repo", self.repo,
                          "--title", tag, "--notes", "Ảnh đính kèm tự động từ tg-triage",
@@ -190,12 +205,13 @@ class AttachmentResult:
 
 
 class AttachmentProcessor:
-    def __init__(self, settings, store, *, repo="", downloader=None, uploader=None):
+    def __init__(self, settings, store, *, repo="", downloader=None, uploader=None, strict_uploads=False):
         self.settings = settings
         self.store = store
         self.repo = repo
         self.downloader = downloader
         self.uploader = uploader
+        self.strict_uploads = strict_uploads
 
     def prepare_images(self, case_key, messages):
         """Private, bounded batch shared by vision and upload; caller must close it."""
@@ -277,7 +293,7 @@ class AttachmentProcessor:
             try:
                 if self.downloader is None:
                     raise DownloaderUnavailable("no downloader configured")
-                workdir = directory / str(message.message_id)
+                workdir = directory / f'image-{message.chat_id}-{message.message_id}'
                 workdir.mkdir(mode=0o700, exist_ok=True)
                 downloaded = self.downloader(message.chat_id, message.message_id, workdir)
                 if downloaded is None:
@@ -341,7 +357,7 @@ class AttachmentProcessor:
                 raise UploaderUnavailable("no uploader configured")
             for index, (message, path) in enumerate(accepted):
                 call_id = self.store.reserve_attachment_call(
-                    case_key, message.message_id, path.name, self.settings.max_per_hour)
+                    case_key, message.message_id, path.name, self.settings.max_per_hour, chat_id=message.chat_id)
                 if call_id is None:
                     result.notes.append(
                         f"Ảnh bị bỏ qua ({len(accepted) - index} ảnh): đạt giới hạn ảnh mỗi giờ")
@@ -353,11 +369,25 @@ class AttachmentProcessor:
                     url = self.uploader.upload(tag, path, path.name)
                     if not isinstance(url, str) or not _SAFE_URL.fullmatch(url):
                         raise UploadError("invalid asset url")
-                except Exception:
+                except ReleaseReadError:
                     self.store.finish_attachment(call_id, "error")
                     raise
-                self.store.finish_attachment(call_id, "uploaded")
+                except Exception:
+                    try:
+                        self.store.finish_attachment(call_id, "ambiguous")
+                    finally:
+                        if self.strict_uploads:
+                            raise AttachmentAmbiguous('attachment outcome is unresolved; Owner inspection required') from None
+                    raise
+                try:
+                    self.store.finish_attachment(call_id, "uploaded")
+                except Exception:
+                    if self.strict_uploads:
+                        raise AttachmentAmbiguous('attachment outcome is unresolved; Owner inspection required') from None
+                    raise
                 result.images.append((f"{ALT_TEXT} {index + 1}", url))
+        except AttachmentAmbiguous:
+            raise
         except Exception as error:
             # One attempt per image; the first failure stops the batch (no retry loop).
             LOG.warning("Attachment upload failed images=%s exception=%s",
@@ -386,7 +416,7 @@ class AttachmentProcessor:
             try:
                 if self.downloader is None:
                     raise DownloaderUnavailable("no downloader configured")
-                workdir = directory / str(message.message_id)
+                workdir = directory / f'document-{message.chat_id}-{message.message_id}'
                 workdir.mkdir(mode=0o700, exist_ok=True)
                 downloaded = self.downloader(message.chat_id, message.message_id, workdir)
                 if downloaded is None:
@@ -402,7 +432,8 @@ class AttachmentProcessor:
                 if downloaded.stat().st_size > limits.max_bytes:
                     skipped["size"] += 1
                     continue
-                read=next((r for r in document_reads if r['message_id']==message.message_id and r.get('read_status')=='read'),None)
+                read=next((r for r in document_reads if r['message_id']==message.message_id and
+                           (r.get('chat_id') is None or r.get('chat_id')==message.chat_id) and r.get('read_status')=='read'),None)
                 if read is not None:
                     import hashlib
                     if downloaded.stat().st_size!=read['byte_count'] or hashlib.sha256(downloaded.read_bytes()).hexdigest()!=read['sha256']:
@@ -441,7 +472,7 @@ class AttachmentProcessor:
                 raise UploaderUnavailable("no uploader configured")
             for index, (message, path) in enumerate(accepted):
                 call_id = self.store.reserve_attachment_call(
-                    case_key, message.message_id, path.name, self.settings.max_per_hour)
+                    case_key, message.message_id, path.name, self.settings.max_per_hour, chat_id=message.chat_id)
                 if call_id is None:
                     result.notes.append(
                         f"Tài liệu bị bỏ qua ({len(accepted) - index} tài liệu): "
@@ -454,11 +485,25 @@ class AttachmentProcessor:
                     url = self.uploader.upload(tag, path, path.name)
                     if not isinstance(url, str) or not _SAFE_URL.fullmatch(url):
                         raise UploadError("invalid asset url")
-                except Exception:
+                except ReleaseReadError:
                     self.store.finish_attachment(call_id, "error")
                     raise
-                self.store.finish_attachment(call_id, "uploaded")
+                except Exception:
+                    try:
+                        self.store.finish_attachment(call_id, "ambiguous")
+                    finally:
+                        if self.strict_uploads:
+                            raise AttachmentAmbiguous('attachment outcome is unresolved; Owner inspection required') from None
+                    raise
+                try:
+                    self.store.finish_attachment(call_id, "uploaded")
+                except Exception:
+                    if self.strict_uploads:
+                        raise AttachmentAmbiguous('attachment outcome is unresolved; Owner inspection required') from None
+                    raise
                 result.documents.append((message.document_name, url))
+        except AttachmentAmbiguous:
+            raise
         except Exception as error:
             LOG.warning("Document upload failed documents=%s exception=%s",
                         len(accepted), type(error).__name__)

@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.14.0 · **Updated**: 2026-10-30 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.0 · **Updated**: 2026-10-30 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -18,7 +18,7 @@ User yêu cầu tài liệu này và sau đó yêu cầu triển khai THINKING. 
 - [Overview và bàn giao](../00-master/telegram-triage-noissue_overview_261027_v1.0.0.md)
 - [Rulebook — rule chi tiết MUST/MUST NOT](telegram-triage-noissue_rulebook_261027_v1.0.0.md)
 - [Template log ticket](../templates/github-ticket/README.md)
-- [Quy tắc quyết định dạng markdown (DRAFT) — quy tắc nạp rules vào bot và model](../../listener/rules/README.md)
+- [Quy tắc quyết định dạng markdown (6 ACTIVE; bot tắt) — quy tắc nạp rules vào bot và model](../../listener/rules/README.md)
 - [PR #43](https://github.com/PersonalProjectJob/telegram-agent/pull/43)
 
 ## Business DOCS — Harness phân loại hội thoại và vòng đời ticket
@@ -416,9 +416,13 @@ Nếu parent đã có episode tái diễn được verified, lần tạo episode
 
 Trạng thái closed hoặc một câu "đã xử lý" không tự chứng minh đã hoạt động tốt. Lifecycle phải GET trạng thái hiện tại từ trusted repository/issue, lưu thời điểm quan sát và evidence cho nhận định recurrence. Reply tin cũ vẫn bắt đầu từ provenance nguồn; tuổi tin không đủ để tạo ticket mới. Chưa cấp quyền tự mở lại ticket. Quan hệ related và create phải đi qua ledger/reservation, canonical template, verified readback và reply đúng source; unknown outcome không tự retry.
 
-## Quyết định đích 2026-10-29: quyết định theo markdown (chưa triển khai)
+## Quyết định theo markdown: opt-in đã triển khai, source ACTIVE, mặc định tắt (chưa có live GO)
 
-Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Các file đang `DRAFT`, runtime **chưa** đọc; các rule TG ở trên vẫn mô tả hành vi đang chạy và chỉ được sửa câu chữ ở PR triển khai code. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
+Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Sáu file quyết định đã `ACTIVE` theo Owner ngày 2026-10-30; `roles.md` và `preflight.md` vẫn `DRAFT`. Các rule TG ở trên mô tả hành vi mặc định khi chưa bật rules. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
+
+Worktree bổ sung đường opt-in `thinking.decision_rules_enabled`: mặc định tắt nên hành vi đang chạy và các đường ANALYZE/STATUS cũ không đổi. Đường mới chỉ dành cho intake theo sáu trạng thái, câu hỏi thông tin/chat là `CHAT`; cần bộ rules ACTIVE và group ops riêng. Reply ticket đã đóng được giữ để Owner xem (`closed_target_not_supported`), chưa có parity lifecycle. PDF/Office chưa đọc vẫn có thể đính kèm nếu caption tự đủ dữ kiện; yêu cầu phụ thuộc nội dung chưa đọc hoặc trích text lỗi/vượt budget được giữ lại. Tin mới ngoài batch chỉ nối pending cũ khi có Reply thật, không dựa similarity/thời gian. Owner đã duyệt tám câu chữ ops và chuyển sáu rules sang ACTIVE; bot vẫn tắt và chưa có GO. Tiến độ test giả lập và review được báo riêng, không suy từ fingerprint.
+
+Theo H4 của `preflight.md`, thao tác reserved/ambiguous chưa được Owner kiểm làm worker dừng và ngăn khởi động lại; các group `PLANNED` còn nguyên để kiểm tra, không tự tiếp tục hoặc reset. Nếu process chết trước khi cảnh báo được gửi thì startup chỉ có chẩn đoán dừng cho operator; không coi đó là thông báo ops đã gửi. Với rules mode, upload hoặc tạo release có outcome không rõ phải dừng ngay và giữ trạng thái ambiguous để Owner kiểm; kiểm tra checkpoint nội bộ tách biệt với reservation ghi thực tế. Chỉ khôi phục nhóm đọc hoặc xác nhận hoàn tất khi ledger chứng minh; Owner đã duyệt nội dung cảnh báo tệp ngày 2026-10-30; chưa có GO vận hành.
 
 | Mã | Quyết định đích | Rule hiện hành sẽ đổi |
 |---|---|---|
@@ -641,6 +645,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/telegram_io.py",
           "symbol": "_paced_work"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "_process_existing_topic"
         }
       ],
       "tests": [
@@ -671,6 +679,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_reply_authority.py",
           "symbol": "ReplyAuthorityTests.test_group_cannot_borrow_sibling_reply_authority"
+        },
+        {
+          "path": "listener/tests/test_rules_intake.py",
+          "symbol": "RulesIntakeFactsTests.test_batch_reply_reuses_open_pending_and_original_evidence"
         }
       ],
       "prompts": [
@@ -703,6 +715,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/ingress_model.py",
           "symbol": "parse_critic"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_extraction.py",
+          "symbol": "partition_and_extract"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "evaluate_batch"
         }
       ],
       "tests": [
@@ -789,6 +809,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_ingress_critic_contract.py",
           "symbol": "IngressCriticContractTests.test_approved_unknown_post_is_not_created_again_or_recriticized_after_restart"
+        },
+        {
+          "path": "listener/tests/test_rules_intake.py",
+          "symbol": "RulesIntakeFactsTests.test_batch_validates_all_groups_before_returning_any_decisions"
         }
       ],
       "prompts": [
@@ -824,6 +848,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/pipeline.py",
           "symbol": "Pipeline._safety"
+        },
+        {
+          "path": "listener/src/tg_triage/decision_rules.py",
+          "symbol": "RulesSnapshot.evaluate"
         }
       ],
       "tests": [
@@ -838,6 +866,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_direct_call.py",
           "symbol": "ChatAndReviewStateTests.test_a_failed_model_without_a_tag_asks_for_clarification"
+        },
+        {
+          "path": "listener/tests/test_decision_rules.py",
+          "symbol": "DecisionRulesTest.test_command_overrides_model_and_confidence_does_not_decide"
         }
       ]
     },
@@ -1075,6 +1107,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/autonomy_store.py",
           "symbol": "AutonomyStoreMixin.reserve_autonomous_clarification"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_pending_store.py",
+          "symbol": "RulesPendingStore.reserve_attempt"
         }
       ],
       "tests": [
@@ -1109,6 +1145,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_no_response_contract.py",
           "symbol": "NoResponseContractTests.test_technical_notice_is_short_truthful_and_does_not_delegate_again"
+        },
+        {
+          "path": "listener/tests/test_rules_intake.py",
+          "symbol": "RulesIntakeFactsTests.test_hold_retries_survive_restart_and_escalate_once"
         }
       ]
     },
@@ -1177,6 +1217,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/document_processing.py",
           "symbol": "prepare"
+        },
+        {
+          "path": "listener/src/tg_triage/attachments.py",
+          "symbol": "AttachmentProcessor._upload"
         }
       ],
       "tests": [
@@ -1287,6 +1331,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_attachment_note_scope.py",
           "symbol": "AttachmentNoteScopeTests.test_unseen_note_counts_only_accepted_case_images"
+        },
+        {
+          "path": "listener/tests/test_rules_intake.py",
+          "symbol": "RulesIntakeFactsTests.test_unknown_image_and_document_upload_halt_worker_and_restart"
         }
       ]
     },
@@ -1682,6 +1730,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/autonomy_store.py",
           "symbol": "AutonomyStoreMixin.reserve_autonomous_outage"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_pending_store.py",
+          "symbol": "check_before_recovery"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_pending_store.py",
+          "symbol": "_recoverable_batch_groups"
         }
       ],
       "tests": [
@@ -1716,6 +1772,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_no_response_contract.py",
           "symbol": "NoResponseContractTests.test_ambiguous_send_is_terminal_for_same_anchor_but_not_other_batch"
+        },
+        {
+          "path": "listener/tests/test_rules_intake.py",
+          "symbol": "RulesIntakeFactsTests.test_completed_append_with_two_replies_recovers_without_reposting"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "RulesBootstrapTests.test_startup_halt_checks_reserved_comment_before_any_recovery"
         }
       ]
     },
@@ -1729,6 +1793,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/telegram_io.py",
           "symbol": "_paced_work"
+        },
+        {
+          "path": "listener/src/tg_triage/runtime.py",
+          "symbol": "ProcessLock"
         }
       ],
       "tests": [
@@ -1747,6 +1815,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_chat_pacing.py",
           "symbol": "WorkerPacingTests.test_recovery_progress_is_scoped_while_other_chats_keep_collecting"
+        },
+        {
+          "path": "listener/tests/test_process_lock.py",
+          "symbol": "ProcessLockTests.test_other_process_is_blocked_then_acquires_after_release"
         }
       ]
     },
@@ -1756,6 +1828,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/group_notices.py",
           "symbol": "notify"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "_send_ops"
         }
       ],
       "tests": [
@@ -1770,6 +1846,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_followup_retry.py",
           "symbol": "RetryTests.test_reserved_edit_crash_is_terminal_after_restart"
+        },
+        {
+          "path": "listener/tests/test_rules_intake.py",
+          "symbol": "RulesIntakeFactsTests.test_sweep_stops_at_unknown_question_notice_before_next_topic"
         }
       ]
     },
@@ -1884,6 +1964,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/classifier.py",
           "symbol": "Classifier.analyze_ingress"
+        },
+        {
+          "path": "listener/src/tg_triage/decision_rules.py",
+          "symbol": "RulesSnapshot.model_context"
         }
       ],
       "tests": [
@@ -1954,6 +2038,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_no_response_contract.py",
           "symbol": "NoResponseContractTests.test_local_source_view_keeps_existing_redaction_policy"
+        },
+        {
+          "path": "listener/tests/test_decision_rules.py",
+          "symbol": "DecisionRulesTest.test_prompt_excludes_decisions_and_schema_uses_fields"
         }
       ]
     },
@@ -2093,6 +2181,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/issue_format.py",
           "symbol": "format_issue"
+        },
+        {
+          "path": "listener/src/tg_triage/decision_rules.py",
+          "symbol": "RulesSnapshot._validate"
         }
       ],
       "tests": [
@@ -2107,6 +2199,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_ticket_templates.py",
           "symbol": "TicketTemplatesTests.test_bom_crlf_and_values_are_not_reparsed"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "RulesBootstrapTests.test_draft_rules_block_check_config"
         }
       ]
     }
@@ -2119,15 +2215,16 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/prompts/thinking-topics.md": "f3295f8cdf8d3707d8844ffe61c2eeca0efc1763a0f9879c86b375c1a8b15a58",
     "listener/prompts/topics.md": "99dca8ee4272cca18bb283d489b709542661694639aad6ec720d63c7a2b47dc8",
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
-    "listener/src/tg_triage/__main__.py": "b661f62dd1affd730cf061d9c5bd97351af07d3b42d6e7d0122c60324f535ac9",
+    "listener/src/tg_triage/__main__.py": "e4e72b959c4c908affe4f7db16340fad83a776606aff2dea41075503c2b45483",
     "listener/src/tg_triage/ai_transport.py": "3534ca68a62e76328bb4118d79277aa21ce57d2a60dcc300a50a070a26f08f43",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
     "listener/src/tg_triage/analysis_task.py": "b2aada4998ce3c2c43d04a43025ed5ad72455db34c1694c2225b7af6aba954b5",
-    "listener/src/tg_triage/attachments.py": "9214bcd7637334ffddc737de730f2516ccbc5074b46b9015073cf952930c18f4",
+    "listener/src/tg_triage/attachments.py": "1c10ed580428f52874c8587348b9e12c7688762f8159a6ed02b20b7ab006b6c7",
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "860dae897cbf50e110d9761e29272e1e0d7ee2a2b65c681f7ed7637d4f9362a3",
-    "listener/src/tg_triage/config.py": "42e3af7cdce5282937cd7b879e676f02cebba088062de24ada1f4e58224120ec",
+    "listener/src/tg_triage/config.py": "72c18a4a67b80186e01c27164da2f8e8661794936d28685ae4341d9280b4764b",
+    "listener/src/tg_triage/decision_rules.py": "bb50672980719d3a706544b3e6ab418daf9f84714e80907339ca3f51bc1d0df0",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "163595000162d5fa1c162538d997c449d2913934e03f104fb79603e778b0cd1f",
     "listener/src/tg_triage/followup_model.py": "898ae428bc0e5101550665853ed66dbfa0a8324fcc2ba4df18f4ab33d513d934",
@@ -2140,20 +2237,23 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/issue_format.py": "23d8d4ac42551468614555cbd8bdd8bdbaa94d61759bffeef0d0a9d9b3e1d65f",
     "listener/src/tg_triage/lifecycle.py": "e39f3e70ab2a9e9c774d9419636b23ae31f09b53b2be6daf919774bfcd319a85",
     "listener/src/tg_triage/model_lock.py": "52a02869c560575355d448856001f799cc3579b52d5eea8687fb2c1e1179675c",
-    "listener/src/tg_triage/models.py": "4cdde0d6f3d0af4571fe032c90a2c423143d69512a6ddeea5d541e844fea4e14",
+    "listener/src/tg_triage/models.py": "4f5eccde0c4b989e7ae8fac637a3a1ee29c38b523c6b289c32a592b6dd672f79",
     "listener/src/tg_triage/pacing.py": "6d104e30d9b51883dfb27d56ad107089e93a42e88c085ae72e03c0f06af0793e",
-    "listener/src/tg_triage/pipeline.py": "3ad25cf3ba704defaf8870f6436e871f7203f86232a290dd4e782769f59c4da0",
+    "listener/src/tg_triage/pipeline.py": "347a7405f6b81591fdd172e7969b406f63773959daf690295ea794ad0a35f31d",
     "listener/src/tg_triage/provider.py": "b1e3e280829bf3729996cab5c425e58e82cf2c6cad16e95e67a3bbaae8a34b7e",
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
     "listener/src/tg_triage/receipt.py": "ff455fdfb9424cc3e802641607dfe3c872ddc65490b2705bb804ca92f282d51a",
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
-    "listener/src/tg_triage/runtime.py": "558a876aa86f2e2c7be8d54587ea9510e0762686bbf2a3a8dd9742db596b1862",
-    "listener/src/tg_triage/store.py": "713a7ccde19d75f78f4ce81b6e101de5754d10a5185a9b23b2213b8aa24e44cd",
-    "listener/src/tg_triage/telegram_io.py": "01be07b3c1aadc79b618cde3728433fff8a3dbdcfaf440ad669b74d398cf106a",
+    "listener/src/tg_triage/rules_extraction.py": "e99ed616fd8eb31cab9f31a73101e1646e01b03f39d1c06f6530f23cd67d3220",
+    "listener/src/tg_triage/rules_intake.py": "c3d4149549e58a49aeb5ce20b8d68c77ea0b6dff9f468a49b37b5a344a1a9274",
+    "listener/src/tg_triage/rules_pending_store.py": "a5905d1d9d7176c946c978276965077c72edfeb6ed5fbdbe352a101aafb82761",
+    "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
+    "listener/src/tg_triage/store.py": "5b405372e2f6d3f4437f96239c6d7514e040883d70079ac0c61687eda6f4ef9e",
+    "listener/src/tg_triage/telegram_io.py": "207c9908128f2b099695ea0ad4b7d5d38a2db6df7cdaf53bdbca40146207577b",
     "listener/src/tg_triage/thinking.py": "308f7f5814b16b05cff847d38be2b38772c5e65f162f8ab5052bc3012340808e",
     "listener/src/tg_triage/thinking_transport.py": "12aa57301f012f1091e79af7a3756139c8ac8b475e4c97e4d9b66024932e0d66",
     "listener/src/tg_triage/ticket_status.py": "0cd6ed74cf653432962da665dcbb51e2b94f4498b3e59bba133410fda7917326",
-    "listener/src/tg_triage/ticket_templates.py": "2b7e2c52a1de4730bc5fba68e679b788b4c89d9a31dff33bc634f2d9f704dc3b",
+    "listener/src/tg_triage/ticket_templates.py": "b9bc9465dc2ba755efdb58b33707ce295da871530f6769b5d138b6dda52cd4a0",
     "listener/src/tg_triage/topic_store.py": "495bd90150783df45463d86a66dd32927e69fec001f7406808f8496f2466f672",
     "listener/src/tg_triage/trace.py": "3b4c55d7664a8024359c3a35113841c7af76e7770a1823dfe3843d3ea01d2ba0",
     "listener/src/tg_triage/usage.py": "421146bd0ac181a2ff45be7c2d7e82cca1ff54cafc2941bc958f20eb9622828e",
@@ -2161,7 +2261,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/templates/github-ticket/bug.md": "4a0eb199589d55dbc33c2db4297b71258858c915e513c79ab2be62c23e390bb4",
     "listener/templates/github-ticket/comments.md": "3a358d5d6ee36d1bcc810fadb03208c2f9cffbd9a672ccdb5348761fa43f8a27",
     "listener/templates/github-ticket/feedback.md": "4f42dce1ab50b3f8c492f24523caf447d4273b8fbad629243b716e81bbc92cda",
-    "listener/templates/github-ticket/group-replies.md": "f52a2516fe2aed4cb4635ac2d8cfb2e8faeb8612dc818ae994a9862a53337007",
+    "listener/templates/github-ticket/group-replies.md": "789a36ce075ae8a481a4215ec024de42465f365326395de19a5716f5f4979e42",
     "listener/templates/github-ticket/needs-human.md": "18b91e7b06d9c9f90b4deb12141da33994ecf545c3233b8ebfa46854e41a5867",
     "listener/templates/github-ticket/task.md": "232aeefe6d073116fa88401ee22b67f83e08eddedd3de57a8954e09afc17d279"
   },
@@ -2194,14 +2294,21 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "44b11895c124001cf78bc75be274b123d58fdf5bfe3ba990c5aade11c5898d59"
+  "runtime_fingerprint": "67348aff0af611bf01ccba4eb8fc340db5a0f290f1c59a65cd0017d610216771",
+  "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
+  "review_scope": "Read-only Codex review of frozen worktree implementation and correction scope; Owner approved the six decision rules and eight wordings on 2026-10-30; broader semantic approval, preflight, installed evidence and live GO remain pending."
 }
 ```
+
+Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, vẫn giữ bot tắt. Tiếp tục kiểm tra bước tiếp theo như đề xuất.”
 
 ## Changelog
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.0 | 2026-10-30 | Owner AlexChu / executor Codex | Owner duyệt tám mẫu tin và chuyển sáu file quyết định sang ACTIVE; bot vẫn tắt, roles/preflight vẫn DRAFT và chưa có GO. |
+| v1.15.1 | 2026-10-30 | Codex / owner AlexChu | Đồng bộ trace và hash các byte implementation worktree đã qua review Codex chỉ đọc; rules intake opt-in vẫn mặc định tắt, DRAFT và giữ các giới hạn bảo thủ. Review không thay Owner duyệt semantics, ACTIVE, installed evidence hay live GO. |
+| v1.15.0 | 2026-10-30 16:14 | Codex / owner AlexChu | Ghi nhận rules opt-in, giữ DRAFT và chờ duyệt câu chữ ops; phân biệt hành vi mặc định, ràng buộc Reply và các trường hợp giữ lại bảo thủ. |
 | v1.14.0 | 2026-10-30 | Codex / owner AlexChu | Tách ngân sách vision khỏi giới hạn upload theo ticket; áp dụng D7 sáu điều kiện, kiểm metadata trước tải và ghi số ảnh chưa xem được nhận để đính kèm. Ảnh tải lỗi sau quyết định được báo lỗi và ticket vẫn tạo. |
 | v1.13.0 | 2026-10-30 | Claude / owner AlexChu | Gộp nhánh Codex đang chạy production (đọc tài liệu, phân tích, STATUS, ingress diagnostics; các dòng v1.7.2–v1.12.0 ngày 19–21/10 bên dưới) với main (TG-33 template, link nguồn, ghi chú ảnh theo nguồn). Hai nhánh đánh số song song từ v1.7.1; số v1.8.x/v1.12.0 trùng tên nhưng là thay đổi khác nhau. |
 | v1.8.3 | 2026-10-29 | Codex / owner AlexChu | Giới hạn ghi chú media theo nguồn ticket, log thống kê ảnh bằng ID và sửa link IPv6/IDNA. |

@@ -30,6 +30,7 @@ class TelegramConfig:
     proxy: ProxyConfig
     listen_all_groups: bool = False
     ignored_command_prefixes: tuple[str, ...] = ()
+    ops_chat_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,7 @@ class Config:
     autonomous_enabled: bool = False
     context_quiet_seconds: int = 30
     context_max_wait_seconds: int = 60
+    decision_rules_enabled: bool = False
 
     def redacted(self) -> dict:
         result = asdict(self)
@@ -286,6 +288,9 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
     elif (not isinstance(chats, list) or not chats
             or any(type(chat) is not int or chat >= 0 for chat in chats)):
         raise ConfigError("telegram.chat_ids: required non-empty list of group IDs")
+    ops_chat_id = tg.get('ops_chat_id')
+    if ops_chat_id is not None and (type(ops_chat_id) is not int or ops_chat_id >= 0):
+        raise ConfigError('telegram.ops_chat_id: expected group ID')
     proxy = tg.get("proxy", {})
     if not isinstance(proxy, dict):
         raise ConfigError("telegram.proxy: expected TOML table")
@@ -372,6 +377,13 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
     if autonomous_enabled and not thinking_enabled:
         raise ConfigError('thinking.autonomous_enabled requires thinking.enabled')
     thinking_table=_optional_table(data,'thinking')
+    decision_rules_enabled = thinking_table.get('decision_rules_enabled', False)
+    if type(decision_rules_enabled) is not bool:
+        raise ConfigError('thinking.decision_rules_enabled: expected boolean')
+    if decision_rules_enabled and not (thinking_enabled and autonomous_enabled):
+        raise ConfigError('thinking.decision_rules_enabled requires thinking.enabled and autonomous_enabled')
+    if decision_rules_enabled and (ops_chat_id is None or ops_chat_id in chats):
+        raise ConfigError('telegram.ops_chat_id: required and must differ from source groups')
     context_quiet_seconds=_integer(thinking_table.get('context_quiet_seconds',30),'thinking.context_quiet_seconds',30)
     context_max_wait_seconds=_integer(thinking_table.get('context_max_wait_seconds',60),'thinking.context_max_wait_seconds',30)
     if not context_quiet_seconds<=context_max_wait_seconds<=60:
@@ -381,7 +393,7 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         telegram=TelegramConfig(
             _string(tg, "session_path", "telegram.session_path"), tuple(chats),
             _integer(tg.get("min_text_length"), "telegram.min_text_length", 0),
-            ProxyConfig(host, port, secret), listen_all, tuple(ignored_prefixes)),
+            ProxyConfig(host, port, secret), listen_all, tuple(ignored_prefixes), ops_chat_id),
         ollama=OllamaConfig(
             (base_url if provider == "ollama" else url).rstrip("/"), model_name, timeout,
             _number(ollama.get("confidence_threshold"), "ollama.confidence_threshold", 0, 1)),
@@ -398,4 +410,5 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         autonomous_enabled=autonomous_enabled,
         context_quiet_seconds=context_quiet_seconds,
         context_max_wait_seconds=context_max_wait_seconds,
+        decision_rules_enabled=decision_rules_enabled,
     )

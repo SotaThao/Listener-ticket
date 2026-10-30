@@ -111,6 +111,7 @@ class IncomingMessage:
     # 12.11: True when Telegram says this message tags the listener account (Telethon
     # `message.mentioned`). Never guessed from the text.
     mentions_listener: bool = False
+    chat_title: str | None = None
 
     @property
     def has_attachment(self) -> bool:
@@ -120,7 +121,7 @@ class IncomingMessage:
     def __post_init__(self):
         # Python strings can contain lone UTF-16 surrogates, which SQLite and
         # UTF-8 HTTP cannot encode. Normalize all ingress text before persistence.
-        for name in ("sender_name", "text", "chat_username", "document_name"):
+        for name in ("sender_name", "text", "chat_username", "document_name", "chat_title"):
             value = getattr(self, name)
             if isinstance(value, str) and not utf8_valid(value):
                 object.__setattr__(self, name, re.sub(r"[\ud800-\udfff]", "\ufffd", value))
@@ -218,3 +219,5 @@ class Decision:
     reason: str | None = None
     # 12.12: the model's own short reason for its verdict; stored per message, never sent anywhere.
     model_reason: str | None = None
+    reaction_chat_id: int | None = None
+    reaction_targets: tuple = ()

@@ -1,4 +1,4 @@
-"""Linux directory and process safeguards with injectable OS primitives."""
+"""Directory and process safeguards with injectable OS primitives."""
 
 import importlib
 import errno
@@ -34,20 +34,27 @@ class ProcessLock:
         self.directory = Path(directory)
         self.module = lock_module
         self.stream = None
+        self._windows = False
 
     def __enter__(self):
         if self.module is None:
-            try:
-                self.module = importlib.import_module("fcntl")
-            except ImportError:
-                return self
+            self._windows = os.name == "nt"
+            self.module = importlib.import_module("msvcrt" if self._windows else "fcntl")
         self.stream = (self.directory / "tg-triage.lock").open("a+b")
         try:
             os.chmod(self.stream.name, 0o600)
             try:
-                self.module.flock(self.stream.fileno(), self.module.LOCK_EX | self.module.LOCK_NB)
+                if self._windows:
+                    self.stream.seek(0, os.SEEK_END)
+                    if self.stream.tell() == 0:
+                        self.stream.write(b"\0")
+                        self.stream.flush()
+                    self.stream.seek(0)
+                    self.module.locking(self.stream.fileno(), self.module.LK_NBLCK, 1)
+                else:
+                    self.module.flock(self.stream.fileno(), self.module.LOCK_EX | self.module.LOCK_NB)
             except OSError as error:
-                if isinstance(error, BlockingIOError) or error.errno in (errno.EACCES, errno.EAGAIN):
+                if isinstance(error, BlockingIOError) or error.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
                     raise AlreadyRunning() from None
                 raise
         except BaseException:
@@ -59,6 +66,11 @@ class ProcessLock:
     def __exit__(self, *args):
         if self.stream is not None:
             try:
-                self.module.flock(self.stream.fileno(), self.module.LOCK_UN)
+                if self._windows:
+                    self.stream.seek(0)
+                    self.module.locking(self.stream.fileno(), self.module.LK_UNLCK, 1)
+                else:
+                    self.module.flock(self.stream.fileno(), self.module.LOCK_UN)
             finally:
                 self.stream.close()
+                self.stream = None

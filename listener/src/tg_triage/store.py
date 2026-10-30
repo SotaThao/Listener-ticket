@@ -50,6 +50,7 @@ CASE_MESSAGE_COLUMNS = (
     ("reacted_received", "INTEGER NOT NULL DEFAULT 0"), ("reacted_ok", "INTEGER NOT NULL DEFAULT 0"),
     # 12.11: Telegram says this message tagged the listener account (a direct call).
     ("mentions_listener", "INTEGER NOT NULL DEFAULT 0"),
+    ("chat_title", "TEXT"),
     # 12.12: the model's own short reason for its verdict, for the reviewer (never sent to GitHub).
     ("model_reason", "TEXT"),
 )
@@ -192,6 +193,9 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
                     asset_name TEXT NOT NULL, status TEXT NOT NULL, called_at TEXT NOT NULL
                 )
             """)
+            attachment_columns = {row[1] for row in self.connection.execute('PRAGMA table_info(attachments)')}
+            if 'chat_id' not in attachment_columns:
+                self.connection.execute('ALTER TABLE attachments ADD COLUMN chat_id INTEGER')
             self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS group_notices (
                     chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
@@ -318,19 +322,23 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
 
     def enqueue(self, message) -> bool:
         with self._lock, self.connection:
-            cursor = self.connection.execute("""
+            return self._enqueue_sql(message)
+
+    def _enqueue_sql(self, message) -> bool:
+        """Insert under the caller's existing lock/transaction."""
+        cursor = self.connection.execute("""
                 INSERT OR IGNORE INTO messages
                 (chat_id, message_id, received_at, sender_name, text, tier, decision, chat_username,
                  sender_id, reply_to_id, is_forward, has_image, image_size, image_mime,
-                 mentions_listener, has_document, document_size, document_mime, document_name)
-                VALUES (?, ?, ?, ?, ?, 'none', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 mentions_listener, has_document, document_size, document_mime, document_name, chat_title)
+                VALUES (?, ?, ?, ?, ?, 'none', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (message.chat_id, message.message_id, message.received_at.isoformat(),
                   message.sender_name, message.text, message.chat_username,
                   message.sender_id, message.reply_to_id, int(bool(message.is_forward)),
                   int(bool(message.has_image)), message.image_size, message.image_mime,
                   int(bool(message.mentions_listener)), int(bool(message.has_document)),
-                  message.document_size, message.document_mime, message.document_name))
-            return cursor.rowcount == 1
+                  message.document_size, message.document_mime, message.document_name, message.chat_title))
+        return cursor.rowcount == 1
 
     def reaction_done(self, chat_id, message_id, kind) -> bool:
         """True when reaction `kind` ("received" heart / "ok" OK hand) was already placed (12.10)."""
@@ -352,9 +360,9 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
     def update_metadata(self, message):
         with self._lock, self.connection:
             self.connection.execute("""
-                UPDATE messages SET sender_name=?, chat_username=?
+                UPDATE messages SET sender_name=?, chat_username=?, chat_title=?
                 WHERE chat_id=? AND message_id=? AND decision='queued'
-            """, (message.sender_name, message.chat_username, message.chat_id, message.message_id))
+            """, (message.sender_name, message.chat_username, message.chat_title, message.chat_id, message.message_id))
 
     def start_classifying(self, message) -> bool:
         self.enqueue(message)
@@ -846,7 +854,7 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
 
     # ---- attachment quota (Assistant definition 12.8) ----------------------------------
 
-    def reserve_attachment_call(self, case_key, message_id, asset_name, limit):
+    def reserve_attachment_call(self, case_key, message_id, asset_name, limit, *, chat_id=None):
         """Commit one `gh release upload` before it runs; return its row id or None."""
         with self._lock:
             try:
@@ -855,9 +863,9 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
                     self.connection.rollback()
                     return None
                 cursor = self.connection.execute("""
-                    INSERT INTO attachments (case_key, message_id, asset_name, status, called_at)
-                    VALUES (?, ?, ?, 'uploading', ?)
-                """, (case_key, message_id, asset_name, self.clock().isoformat()))
+                    INSERT INTO attachments (case_key, message_id, asset_name, status, called_at, chat_id)
+                    VALUES (?, ?, ?, 'uploading', ?, ?)
+                """, (case_key, message_id, asset_name, self.clock().isoformat(),chat_id))
                 self.connection.commit()
                 return cursor.lastrowid
             except Exception:
@@ -924,4 +932,5 @@ def _to_message(row):
         image_size=row["image_size"], image_mime=row["image_mime"],
         mentions_listener=bool(row["mentions_listener"]),
         has_document=bool(row["has_document"]), document_size=row["document_size"],
-        document_mime=row["document_mime"], document_name=row["document_name"])
+        document_mime=row["document_mime"], document_name=row["document_name"],
+        chat_title=row["chat_title"] if "chat_title" in row.keys() else None)
