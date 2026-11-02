@@ -10,6 +10,23 @@ from tests.test_autonomous import Router,route
 
 
 class TicketStatusSafetyTests(TestCase):
+    def test_confirmed_issue_does_not_hide_another_unconfirmed_post(self):
+        p=self.build(Router())
+        for mid in (1,2): p.store.enqueue(message(mid))
+        with p.store.connection:
+            p.store.connection.execute("UPDATE messages SET group_key='same' WHERE message_id IN (1,2)")
+            p.store.connection.execute("UPDATE messages SET github_called_at='2026-01-01', issue_number=101, issue_url=? WHERE message_id=1",(f'https://github.com/{p.config.gh_repo}/issues/101',))
+            p.store.connection.execute("UPDATE messages SET github_called_at='2026-01-01' WHERE message_id=2")
+        self.assertEqual('ambiguous',ticket_status.resolve(p.store,[message(10,reply_to_id=1)],p.config.gh_repo)['state'])
+        with p.store.connection:
+            p.store.connection.execute("UPDATE messages SET issue_number=102,issue_url=NULL WHERE message_id=2")
+        self.assertEqual('ambiguous',ticket_status.resolve(p.store,[message(10,reply_to_id=1)],p.config.gh_repo)['state'])
+        from unittest.mock import patch
+        with p.store.connection:
+            p.store.connection.execute("UPDATE messages SET issue_url='https://github.com/old/repo/issues/101' WHERE message_id=1")
+        with patch.object(p.store,'autonomous_plan',side_effect=lambda chat,mid: {'host_repo':'old/repo','action':'ISSUE'}):
+            self.assertEqual('ambiguous',ticket_status.resolve(p.store,[message(10,reply_to_id=1)],p.config.gh_repo)['state'])
+
     def build(self,router,sender=None):
         store=Store(':memory:');self.addCleanup(store.close)
         return Pipeline(replace(config('live',window=2),autonomous_enabled=True),store,router,FakeGitHub(),notice_sender=sender)
@@ -29,7 +46,7 @@ class TicketStatusSafetyTests(TestCase):
         with p.store.connection:
             p.store.connection.execute("UPDATE messages SET issue_url='https://github.com/other/repo/issues/101' WHERE message_id=1")
         snap=ticket_status.resolve(p.store,[message(10,reply_to_id=1)],p.config.gh_repo)
-        self.assertEqual('unavailable',snap['state'])
+        self.assertEqual('ambiguous',snap['state'])
         self.assertEqual([],snap['issues'])
 
     def test_multiple_questions_never_borrow_first_target(self):

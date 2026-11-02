@@ -7,7 +7,7 @@ import copy
 from .followup_model import validate_followup, MAX_SPLIT
 from .issue_format import Issue, format_issue, redact, sanitize, telegram_link
 from .models import Classification
-from .group_notices import clean_question, address_question
+from .group_notices import clean_question, address_question, send_reserved
 from .ticket_templates import active
 
 LOG=logging.getLogger(__name__)
@@ -85,19 +85,7 @@ def _notify(pipeline, job, reply, text):
         return
     if pipeline.notice_sender is None:
         return
-    try:
-        if not store.reserve_group_notice(reply.chat_id,reply.message_id,'followup'):
-            return
-        status,notice_id='failed',None
-        try:
-            sent=pipeline.notice_sender(reply.chat_id,reply.message_id,text[:3500])
-            if type(sent) is int and sent>0:
-                status,notice_id='sent',sent
-        except Exception as error:
-            LOG.warning('Followup notice failed exception=%s',type(error).__name__)
-        store.finish_group_notice(reply.chat_id,reply.message_id,status,notice_id)
-    except Exception as error:
-        LOG.warning('Followup notice state failed exception=%s',type(error).__name__)
+    send_reserved(store,pipeline.notice_sender,reply.chat_id,reply.message_id,'followup',text[:3500])
 
 
 def _result(pipeline,job,root,reply,status,text,extra=(), *, include_links=True):

@@ -34,12 +34,24 @@ def resolve(store,sources,repo):
             result['source_ids']=[r['message_id'] for r in rows]
             if not rows or any(r['message_id']>=message.message_id for r in rows):
                 return result
+            records=list(rows)+([group] if group is not None else [])
+            plans=[store.autonomous_plan(message.chat_id,old['message_id']) for old in rows]
+            plan_repos={p.get('host_repo') for p in plans if p is not None and isinstance(p.get('host_repo'),str)}
+            observed_repo=next(iter(plan_repos)) if len(plan_repos)==1 else repo if not plan_repos else None
+            # An incomplete reservation takes precedence over malformed
+            # metadata elsewhere: STATUS must surface the uncertain POST. A
+            # confirmed old-repository issue is not an uncertain POST merely
+            # because the configured repository has changed.
+            operation_repos=[p.get('host_repo') if p is not None else observed_repo for p in plans]
+            if group is not None: operation_repos.append(observed_repo)
+            if any(old['github_called_at'] and not (isinstance(op_repo,str) and type(old['issue_number']) is int
+                    and old['issue_number']>0 and old['issue_url']==f"https://github.com/{op_repo}/issues/{old['issue_number']}")
+                    for old,op_repo in zip(records,operation_repos)):
+                return dict(result,state='ambiguous')
             # Repo binding of a durable plan also applies when it has no ticket yet.
-            for old in rows:
-                plan=store.autonomous_plan(message.chat_id,old['message_id'])
+            for plan in plans:
                 if plan is not None and (plan.get('host_repo')!=repo or plan.get('action')=='STATUS'):
                     return result
-            records=list(rows)+([group] if group is not None else [])
             issues={}
             for old in records:
                 number=old['issue_number']; url=old['issue_url']

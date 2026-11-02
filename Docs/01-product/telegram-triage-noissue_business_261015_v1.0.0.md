@@ -2215,27 +2215,29 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/prompts/thinking-topics.md": "f3295f8cdf8d3707d8844ffe61c2eeca0efc1763a0f9879c86b375c1a8b15a58",
     "listener/prompts/topics.md": "99dca8ee4272cca18bb283d489b709542661694639aad6ec720d63c7a2b47dc8",
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
-    "listener/src/tg_triage/__main__.py": "e4e72b959c4c908affe4f7db16340fad83a776606aff2dea41075503c2b45483",
+    "listener/src/tg_triage/__main__.py": "b0179ccb36dcf616bc4b352e00f03eb8fd8e52528ffbb8f9c0f45cf61f9ae16d",
     "listener/src/tg_triage/ai_transport.py": "3534ca68a62e76328bb4118d79277aa21ce57d2a60dcc300a50a070a26f08f43",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
-    "listener/src/tg_triage/analysis_task.py": "b2aada4998ce3c2c43d04a43025ed5ad72455db34c1694c2225b7af6aba954b5",
-    "listener/src/tg_triage/attachments.py": "1c10ed580428f52874c8587348b9e12c7688762f8159a6ed02b20b7ab006b6c7",
+    "listener/src/tg_triage/analysis_task.py": "f91cf1e28732c6a585eca133000065bb9c21fecb50354046ea02c791ed3def3c",
+    "listener/src/tg_triage/attachments.py": "669104bf2e36b0bfe133353c4fbca94dbad512b7eb8b36d55d17d90273c8f2d4",
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "860dae897cbf50e110d9761e29272e1e0d7ee2a2b65c681f7ed7637d4f9362a3",
     "listener/src/tg_triage/config.py": "72c18a4a67b80186e01c27164da2f8e8661794936d28685ae4341d9280b4764b",
-    "listener/src/tg_triage/decision_rules.py": "bb50672980719d3a706544b3e6ab418daf9f84714e80907339ca3f51bc1d0df0",
+    "listener/src/tg_triage/decision_rules.py": "6033bda05bef11bd24985861c8ce9304559af4dacf55e0d4a5e5806008d0b6c2",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "163595000162d5fa1c162538d997c449d2913934e03f104fb79603e778b0cd1f",
     "listener/src/tg_triage/followup_model.py": "898ae428bc0e5101550665853ed66dbfa0a8324fcc2ba4df18f4ab33d513d934",
     "listener/src/tg_triage/followup_store.py": "d793ce24c46e7385adaf4022e671ff4300757ef30ea584c149e440e42f360c48",
-    "listener/src/tg_triage/followups.py": "51ad80ceeada136766146a8a459b4d0262897ca2075827b0f5eb7af819d696b6",
+    "listener/src/tg_triage/followups.py": "3336fa28a2d4e87edfa5599ceae323c1716b49ba6aabe121b3d1972b6b4ff8f3",
     "listener/src/tg_triage/github_issues.py": "c06a17612996023e2ea014947fdfd1664a4798e5cfee4f3c0fe9038c922b361f",
-    "listener/src/tg_triage/group_notices.py": "1392782ef50c46d0ea1d0319b3d79f40a012f0d02341d83fba7a07b5937be135",
+    "listener/src/tg_triage/group_notices.py": "94c2a95d6757d7fa4e42779b76dcddb32346b37f3de8ceab83c43d569871598d",
     "listener/src/tg_triage/ingress_diagnostics.py": "f61db228b7b23e4357c47ec38b3fc915cfa0e9ec2a1eec26071abd897bb4f82a",
     "listener/src/tg_triage/ingress_model.py": "489f3005ecd639f30cef3cb2acb3edc732b08f63921384eab408ed687fb59c96",
-    "listener/src/tg_triage/issue_format.py": "23d8d4ac42551468614555cbd8bdd8bdbaa94d61759bffeef0d0a9d9b3e1d65f",
-    "listener/src/tg_triage/lifecycle.py": "e39f3e70ab2a9e9c774d9419636b23ae31f09b53b2be6daf919774bfcd319a85",
+    "listener/src/tg_triage/issue_format.py": "62c8d064de5b93bf6236c1b59a06770f3e393a470b681702d79b0538e59a587f",
+    "listener/src/tg_triage/legacy_preflight.py": "4425729b0a89378d22c8ac56d1266427d17f13afb018e4e3f582b609ad349561",
+    "listener/src/tg_triage/legacy_reconciliation.py": "8d732b015bfa1856387d210f243362658806a8c7a3a10f7aef3c6c41178099b2",
+    "listener/src/tg_triage/lifecycle.py": "426f5b062bd59f9e14697c1387fe79c654e6ac9b158c882335e29f1b17dea52b",
     "listener/src/tg_triage/model_lock.py": "52a02869c560575355d448856001f799cc3579b52d5eea8687fb2c1e1179675c",
     "listener/src/tg_triage/models.py": "4f5eccde0c4b989e7ae8fac637a3a1ee29c38b523c6b289c32a592b6dd672f79",
     "listener/src/tg_triage/pacing.py": "6d104e30d9b51883dfb27d56ad107089e93a42e88c085ae72e03c0f06af0793e",
@@ -2244,15 +2246,16 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
     "listener/src/tg_triage/receipt.py": "ff455fdfb9424cc3e802641607dfe3c872ddc65490b2705bb804ca92f282d51a",
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
-    "listener/src/tg_triage/rules_extraction.py": "e99ed616fd8eb31cab9f31a73101e1646e01b03f39d1c06f6530f23cd67d3220",
-    "listener/src/tg_triage/rules_intake.py": "c3d4149549e58a49aeb5ce20b8d68c77ea0b6dff9f468a49b37b5a344a1a9274",
-    "listener/src/tg_triage/rules_pending_store.py": "a5905d1d9d7176c946c978276965077c72edfeb6ed5fbdbe352a101aafb82761",
+    "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
+    "listener/src/tg_triage/rules_extraction.py": "6e5f97d365bcd76ed0dbfee6afc6908b46420899dedb8f843fa8544b8de99e8f",
+    "listener/src/tg_triage/rules_intake.py": "969724484b44b00cff60e2238c78c731adeb1a19b8460a3ebb5038bbed0c237f",
+    "listener/src/tg_triage/rules_pending_store.py": "fd6084c02f6795980d1375dc09e3310e100414b6ef9d7cea9bcc465f3c62ae5f",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
-    "listener/src/tg_triage/store.py": "5b405372e2f6d3f4437f96239c6d7514e040883d70079ac0c61687eda6f4ef9e",
+    "listener/src/tg_triage/store.py": "e7799a1368f1bcccc5d63175a2ade8ceb36fe680ced5a1860b701d0a3c484054",
     "listener/src/tg_triage/telegram_io.py": "207c9908128f2b099695ea0ad4b7d5d38a2db6df7cdaf53bdbca40146207577b",
     "listener/src/tg_triage/thinking.py": "308f7f5814b16b05cff847d38be2b38772c5e65f162f8ab5052bc3012340808e",
     "listener/src/tg_triage/thinking_transport.py": "12aa57301f012f1091e79af7a3756139c8ac8b475e4c97e4d9b66024932e0d66",
-    "listener/src/tg_triage/ticket_status.py": "0cd6ed74cf653432962da665dcbb51e2b94f4498b3e59bba133410fda7917326",
+    "listener/src/tg_triage/ticket_status.py": "3bc62380e1814c95a61a82b74f913949c9b9f959635978c04704c4eff758fe61",
     "listener/src/tg_triage/ticket_templates.py": "b9bc9465dc2ba755efdb58b33707ce295da871530f6769b5d138b6dda52cd4a0",
     "listener/src/tg_triage/topic_store.py": "495bd90150783df45463d86a66dd32927e69fec001f7406808f8496f2466f672",
     "listener/src/tg_triage/trace.py": "3b4c55d7664a8024359c3a35113841c7af76e7770a1823dfe3843d3ea01d2ba0",
@@ -2294,9 +2297,9 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "67348aff0af611bf01ccba4eb8fc340db5a0f290f1c59a65cd0017d610216771",
+  "runtime_fingerprint": "af5fa47d9ae4ca91028720b16265a4325d35d6e2610a5f0136042c3bffd329df",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
-  "review_scope": "Read-only Codex review of frozen worktree implementation and correction scope; Owner approved the six decision rules and eight wordings on 2026-10-30; broader semantic approval, preflight, installed evidence and live GO remain pending."
+  "review_scope": "Antigravity completion of rules migration: successive recurrence episodes, reused_success handling, grounded ANALYZE with read_context & document digest check, and offline legacy reconciliation (preflight/transition/release) with 59 runtime files."
 }
 ```
 
@@ -2306,6 +2309,9 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.3 | 2026-11-02 | Antigravity / owner AlexChu | Hoàn thiện chuyển đổi rules: bổ sung lifecycle (successive recurrence chain, reused_success), grounded ANALYZE với read_context & digest check, offline legacy reconciliation (preflight/transition/release) và cập nhật inventory 59 runtime files. |
+| v1.16.2 | 2026-11-02 | Codex / owner AlexChu | Gộp cơ chế reserve → gửi một lần → ghi kết quả của notice và followup; giữ giới hạn nội dung, edit retry và trạng thái chưa xác nhận. Review Codex chỉ đọc đã duyệt source và diff được cung cấp; không thay thế kiểm thử độc lập toàn hệ thống hoặc GO vận hành. |
+| v1.16.1 | 2026-11-02 | Codex / owner AlexChu | Dọn hai hằng formatter không còn được dùng; fallback vẫn lấy từ template TG-33. Giữ đường legacy, recovery và lifecycle vì rules chưa có parity ANALYZE/STATUS và ticket đóng; không xác nhận rollback hay GO. |
 | v1.16.0 | 2026-10-30 | Owner AlexChu / executor Codex | Owner duyệt tám mẫu tin và chuyển sáu file quyết định sang ACTIVE; bot vẫn tắt, roles/preflight vẫn DRAFT và chưa có GO. |
 | v1.15.1 | 2026-10-30 | Codex / owner AlexChu | Đồng bộ trace và hash các byte implementation worktree đã qua review Codex chỉ đọc; rules intake opt-in vẫn mặc định tắt, DRAFT và giữ các giới hạn bảo thủ. Review không thay Owner duyệt semantics, ACTIVE, installed evidence hay live GO. |
 | v1.15.0 | 2026-10-30 16:14 | Codex / owner AlexChu | Ghi nhận rules opt-in, giữ DRAFT và chờ duyệt câu chữ ops; phân biệt hành vi mặc định, ràng buộc Reply và các trường hợp giữ lại bảo thủ. |

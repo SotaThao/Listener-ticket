@@ -29,7 +29,7 @@ def _load_decision_rules():
     templates_dir = source / 'templates' / 'github-ticket'
     if not templates_dir.is_dir():
         templates_dir = installed / 'templates' / 'github-ticket'
-    return RulesSnapshot(rules_dir, templates_dir)
+    return RulesSnapshot(rules_dir, templates_dir, extensions=True)
 
 
 def _build_classifier(config, store):
@@ -46,12 +46,18 @@ def main(argv=None) -> int:
     os.umask(0o077)
     parser = argparse.ArgumentParser(prog="tg-triage")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("run", "login", "export-csv", "check-config", "trace"):
+    for name in ("run", "login", "export-csv", "check-config", "trace", "legacy-preflight", "legacy-transition", "legacy-release"):
         command = commands.add_parser(name)
         command.add_argument("--config", default="/etc/tg-triage/listener.toml")
         if name == "export-csv":
             command.add_argument("--out", required=True)
             command.add_argument("--db")
+        if name == "legacy-preflight":
+            command.add_argument("--db", required=True)
+            command.add_argument("--attachment-evidence", action="store_true")
+        if name in ("legacy-transition", "legacy-release"):
+            command.add_argument("--db", required=True)
+            command.add_argument("--manifest", required=True)
         if name == "trace":
             command.add_argument("--repo")
             command.add_argument("--issue", type=int)
@@ -63,6 +69,22 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if args.command in ('legacy-transition','legacy-release'):
+            from .legacy_reconciliation import transition_pristine, release_pristine
+            try:
+                manifest=json.loads(Path(args.manifest).read_text(encoding='utf-8'))
+            except (OSError,ValueError,UnicodeError):
+                raise RulesHalt('cannot read offline transition attestation') from None
+            action=transition_pristine if args.command=='legacy-transition' else release_pristine
+            print(json.dumps(action(args.db,manifest),ensure_ascii=False,indent=2))
+            return 0
+        if args.command == 'legacy-preflight':
+            from .legacy_preflight import inspect, attachment_evidence
+            report=inspect(args.db)
+            if args.attachment_evidence:
+                report['attachment_evidence']=attachment_evidence(args.db)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "trace":
             from .trace import trace, validate_repo
             repo = validate_repo(args.repo or os.environ.get("GH_REPO", ""))

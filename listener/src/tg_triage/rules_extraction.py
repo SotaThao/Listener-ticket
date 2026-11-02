@@ -34,6 +34,18 @@ def parse_facts(content, snapshot):
             else:
                 value.encode('utf-8')
             clean[key] = {'value': value, 'source_ids': ids}
+        if snapshot.extensions and 'task' in result:
+            from .analysis_task import projection
+            clean['task'] = projection(result['task'])
+            if clean['task'] is None: return None
+        if snapshot.extensions and 'lifecycle' in result:
+            from .lifecycle import validate_lifecycle
+            raw = result['lifecycle']
+            allowed = {'kind','knownworking_source_ids','recurrence_source_ids','knownworking_quote',
+                       'recurrence_quote','temporal_order_confirmed'}
+            if not isinstance(raw,dict) or set(raw)-allowed: return None
+            clean['lifecycle'] = validate_lifecycle(raw)
+            if clean['lifecycle'] is None: return None
         return clean
     except (ValueError, TypeError, UnicodeError):
         return None
@@ -53,15 +65,15 @@ def parse_grouped_facts(content, snapshot, source_ids):
             seen.update(ids)
             facts = parse_facts(json.dumps(group['facts'], ensure_ascii=False), snapshot)
             if facts is None: return None
-            facts = {name:field for name,field in facts.items() if set(field['source_ids']) <= set(ids)
-                     and (name != 'media_ids' or set(field['value']) <= set(ids))}
+            facts = {name:field for name,field in facts.items() if name in ('task','lifecycle') or
+                     (set(field['source_ids']) <= set(ids) and (name != 'media_ids' or set(field['value']) <= set(ids)))}
             groups.append((tuple(ids),facts))
         return tuple(groups) if seen == set(source_ids) else None
     except (ValueError, TypeError, UnicodeError):
         return None
 
 
-def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None):
+def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=()):
     """One bounded call for grouping plus facts; code owns all decisions and targets."""
     sources = list(sources)
     if not sources or (not allow_mixed and any(m.chat_id != sources[0].chat_id for m in sources)): return None
@@ -93,12 +105,36 @@ def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mix
     packet = {'source_ids':ids,'sources':[{'message_id':m.message_id,'reply_to_id':m.reply_to_id,
               'sender_ref':sender_ref(m),'text':m.text,'text_truncated':False,'has_image':m.has_image,'has_document':m.has_document,
               'pixels_available':m.message_id in images} for m in sources], 'images_order':[m.message_id for m in ordered]}
-    if documents: packet['DOCUMENT_CONTENTS']=documents
+    if snapshot.extensions:
+        from .store import _aware
+        cutoff=min(_aware(m.received_at) for m in sources)
+        if (len(read_context)>8 or any(m.chat_id!=sources[0].chat_id or m.message_id>=min(ids)
+                or _aware(m.received_at)>cutoff for m in read_context)):
+            return None
+        def context_text(message):
+            # Redact the complete value before truncation: cutting first can
+            # expose a partial contact that the cloud redactor cannot detect.
+            if getattr(provider, '_ingress_cloud_view', False):
+                return provider._ingress_source_text(message.text)
+            return message.text
+        packet['read_only_context']=[]
+        for m in read_context:
+            value=context_text(m)
+            packet['read_only_context'].append({'message_id':m.message_id, 'text':value[:700],
+                'text_truncated':len(value)>700, 'pixels_available':False, 'has_image':m.has_image})
+    if documents:
+        # Processing receipts stay host-side; the model needs the bounded text,
+        # not the potentially large per-part verification ledger.
+        packet['DOCUMENT_CONTENTS']=[{k:v for k,v in row.items() if k in
+            ('message_id','name','read_status','byte_count','sha256','text')} for row in documents]
     from .thinking import DocumentContextJSON
     kind=DocumentContextJSON if documents else ContextJSON
     user = {'role':'user','content':kind(json.dumps(packet,ensure_ascii=False,separators=(',',':')))}
     if pixels: user['images'] = pixels
     body = {'model':provider.settings.model,'stream':False,'think':provider.think,'options':{'temperature':0},
             'messages':[{'role':'system','content':system},user],'format':schema}
+    while request_text_bytes(body) > 8000 and packet.get('read_only_context'):
+        packet['read_only_context'].pop(0)
+        user['content'] = kind(json.dumps(packet,ensure_ascii=False,separators=(',',':')))
     if request_text_bytes(body) > 8000: return None
     return provider._ask(body, lambda raw: parse_grouped_facts(raw,snapshot,ids), attempts=1)

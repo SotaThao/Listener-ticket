@@ -228,6 +228,12 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
             init_store(self)
             if recover_pending:
                 self._recover_cases()
+                if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rules_deferred_ops'").fetchone():
+                    self.connection.execute("""UPDATE messages SET decision='pending_review',
+                        reason='rules_reply_deferred_during_effect'
+                        WHERE decision IN ('queued','classifying') AND github_called_at IS NULL AND EXISTS (
+                            SELECT 1 FROM rules_deferred_ops d WHERE d.chat_id=messages.chat_id
+                            AND d.message_id=messages.message_id)""")
                 self.connection.execute("""
                     UPDATE messages SET decision = 'error',
                     error = 'Interrupted processing; review before any manual retry',

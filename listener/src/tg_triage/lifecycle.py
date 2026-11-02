@@ -3,7 +3,7 @@ QUESTION = 'Anh/Chị cho Em biết lỗi này chưa từng hết, hay đã ch�
 
 
 def validate_lifecycle(value):
-    if not isinstance(value, dict) or value.get('kind') not in ('evidence', 'recurrence', 'unclear'):
+    if not isinstance(value, dict) or value.get('kind') not in ('evidence', 'recurrence', 'reused_success', 'unclear'):
         return None
     result = {'kind': value['kind']}
     for field in ('knownworking_source_ids', 'recurrence_source_ids'):
@@ -29,6 +29,8 @@ def closed_decision(value, sources, reply, incoming_ids=None):
     lifecycle = value.get('lifecycle') or {}
     if lifecycle.get('kind') == 'evidence':
         return 'evidence'
+    if lifecycle.get('kind') == 'reused_success':
+        return 'reused_success'
     if lifecycle.get('kind') != 'recurrence':
         return 'unclear'
     lookup = {m.message_id: m for m in sources + [reply]}
@@ -54,3 +56,20 @@ def closed_decision(value, sources, reply, incoming_ids=None):
           min((lookup[i].received_at, lookup[i].message_id) for i in recurring)):
         return 'unclear'
     return 'recurrence'
+
+
+def grounded_recurrence(value, sources, incoming):
+    """Validate cited chronology and literal evidence; does not authorize a POST."""
+    sources=list(sources); incoming=list(incoming)
+    if not incoming or not isinstance(value,dict): return False
+    lifecycle=validate_lifecycle(value)
+    if lifecycle is None or lifecycle['kind']!='recurrence': return False
+    all_messages=sources+incoming
+    if any(m.chat_id!=incoming[0].chat_id for m in all_messages): return False
+    lookup={m.message_id:m for m in all_messages}
+    if len(lookup)!=len(all_messages): return False
+    for field,quote_field in (('knownworking_source_ids','knownworking_quote'),('recurrence_source_ids','recurrence_quote')):
+        ids=lifecycle[field]; quote=lifecycle[quote_field].strip()
+        if not ids or not quote or any(i not in lookup or quote not in lookup[i].text for i in ids): return False
+    candidate={'lifecycle':lifecycle,'case_analysis':{'key_message_ids':lifecycle['recurrence_source_ids']}}
+    return closed_decision(candidate,sources,incoming[-1],{m.message_id for m in incoming})=='recurrence'

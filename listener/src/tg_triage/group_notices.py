@@ -142,20 +142,25 @@ def notify(store, sender, first, result, missing_info, repo, *, text_override=No
     text = text_override if text_override is not None else notice_text(result, missing_info, repo)
     if text is None:
         return
+    send_reserved(store, sender, first.chat_id, first.message_id, result.decision, text)
+
+
+def send_reserved(store, sender, chat_id, message_id, kind, text):
+    """Reserve before a single send; failed and uncertain attempts are never replayed."""
     try:
-        if not store.reserve_group_notice(first.chat_id, first.message_id, result.decision):
+        if not store.reserve_group_notice(chat_id, message_id, kind):
             return
     except Exception as error:
         LOG.warning("Group notice reservation failed exception=%s", type(error).__name__)
         return  # fail closed if durable state is unavailable
     status, notice_id = "failed", None
     try:
-        sent = sender(first.chat_id, first.message_id, text)
+        sent = sender(chat_id, message_id, text)
         if type(sent) is int and sent > 0:
             status, notice_id = "sent", sent
     except Exception as error:
         LOG.warning("Group notice send failed exception=%s", type(error).__name__)
     try:
-        store.finish_group_notice(first.chat_id, first.message_id, status, notice_id)
+        store.finish_group_notice(chat_id, message_id, status, notice_id)
     except Exception as error:
         LOG.warning("Group notice state failed exception=%s", type(error).__name__)

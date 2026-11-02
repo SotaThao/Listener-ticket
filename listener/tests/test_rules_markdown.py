@@ -86,6 +86,14 @@ REQUIRED = {
         "checks": ["#", "Kiểm", "Cách kiểm / bằng chứng", "Ai ký", "Miễn được?"],
         "halt": ["#", "Điều kiện dừng"],
     },
+    "lifecycle": {
+        "disposition": ["Bằng chứng host đã kiểm", "Quyết định"],
+        "explicit_evidence": ["Xác nhận trực tiếp", "Bằng chứng"],
+        "clarification": ["Khóa", "Văn bản"],
+    },
+    "analysis-status": {
+        "intent_routes": ["Intent model đã kiểm nguồn", "Quyết định"],
+    },
 }
 
 
@@ -175,7 +183,7 @@ class RulesMarkdown(unittest.TestCase):
         self.assertEqual(set(self.files), expected)
         for name, (header, _) in self.files.items():
             self.assertIsNotNone(header, f"{name}.md: dòng 1 phải là header rule-file")
-            self.assertEqual(header["name"], name)
+            self.assertEqual(header["name"], name.replace('-', '_'))
             self.assertIn(header["audience"], AUDIENCES)
 
     # K2

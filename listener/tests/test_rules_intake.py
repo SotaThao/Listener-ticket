@@ -621,7 +621,7 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         result=pipeline.process(message(42,text='POS kẹt giấy',has_image=True))
         self.assertEqual((result.decision,result.issue_number),('issue',42));self.assertEqual(len(github.calls),1)
         self.assertEqual([call[1:3] for call in calls],[['release','view']])
-        self.assertEqual(store.connection.execute('SELECT status FROM attachments').fetchone()[0],'error')
+        self.assertEqual(store.connection.execute('SELECT status FROM attachments').fetchone()[0],'prewrite_error')
         self.assertFalse(pipeline.rules_pending.unresolved_ambiguity())
 
     def test_unknown_image_and_document_upload_halt_worker_and_restart(self):
@@ -915,8 +915,8 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         path=Path(self.temp.name)/'done-target.sqlite3'; store=Store(path); self.addCleanup(store.close)
         settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
                          telegram=replace(config().telegram,ops_chat_id=-1009876543210))
-        provider=Provider(); github=GitHub()
-        def build(db): return Pipeline(settings,db,provider,github,rules_snapshot=snapshot)
+        provider=Provider(); github=GitHub(); sent=[]
+        def build(db): return Pipeline(settings,db,provider,github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 900+len(sent))
         pipeline=build(store); pipeline.process(message(42,text='POS kẹt giấy'))
         a=message(43,text='vẫn bị',reply_to_id=42); b=message(44,text='thêm CSV báo cáo')
         store.enqueue(a); store.enqueue(b); transition=pipeline.rules_pending.transition_group
@@ -1276,6 +1276,44 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         self.assertEqual((result.decision,result.case_key,result.images),('dry_run_issue','-1001234567890:43',0))
         self.assertEqual(store.get(-1001234567890,42)['decision'],'pending_review')
 
+    def test_append_incomplete_notice_blocks_sweep_and_restart(self):
+        from tg_triage.rules_pending_store import RulesHalt, check_before_recovery
+        snapshot=self.snapshot()
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False
+            def _ask(self,body,parse,attempts):
+                mid=json.loads(body['messages'][1]['content'])['source_ids'][0]
+                return parse(json.dumps({'groups':[{'message_ids':[mid],'facts':{'intent':{'value':'bug','source_ids':[mid]},'object':{'value':'POS','source_ids':[mid]},'observed':{'value':'kẹt giấy','source_ids':[mid]}}}]}))
+        class GitHub:
+            def __init__(self): self.comments=[]
+            def create_issue(self,issue): return 42,None
+            def lifecycle_snapshot(self,n): return {'number':n,'repo':'sandbox/triage','state':'open','observed_at':'now'}
+            def add_comment(self,n,body): self.comments.append(body); return 101
+        path=Path(self.temp.name)/'append-incomplete.sqlite3'; store=Store(path)
+        settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
+                         telegram=replace(config().telegram,ops_chat_id=-1009876543210))
+        github=GitHub(); sent=[]
+        pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 900+len(sent))
+        pipeline.process(message(42,text='POS kẹt giấy'))
+        with patch('tg_triage.rules_intake._send_ops',return_value=False):
+            with self.assertRaises(RulesHalt): pipeline.process(message(43,text='vẫn lỗi',reply_to_id=42))
+        self.assertEqual(1,len(github.comments))
+        with self.assertRaises(RulesHalt): pipeline.close_due_cases()
+        store.close()
+        with self.assertRaises(RulesHalt): check_before_recovery(path)
+        import sqlite3
+        connection=sqlite3.connect(path)
+        with connection:
+            connection.execute('DROP TABLE rules_append_completions')
+        connection.close()
+        with self.assertRaises(RulesHalt): check_before_recovery(path)
+        connection=sqlite3.connect(path)
+        with connection:
+            connection.execute('DROP TABLE rules_sources')
+        connection.close()
+        with self.assertRaises(RulesHalt): check_before_recovery(path)
+        self.assertEqual(1,len(github.comments))
+
     def test_reply_image_upload_failure_is_visible_in_comment(self):
         snapshot=self.snapshot()
         class Provider:
@@ -1293,7 +1331,7 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         store=Store(':memory:'); self.addCleanup(store.close)
         settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
                          telegram=replace(config().telegram,ops_chat_id=-1009876543210))
-        github=GitHub(); pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,downloader=download,uploader=None)
+        github=GitHub(); sent=[]; pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,downloader=download,uploader=None,notice_sender=lambda *a:sent.append(a) or 900+len(sent))
         pipeline.process(message(42,text='POS kẹt giấy'))
         result=pipeline.process(message(43,text='vẫn lỗi',reply_to_id=42,has_image=True))
         self.assertEqual(result.decision,'followup')

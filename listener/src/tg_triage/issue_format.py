@@ -15,9 +15,7 @@ TOTAL_QUOTE_BUDGET = 4000  # characters of quoted text shared by all messages in
 MIN_QUOTE_PER_MESSAGE = 100  # floor, so a large group still shows something of every message
 MAX_CLARIFY = 5
 MAX_CLARIFY_CHARS = 200
-NEEDS_CLARITY_LINE = "Chưa đủ thông tin để phân loại, cần người đọc xem lại."
 NO_TITLE_LINE = "(không có tiêu đề)"
-NO_SUMMARY_LINE = "(không có tóm tắt)"
 
 # The classifier adds " [kèm ảnh]" to the text it sends the model, and the model sometimes copies
 # it into title/summary. Variants: "[kèm ảnh]", "(có kèm ảnh)", "[có kèm ảnh]", bare "kèm ảnh" /

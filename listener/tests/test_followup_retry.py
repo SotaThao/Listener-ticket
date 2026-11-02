@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from tg_triage.store import Store
 from tg_triage.pipeline import Pipeline
+from tg_triage.followups import _notify
 from tg_triage.telegram_io import make_group_notice_editor
 from tests import test_followup_context as context_fixtures
 OWNER=context_fixtures.OWNER
@@ -21,6 +22,47 @@ class RetryTests(unittest.TestCase):
     provider=context_fixtures.ContextTests.provider
     legacy=context_fixtures.ContextTests.legacy
     import_old=context_fixtures.ContextTests.import_old
+
+    def test_followup_notice_reservation_survives_failure_and_restart(self):
+        directory=self.enterContext(tempfile.TemporaryDirectory()); path=Path(directory)/'db'
+        store=Store(path); reply=message(440); calls=[]
+        def fail(chat, target, text):
+            self.assertEqual(store.connection.execute('SELECT status FROM group_notices WHERE message_id=?',
+                                                       (target,)).fetchone()[0], 'reserved')
+            calls.append(text); raise TimeoutError('private')
+        pipeline=SimpleNamespace(config=SimpleNamespace(mode='live'),store=store,notice_sender=fail)
+        job={'id':1}
+        _notify(pipeline,job,reply,'x'*4000)
+        self.assertEqual(len(calls[0]),3500)
+        self.assertEqual(store.connection.execute('SELECT status FROM group_notices').fetchone()[0], 'failed')
+        store.close()
+        store=Store(path); self.addCleanup(store.close)
+        pipeline.store=store; pipeline.notice_sender=lambda *args: calls.append('resent') or 123
+        _notify(pipeline,job,reply,'again')
+        self.assertEqual(len(calls),1)
+
+    def test_followup_notice_reservation_failure_does_not_send(self):
+        store=Store(':memory:'); self.addCleanup(store.close); calls=[]
+        pipeline=SimpleNamespace(config=SimpleNamespace(mode='live'),store=store,
+                                 notice_sender=lambda *args: calls.append(args))
+        with patch.object(store,'reserve_group_notice',side_effect=OSError('private')):
+            _notify(pipeline,{'id':1},message(440),'notice')
+        self.assertEqual(calls,[])
+
+    def test_followup_notice_crash_after_reservation_is_not_resent(self):
+        directory=self.enterContext(tempfile.TemporaryDirectory()); path=Path(directory)/'db'
+        store=Store(path); reply=message(440); calls=[]
+        def crash(*args):
+            raise SystemExit
+        pipeline=SimpleNamespace(config=SimpleNamespace(mode='live'),store=store,notice_sender=crash)
+        with self.assertRaises(SystemExit):
+            _notify(pipeline,{'id':1},reply,'notice')
+        self.assertEqual(store.connection.execute('SELECT status FROM group_notices').fetchone()[0], 'reserved')
+        store.close()
+        store=Store(path); self.addCleanup(store.close)
+        pipeline.store=store; pipeline.notice_sender=lambda *args: calls.append(args) or 123
+        _notify(pipeline,{'id':1},reply,'again')
+        self.assertEqual(calls,[])
 
     def failed(self,path=':memory:'):
         store,gh,sent,p=self.setup_conversation(path); self.import_old(store)

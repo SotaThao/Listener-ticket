@@ -370,7 +370,22 @@ class AttachmentProcessor:
                     if not isinstance(url, str) or not _SAFE_URL.fullmatch(url):
                         raise UploadError("invalid asset url")
                 except ReleaseReadError:
-                    self.store.finish_attachment(call_id, "error")
+                    # Only the release lookup, before ensure_release succeeds,
+                    # proves that no write was attempted. The same exception
+                    # from an uploader after that point is not such proof.
+                    if state["ensured"]:
+                        try:
+                            self.store.finish_attachment(call_id, "ambiguous")
+                        finally:
+                            if self.strict_uploads:
+                                raise AttachmentAmbiguous('attachment outcome is unresolved; Owner inspection required') from None
+                    else:
+                        try:
+                            self.store.finish_attachment(call_id, "prewrite_error")
+                        except Exception:
+                            if self.strict_uploads:
+                                raise AttachmentAmbiguous('attachment ledger outcome unresolved; Owner inspection required') from None
+                            raise
                     raise
                 except Exception:
                     try:
@@ -486,7 +501,19 @@ class AttachmentProcessor:
                     if not isinstance(url, str) or not _SAFE_URL.fullmatch(url):
                         raise UploadError("invalid asset url")
                 except ReleaseReadError:
-                    self.store.finish_attachment(call_id, "error")
+                    if state["ensured"]:
+                        try:
+                            self.store.finish_attachment(call_id, "ambiguous")
+                        finally:
+                            if self.strict_uploads:
+                                raise AttachmentAmbiguous('attachment outcome is unresolved; Owner inspection required') from None
+                    else:
+                        try:
+                            self.store.finish_attachment(call_id, "prewrite_error")
+                        except Exception:
+                            if self.strict_uploads:
+                                raise AttachmentAmbiguous('attachment ledger outcome unresolved; Owner inspection required') from None
+                            raise
                     raise
                 except Exception:
                     try:

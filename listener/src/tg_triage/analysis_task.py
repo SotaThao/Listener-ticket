@@ -110,3 +110,27 @@ def render(task):
     if len(text)>500:
         raise ValueError('Analysis task exceeds notice budget')
     return text
+
+
+def render_excerpts(task):
+    """Present source matches as unverified excerpts, not semantic authority."""
+    value=projection(task)
+    if value is None:
+        raise ValueError('Invalid analysis task')
+    text=('Trích nguồn; cần xác nhận ngữ cảnh:\n'
+            + 'Việc: “'+value['title']+'”\nThực hiện: “'+value['work']+'”\nĐạt: '
+            + '; '.join('“'+item+'”' for item in value['acceptance']))
+    if len(text)>500:
+        raise ValueError('Analysis excerpts exceed notice budget')
+    return text
+
+
+def explicit_task(task, text, is_forward):
+    """A direct author's complete task, rather than a model's inferred meaning."""
+    if is_forward or not isinstance(text,str):
+        return False
+    try:
+        rendered=render(task)
+    except ValueError:
+        return False
+    return text.replace('\r\n','\n').strip()=='Phân tích:\n'+rendered
