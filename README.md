@@ -11,6 +11,12 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 > **Hiện tại: lõi rules đã ACTIVE và kiểm thử offline; setup máy còn Todo, chưa có GO vận hành.** Audit goal, giới hạn và việc còn lại: [`Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md`](Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md).
 
+## Tiến độ và công việc để PM kiểm soát
+
+- [Báo cáo tổng thể ngày 03/11/2026](Docs/04-tasks/listener-ticket-2178_report_261103_v1.0.2.md): tiến độ, phạm vi và estimate dev/AI.
+- [Bảng công việc PM-01…PM-13](Docs/04-tasks/listener-completion-2178_tasks_261103_v1.0.0.md): đầu ra, tiêu chí nghiệm thu, phụ thuộc, phân vai và bằng chứng phải nộp.
+- Mã cleanup `520a7de` đã được tích hợp theo yêu cầu Owner; lifecycle/ANALYZE/SQLite vẫn còn việc mở. Hai rules mở rộng giữ DRAFT, cấu hình mặc định tắt, vận hành **NO_GO**. Publish source không đồng nghĩa nghiệm thu hoặc deploy.
+
 ## Bắt đầu đọc từ đâu
 
 | Bạn là… | Đọc |
