@@ -1,6 +1,6 @@
 # Quy tắc nạp rules vào bot và model
 
-> **Trạng thái: sáu file quyết định ACTIVE theo duyệt Owner ngày 2026-10-30; bot vẫn tắt.** `roles.md` và `preflight.md` còn DRAFT; chưa có GO. Chế độ opt-in chỉ nạp bộ ACTIVE tại `check-config` và `run`. File này quy định **cách** bot nạp, kiểm và dùng các file quy tắc; nội dung quy tắc nằm ở các file khác trong thư mục.
+> **Trạng thái: sáu file quyết định ACTIVE theo duyệt Owner ngày 2026-10-30; hai file mở rộng ACTIVE theo duyệt ngày 2026-11-03; bot chưa có GO.** `roles.md` và `preflight.md` còn DRAFT; chưa có GO. Chế độ opt-in chỉ nạp bộ ACTIVE tại `check-config` và `run`. File này quy định **cách** bot nạp, kiểm và dùng các file quy tắc; nội dung quy tắc nằm ở các file khác trong thư mục.
 >
 > **Nguyên tắc (Owner, 2026-10-29):** mọi quyết định của bot dựa trên file markdown trong thư mục này với trạng thái liệt kê cụ thể. **Model chỉ trích dữ kiện; code áp quy tắc.** Đổi hoặc nâng cấp model chỉ làm dữ kiện chính xác hơn hoặc nhanh hơn, không đổi kết quả của cùng một bộ dữ kiện.
 >
@@ -19,6 +19,14 @@ File quyết định — bot nạp theo thứ tự:
 | [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | ACTIVE |
 | [examples.md](examples.md) | 24 ví dụ X1–X24 phủ mọi luật + 8 ca chuẩn hóa G1–G8 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
 
+
+File mở rộng — loader source nạp cùng sáu file trên khi bật rules; chỉ host áp dụng, không gửi bảng quyết định cho model:
+
+| File | Nội dung | Ai dùng | Trạng thái |
+|---|---|---|---|
+| [lifecycle.md](lifecycle.md) | Reply open/closed, evidence/recurrence, related episode và xác nhận A/B | Code | ACTIVE v2 |
+| [analysis-status.md](analysis-status.md) | ANALYZE có evidence/receipt và STATUS chỉ đọc host ledger | Code | ACTIVE v2 |
+
 File cho **người và Agent** — không nằm trong trình tự nạp quyết định, không gửi model:
 
 | File | Nội dung | Ai dùng | Trạng thái |
@@ -26,14 +34,14 @@ File cho **người và Agent** — không nằm trong trình tự nạp quyết
 | [roles.md](roles.md) | Ai được làm gì: vai trò, bảng việc A01–A27 với `ALLOW` / `ASK_OWNER` / `DENY`, định nghĩa "đồng ý của Owner trong phiên", khi nào dừng và hỏi | Người + Agent | DRAFT |
 | [preflight.md](preflight.md) | Cổng bật tính năng: mục kiểm P1–P13, `GO` / `NO_GO`, điều kiện dừng bot H1–H7, phiếu ký | Người + Agent | DRAFT |
 
-Sẽ thêm theo từng lát (chưa soạn): `lifecycle.md` (reply vào ticket đã đóng, Vòng đời ticket) · `topics.md` (TG-05/06) · `priority.md`.
+Chưa soạn: `topics.md` (TG-05/06) · `priority.md`.
 
 ## 2. Định dạng mỗi file quy tắc
 
 1. **Dòng đầu tiên** bắt buộc là header:
    `<!-- rule-file: <tên> · version <số> · status DRAFT|ACTIVE · audience: code | model + code | người + agent -->`
    - `<tên>` trùng tên file (không đuôi `.md`).
-   - `status: DRAFT` ⇒ runtime **bỏ qua** file; chỉ `ACTIVE` mới được nạp.
+   - Chỉ `ACTIVE` mới được nạp; file quyết định hoặc mở rộng bắt buộc còn `DRAFT` ⇒ loader từ chối, không fallback.
 2. **Chỉ bảng được máy đọc.** Mỗi bảng nằm ngay dưới heading `## Bảng: <tên_bảng>`; hàng đầu là tên cột cố định. Văn xuôi, ghi chú, heading khác là hướng dẫn cho người, runtime bỏ qua.
 3. Giá trị máy so khớp (mã trạng thái, tên trường, mã luật, tên khối template) viết trong backtick: `` `READY` ``, `` `object` ``.
 4. Ô quyết định chỉ dùng: giá trị trong backtick (một hoặc nhiều = một trong số đó), `*` (bất kỳ), `—` (không yêu cầu), `∅` (không có). **Không** viết điều kiện bằng lời trong ô.
@@ -49,6 +57,7 @@ Sẽ thêm theo từng lát (chưa soạn): `lifecycle.md` (reply vào ticket đ
  ├─ 4. questions.md   → ask_order, fallback, answer_link (chỉ dùng trường ở 2)
  ├─ 5. channels.md    → outputs (đủ mọi trạng thái ở 1), blocks (khối phải có trong template)
  ├─ 6. examples.md    → chạy TỰ KIỂM: mỗi ví dụ ra đúng Kết quả, Luật, Hỏi
+ ├─ 7. lifecycle.md + analysis-status.md → kiểm extension ACTIVE và các bảng mở rộng
  ├─ tính fingerprint SHA-256 (tên file + nội dung chuẩn hóa LF, theo thứ tự tên)
  └─ ghi log fingerprint; check-config in ra "rules": {"fingerprint": …}
 ```
@@ -128,6 +137,8 @@ Không sửa file quy tắc trực tiếp trên máy chạy; không có thư m�
 | Câu chữ 8 khối | `channels.md` · `blocks` → `templates/github-ticket/group-replies.md` | Owner đã duyệt `ops.header`, `ask.object`, `ask.observed`, `ask.work`, `ask.problem`, `notice.hold_escalated`, `notice.comment_ambiguous`, `notice.attachment_ambiguous` ngày 2026-10-30 |
 | Bảng quyền A01–A27 | `roles.md` · `actions` | Duyệt từng ô |
 | Mục kiểm P1–P13, điều kiện dừng H1–H7 | `preflight.md` | Duyệt danh sách và người ký |
-| Reply vào ticket đã đóng | `lifecycle.md` (chưa soạn) | Chuyển bảng Vòng đời ticket thành rules |
+| Vòng đời ticket và ANALYZE/STATUS | `lifecycle.md`, `analysis-status.md` | Owner duyệt ACTIVE v2 ngày 2026-11-03; chưa cấp GO vận hành |
 
 Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, vẫn giữ bot tắt. Tiếp tục kiểm tra bước tiếp theo như đề xuất.” Việc này không cấp GO hoặc duyệt `roles.md` / `preflight.md`; phiếu P1–P13 vẫn phải hoàn tất.
+
+Owner (2026-11-03): “Duyệt lifecycle.md và analysis-status.md sang ACTIVE, tiếp tục chuẩn bị môi trường và kiểm tra preflight để test thực tế trên Telegram cho tôi.” Chỉ hai file mở rộng chuyển sang ACTIVE; giữ nguyên bảng nghiệp vụ và `roles.md` / `preflight.md` DRAFT. Chuẩn bị môi trường và phiếu preflight do operator/controller ghi riêng; approval này không ký thay P1–P13.

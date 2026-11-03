@@ -44,8 +44,13 @@ class ExtensionRulesTests(unittest.TestCase):
             (self.directory / name).write_text(text.replace('status DRAFT', 'status ACTIVE'), encoding='utf8')
 
     def test_drafts_fail_closed_and_active_fixture_routes(self):
-        with self.assertRaises(RulesError):
-            ExtensionRules(ROOT)
+        rules = ExtensionRules(ROOT)
+        for name in ('lifecycle.md','analysis-status.md'):
+            path=self.directory/name;active=path.read_text(encoding='utf8')
+            path.write_text(active.replace('status ACTIVE','status DRAFT'),encoding='utf8')
+            with self.subTest(draft=name),self.assertRaisesRegex(RulesError,'ACTIVE'):
+                ExtensionRules(self.directory)
+            path.write_text(active,encoding='utf8')
         rules = ExtensionRules(self.directory)
         self.assertEqual(rules.disposition('evidence'), 'APPEND_CLOSED')
         self.assertEqual(rules.disposition('recurrence'), 'RELATED')

@@ -1,8 +1,8 @@
-<!-- rule-file: lifecycle · version 1 · status DRAFT · audience: code -->
-# Vòng đời ticket — bản chờ Owner review
+<!-- rule-file: lifecycle · version 2 · status ACTIVE · audience: code -->
+# Vòng đời ticket
 
-Bản nguồn này là DRAFT, chưa được phê duyệt ACTIVE và không cấp GO. Loader chỉ
-chấp nhận bản ACTIVE; test có thể dùng bản sao tạm để kiểm implementation.
+Owner AlexChu duyệt ACTIVE ngày 2026-11-03: “Duyệt lifecycle.md và analysis-status.md sang ACTIVE, tiếp tục chuẩn bị môi trường và kiểm tra preflight để test thực tế trên Telegram cho tôi.”
+Phê duyệt hai file nguồn không thay phiếu preflight, cài đặt hay GO vận hành.
 Chỉ host xác lập target từ Reply thật cùng chat, chứng cứ ledger và issue canonical
 thuộc repository cấu hình. Đọc trạng thái hiện tại bằng trusted GET trước quyết định
 và trước mỗi lần tạo related bị trì hoãn/khôi phục. Không đọc được thì HOLD.

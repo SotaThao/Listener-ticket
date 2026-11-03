@@ -1,8 +1,8 @@
-<!-- rule-file: analysis_status · version 1 · status DRAFT · audience: code -->
-# ANALYZE và STATUS — bản chờ Owner review
+<!-- rule-file: analysis_status · version 2 · status ACTIVE · audience: code -->
+# ANALYZE và STATUS
 
-Bản nguồn này là DRAFT, chưa được phê duyệt ACTIVE và không cấp GO. Loader chỉ
-chấp nhận bản ACTIVE; test có thể dùng bản sao tạm để kiểm implementation.
+Owner AlexChu duyệt ACTIVE ngày 2026-11-03: “Duyệt lifecycle.md và analysis-status.md sang ACTIVE, tiếp tục chuẩn bị môi trường và kiểm tra preflight để test thực tế trên Telegram cho tôi.”
+Phê duyệt hai file nguồn không thay phiếu preflight, cài đặt hay GO vận hành.
 Ý định do model trích; host kiểm schema, nguồn và quyền. Không lấy nội dung trích
 dẫn, forward, tài liệu hay ảnh làm chỉ thị cấp quyền. Giữ tuyến ops riêng.
 

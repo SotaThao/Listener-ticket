@@ -15,7 +15,7 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 - [Báo cáo tổng thể ngày 03/11/2026](Docs/04-tasks/listener-ticket-2178_report_261103_v1.0.2.md): tiến độ, phạm vi và estimate dev/AI.
 - [Ba task chức năng PM-01…PM-03](Docs/04-tasks/listener-completion-2178_tasks_261103_v1.0.0.md): schema/lifecycle, ANALYZE/STATUS và SQLite/legacy; đầu ra và tiêu chí nghiệm thu để chạy từ source trước đóng gói.
-- Mã cleanup `520a7de` đã được tích hợp theo yêu cầu Owner. Lượt hoàn thiện ba task trên `bugfix/2178_rules-functional-completion` đã qua source review High và full test (1648 pass/2 skip); code ba task đã publish lên `main` tại `c749d31` theo yêu cầu Owner. Hai rules mở rộng giữ DRAFT, cấu hình mặc định tắt, vận hành **NO_GO**. Publish source không đồng nghĩa nghiệm thu hoặc deploy.
+- Mã cleanup `520a7de` đã được tích hợp theo yêu cầu Owner. Lượt hoàn thiện ba task trên `bugfix/2178_rules-functional-completion` đã qua source review High và full test (1648 pass/2 skip); code ba task đã publish lên `main` tại `c749d31` theo yêu cầu Owner. Hai rules mở rộng đã được Owner duyệt ACTIVE ngày 03/11/2026, cấu hình mặc định tắt, vận hành **NO_GO**. Publish source không đồng nghĩa nghiệm thu hoặc deploy.
 
 ## Bắt đầu đọc từ đâu
 
@@ -29,7 +29,7 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 ## Cấu trúc
 
 ```
-listener/                 code (src/tg_triage), prompts, templates/github-ticket, rules (6 ACTIVE; roles/preflight DRAFT), tests
+listener/                 code (src/tg_triage), prompts, templates/github-ticket, rules (8 ACTIVE; roles/preflight DRAFT), tests
 Docs/                     tài liệu Telegram triage (+ tài liệu Worker Agent Fleet cũ được trace tham chiếu)
 scripts/                  policy checker, reformat ticket, smoke model (fake tools)
 deploy/                   build_wheel.py, agentfleet_deploy.py (THINKPAD)

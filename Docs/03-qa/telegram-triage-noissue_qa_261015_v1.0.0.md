@@ -1,12 +1,19 @@
 # QA: Telegram triage THINKING
 
-**Version** v1.6.0 · **Updated** 2026-10-16 15:23 Asia/Saigon · **Owner** AlexChu · **Executor** Codex
+**Version** v1.6.1 · **Updated** 2026-11-03 Asia/Saigon · **Owner** AlexChu · **Executor** Codex
 
 ## Related Documents
 
 - [Master scope](../00-master/worker-agent-fleet-1_master_261007_v1.0.8.md)
 - [TG-01..TG-33](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md)
 - [Engineering and research](../02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md)
+
+
+## Extension activation acceptance — 2026-11-03
+
+Owner AlexChu: “Duyệt lifecycle.md và analysis-status.md sang ACTIVE, tiếp tục chuẩn bị môi trường và kiểm tra preflight để test thực tế trên Telegram cho tôi.” Chỉ `lifecycle.md` và `analysis-status.md` chuyển ACTIVE v2; bảng nghiệp vụ không đổi; `roles.md` và `preflight.md` vẫn DRAFT. Chuẩn bị môi trường/preflight và Telegram test thực tế có bằng chứng riêng, không suy ra GO từ activation hoặc offline PASS.
+
+Kiểm source: gọi actual `_load_decision_rules()` không sửa rules trong fixture, ghi fingerprint; lifecycle routes và ANALYZE/STATUS phải nạp được. Kiểm fail-closed: bản sao tạm chuyển từng extension về DRAFT phải bị từ chối; không phụ thuộc bundled source còn DRAFT. Chạy markdown/bootstrap/extensions và ANALYZE/intake regression bằng fake tools, policy checker/negative tests và compile. Test không mở config/session/DB thật hay gọi model/GitHub/Telegram. Kết quả và counts ghi trong ignored activation report sau chạy; đoạn này là acceptance, không tự tick PASS.
 
 ## Historical Harness foundation acceptance (2026-10-16)
 
@@ -222,6 +229,7 @@ UI/browser/responsive/a11y changes: none. No merge authorization inferred from a
 
 | Version | Date/time | Author | Change |
 |---|---|---|---|
+| v1.6.1 | 2026-11-03 Asia/Saigon | Codex / owner AlexChu | Owner duyệt đúng hai extension ACTIVE v2; thêm source-loader và explicit-DRAFT acceptance, tách khỏi preflight/live evidence. |
 | v1.6.0 | 2026-10-16 15:23 Asia/Saigon | Codex / owner AlexChu | Booking incident/historical pixel isolation and pre-side-effect semantic review acceptance. |
 | v1.5.0 | 2026-10-16 12:00 Asia/Saigon | Codex / owner AlexChu | Chat timing/late context/anti-spam and real-history packet pressure acceptance. |
 | v1.4.0 | 2026-10-16 11:31 Asia/Saigon | Codex / owner AlexChu | Autonomous/lifecycle business acceptance, actual-context/model regression và separate release proofs. |

@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.6 · **Updated**: 2026-11-03 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.7 · **Updated**: 2026-11-03 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -18,7 +18,7 @@ User yêu cầu tài liệu này và sau đó yêu cầu triển khai THINKING. 
 - [Overview và bàn giao](../00-master/telegram-triage-noissue_overview_261027_v1.0.0.md)
 - [Rulebook — rule chi tiết MUST/MUST NOT](telegram-triage-noissue_rulebook_261027_v1.0.0.md)
 - [Template log ticket](../templates/github-ticket/README.md)
-- [Quy tắc quyết định dạng markdown (6 ACTIVE; bot tắt) — quy tắc nạp rules vào bot và model](../../listener/rules/README.md)
+- [Quy tắc quyết định dạng markdown (6 core + 2 extension ACTIVE; chưa có live GO) — quy tắc nạp rules vào bot và model](../../listener/rules/README.md)
 - [PR #43](https://github.com/PersonalProjectJob/telegram-agent/pull/43)
 
 ## Business DOCS — Harness phân loại hội thoại và vòng đời ticket
@@ -418,13 +418,15 @@ Trạng thái closed hoặc một câu "đã xử lý" không tự chứng minh 
 
 ## Quyết định theo markdown: opt-in đã triển khai, source ACTIVE, mặc định tắt (chưa có live GO)
 
-Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Sáu file quyết định đã `ACTIVE` theo Owner ngày 2026-10-30; `roles.md` và `preflight.md` vẫn `DRAFT`. Các rule TG ở trên mô tả hành vi mặc định khi chưa bật rules. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
+Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Sáu file quyết định đã `ACTIVE` theo Owner ngày 2026-10-30; `lifecycle.md` và `analysis-status.md` ACTIVE v2 theo duyệt ngày 2026-11-03; `roles.md` và `preflight.md` vẫn `DRAFT`. Các rule TG ở trên mô tả hành vi mặc định khi chưa bật rules. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
 
-Worktree bổ sung đường opt-in `thinking.decision_rules_enabled`: mặc định tắt nên hành vi đang chạy và các đường ANALYZE/STATUS cũ không đổi. Đường mới chỉ dành cho intake theo sáu trạng thái, câu hỏi thông tin/chat là `CHAT`; cần bộ rules ACTIVE và group ops riêng. Reply ticket đã đóng được giữ để Owner xem (`closed_target_not_supported`), chưa có parity lifecycle. PDF/Office chưa đọc vẫn có thể đính kèm nếu caption tự đủ dữ kiện; yêu cầu phụ thuộc nội dung chưa đọc hoặc trích text lỗi/vượt budget được giữ lại. Tin mới ngoài batch chỉ nối pending cũ khi có Reply thật, không dựa similarity/thời gian. Owner đã duyệt tám câu chữ ops và chuyển sáu rules sang ACTIVE; bot vẫn tắt và chưa có GO. Tiến độ test giả lập và review được báo riêng, không suy từ fingerprint.
+Worktree bổ sung đường opt-in `thinking.decision_rules_enabled`: mặc định tắt nên hành vi đang chạy và các đường ANALYZE/STATUS cũ không đổi. Đường mới giữ intake theo sáu trạng thái, câu hỏi thông tin/chat là `CHAT`, cùng extension lifecycle và ANALYZE/STATUS đã duyệt; cần bộ rules ACTIVE và group ops riêng. Reply ticket đã đóng theo bảng vòng đời, chứng cứ host và reservation; không tự reopen. PDF/Office chưa đọc vẫn có thể đính kèm nếu caption tự đủ dữ kiện; yêu cầu phụ thuộc nội dung chưa đọc hoặc trích text lỗi/vượt budget được giữ lại. Tin mới ngoài batch chỉ nối pending cũ khi có Reply thật, không dựa similarity/thời gian. Owner đã duyệt tám câu chữ ops và chuyển sáu rules sang ACTIVE; bot vẫn tắt và chưa có GO. Tiến độ test giả lập và review được báo riêng, không suy từ fingerprint.
 
-Checkpoint PM01 + PM02 (#2178, 2026-11-03): source vòng đời ticket được High R5 duyệt; source ANALYZE/STATUS được High R2 duyệt trong phạm vi tested-source. ANALYZE giữ giới hạn task, một critic cho toàn partition, exact provider view/pixel/document proof, Turn budget và receipt host độc lập; grouped sources giữ reservation trước gửi và chỉ hoàn tất cùng receipt đã xác nhận. STATUS chỉ đọc ledger. Rules mở rộng vẫn DRAFT; PM03 và full integrated tiếp tục, không xác nhận chất lượng model thật, hoàn tất migration, installed/release hay live GO. Quy tắc nghiệp vụ không đổi.
+Checkpoint PM01 + PM02 (#2178, 2026-11-03): source vòng đời ticket được High R5 duyệt; source ANALYZE/STATUS được High R2 duyệt trong phạm vi tested-source. ANALYZE giữ giới hạn task, một critic cho toàn partition, exact provider view/pixel/document proof, Turn budget và receipt host độc lập; grouped sources giữ reservation trước gửi và chỉ hoàn tất cùng receipt đã xác nhận. STATUS chỉ đọc ledger. Hai rules mở rộng ACTIVE v2 theo duyệt Owner ngày 2026-11-03; PM03 High R3 đã duyệt tested-source và full source đã chạy1650 tests (1648pass/2skip), không xác nhận chất lượng model thật, hoàn tất migration, installed/release hay live GO. Quy tắc nghiệp vụ không đổi.
 
-PM03 (#2178) đang triển khai và chờ review source độc lập: inventory offline phân biệt inspection, recovery và điều kiện stage/release; lịch sử terminal/unknown và các binding/receipt phải hiện rõ, không suy ra GO từ CLEAR. Chuyển tiếp vẫn chỉ giữ phạm vi pristine đã có; source decision/reason gốc được archive trong transaction và buộc vào stage receipt, stage cũ thiếu archive giữ manual HOLD. Release chỉ arm HOLD, cần kiểm chức năng riêng. Hướng dẫn operator và các disposition ở listener/README.md; không mở rộng quyền ghi hoặc bỏ legacy khi chưa chứng minh parity.
+PM03 (#2178) đã được High R3 duyệt tested-source: inventory offline phân biệt inspection, recovery và điều kiện stage/release; lịch sử terminal/unknown và các binding/receipt phải hiện rõ, không suy ra GO từ CLEAR. Chuyển tiếp vẫn chỉ giữ phạm vi pristine đã có; source decision/reason gốc được archive trong transaction và buộc vào stage receipt, stage cũ thiếu archive giữ manual HOLD. Release chỉ arm HOLD, cần kiểm chức năng riêng. Hướng dẫn operator và các disposition ở listener/README.md; không mở rộng quyền ghi hoặc bỏ legacy khi chưa chứng minh parity.
+
+Owner AlexChu (2026-11-03): “Duyệt lifecycle.md và analysis-status.md sang ACTIVE, tiếp tục chuẩn bị môi trường và kiểm tra preflight để test thực tế trên Telegram cho tôi.” Phạm vi duyệt là hai file nguồn; không thay P1–P13, kiểm model cấu hình, bản cài, group ops hoặc Owner GO. Chưa có Telegram test thực tế trong bằng chứng activation offline này.
 
 Theo H4 của `preflight.md`, thao tác reserved/ambiguous chưa được Owner kiểm làm worker dừng và ngăn khởi động lại; các group `PLANNED` còn nguyên để kiểm tra, không tự tiếp tục hoặc reset. Nếu process chết trước khi cảnh báo được gửi thì startup chỉ có chẩn đoán dừng cho operator; không coi đó là thông báo ops đã gửi. Với rules mode, upload hoặc tạo release có outcome không rõ phải dừng ngay và giữ trạng thái ambiguous để Owner kiểm; kiểm tra checkpoint nội bộ tách biệt với reservation ghi thực tế. Chỉ khôi phục nhóm đọc hoặc xác nhận hoàn tất khi ledger chứng minh; Owner đã duyệt nội dung cảnh báo tệp ngày 2026-10-30; chưa có GO vận hành.
 
@@ -2305,7 +2307,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
   "source_kind": "reviewed_worktree_projection_after_baseline",
   "runtime_fingerprint": "ff6f84c0120474b2fa2427b2a624286f1076ba510073a31beb0f869bb0948f4e",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
-  "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. DRAFT extensions not activated; no real-model quality, installed, complete migration parity, release or live GO claim."
+  "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim."
 }
 ```
 
@@ -2315,6 +2317,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.7 | 2026-11-03 | Codex / owner AlexChu | Ghi nguyên văn duyệt ACTIVE v2 hai extension lifecycle/analysis-status; giữ bảng semantics và roles/preflight DRAFT, chưa cấp live GO. |
 | v1.16.6 | 2026-11-03 15:23 | Codex / owner AlexChu | Ghi trạng thái triển khai PM03 và hướng dẫn inventory/reconciliation offline; source review/full integrated còn chờ, không đổi business rule, DRAFT/GO hay phạm vi converter. |
 | v1.16.5 | 2026-11-03 14:49 | Codex / owner AlexChu | Đồng bộ trace60runtime đúng PM01 High R5 + PM02 High R2 approved tested-source; PM03/integrated còn tiếp tục, DRAFT không đổi, không cấp release/live GO. |
 | v1.16.4 | 2026-11-03 13:32 | Codex / owner AlexChu | Đồng bộ trace/checksum đúng checkpoint PM01 đã được High R5 duyệt về tested-source lifecycle; giữ DRAFT, không xác nhận PM02/PM03, migration hoàn tất hay release/live GO. |

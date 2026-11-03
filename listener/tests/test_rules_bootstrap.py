@@ -62,6 +62,15 @@ class RulesBootstrapTests(unittest.TestCase):
                      self.enabled.replace('decision_rules_enabled = true', 'decision_rules_enabled = 1')):
             with self.subTest(text=text), self.assertRaises(ConfigError): self.config(text)
 
+    def test_approved_source_extensions_load_without_fixture_activation(self):
+        snapshot=_load_decision_rules()
+        self.assertEqual(snapshot.extensions.disposition('recurrence'),'RELATED')
+        self.assertEqual(snapshot.extensions.route('analyze'),'ANALYZE')
+        self.assertEqual(snapshot.extensions.route('status'),'STATUS')
+        self.assertEqual(len(snapshot.fingerprint),64)
+        for name in EXTENSION_FILES:
+            self.assertIn('version 2 · status ACTIVE',(ROOT/'rules'/f'{name}.md').read_text(encoding='utf8').splitlines()[0])
+
     def test_check_config_disabled_does_not_load_rules(self):
         self.config(self.text)
         with patch('tg_triage.__main__._load_decision_rules', side_effect=AssertionError('must not load')):
