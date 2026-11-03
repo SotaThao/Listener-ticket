@@ -1,8 +1,8 @@
 # Listener-ticket — Báo cáo tiến độ và kế hoạch triển khai
 
-**Ngày báo cáo:** 03/11/2026, cập nhật 16:51 (Asia/Saigon)
+**Ngày báo cáo:** 03/11/2026, cập nhật 17:05 (Asia/Saigon)
 
-**Phiên bản:** v1.0.9
+**Phiên bản:** v1.0.10
 
 **Owner:** AlexChu
 
@@ -12,7 +12,7 @@
 
 ## 1. Trạng thái tổng thể
 
-**Cả ba task đã qua review High trong phạm vi source đã kiểm; full regression cuối đạt.** Bản mới nằm trên worktree nhánh `bugfix/2178_rules-functional-completion`, tiếp tục từ main `e2833ec`, chưa commit/push. Bot chưa chạy thật và vẫn NO_GO.
+**Cả ba task đã qua review High trong phạm vi source đã kiểm; full regression cuối đạt.** Bản mới nằm trên worktree nhánh `bugfix/2178_rules-functional-completion`, tiếp tục từ baseline `e2833ec`; code ba task đã commit và push lên `main` tại `c749d31` theo yêu cầu Owner. Bot chưa chạy thật và vẫn NO_GO.
 
 ## 2. Tiến độ thực tế khi áp dụng Agent
 
