@@ -478,7 +478,11 @@ class RulesBootstrapTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(db.read_bytes()).digest(),before)
 
     def test_wheel_includes_decision_and_draft_extension_files(self):
-        spec = importlib.util.spec_from_file_location('build_wheel', ROOT.parent / 'deploy' / 'build_wheel.py')
+        builder = ROOT.parent / 'deploy' / 'build_wheel.py'
+        if not builder.is_file():
+            # Deploy stages ship only the package tree; there verify_stage binds the built wheel instead.
+            self.skipTest('deploy/build_wheel.py absent outside a repository checkout')
+        spec = importlib.util.spec_from_file_location('build_wheel', builder)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         _, data = module.wheel_bytes(ROOT, 'listener', 'test')
