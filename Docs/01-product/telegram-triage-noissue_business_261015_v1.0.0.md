@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.7 · **Updated**: 2026-11-03 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.8 · **Updated**: 2026-11-03 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -2255,7 +2255,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
     "listener/src/tg_triage/rules_analysis.py": "8d1ed397042fa99bf8fc50f4841a5256c1596cfa3a15888ea4228538e2f42d7e",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
-    "listener/src/tg_triage/rules_extraction.py": "d6df15e92891a34aab383641ee69b6526bc41773148412176020fb67b0943249",
+    "listener/src/tg_triage/rules_extraction.py": "242f8e3a9afb094d4a95ce61415d54bd3569f4b03ec1dba0f24510552470d87e",
     "listener/src/tg_triage/rules_intake.py": "c297dfbe9ec55d67f1d71f9a9b370399115f0fcef7839968cd3348cdfae34180",
     "listener/src/tg_triage/rules_pending_store.py": "93c0a23dba5ef22888ac7c3dcea1993d611ae8d84268f0710d58dc3d6a85cf2c",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
@@ -2305,9 +2305,9 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "ff6f84c0120474b2fa2427b2a624286f1076ba510073a31beb0f869bb0948f4e",
+  "runtime_fingerprint": "27a2cedc3e282c1c4a70149312b9dcd72b012f70edbaf10b93686fc29496f3cc",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
-  "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim."
+  "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates."
 }
 ```
 
@@ -2317,6 +2317,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.8 | 2026-11-03 18:33 | Codex / owner AlexChu | Đồng bộ reviewed extractor v2: thu gọn ví dụ trường tùy chọn, cân đối hướng dẫn trích và phân biệt câu hỏi thông tin với yêu cầu làm việc; giữ rules/nguồn/schema/8KB/2call40s. Model corpus giả 24/24 đạt kết quả; không suy thành chất lượng dữ kiện thô 100%, installed hoặc live GO. |
 | v1.16.7 | 2026-11-03 | Codex / owner AlexChu | Ghi nguyên văn duyệt ACTIVE v2 hai extension lifecycle/analysis-status; giữ bảng semantics và roles/preflight DRAFT, chưa cấp live GO. |
 | v1.16.6 | 2026-11-03 15:23 | Codex / owner AlexChu | Ghi trạng thái triển khai PM03 và hướng dẫn inventory/reconciliation offline; source review/full integrated còn chờ, không đổi business rule, DRAFT/GO hay phạm vi converter. |
 | v1.16.5 | 2026-11-03 14:49 | Codex / owner AlexChu | Đồng bộ trace60runtime đúng PM01 High R5 + PM02 High R2 approved tested-source; PM03/integrated còn tiếp tục, DRAFT không đổi, không cấp release/live GO. |
