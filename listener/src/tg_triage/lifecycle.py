@@ -72,4 +72,20 @@ def grounded_recurrence(value, sources, incoming):
         ids=lifecycle[field]; quote=lifecycle[quote_field].strip()
         if not ids or not quote or any(i not in lookup or quote not in lookup[i].text for i in ids): return False
     candidate={'lifecycle':lifecycle,'case_analysis':{'key_message_ids':lifecycle['recurrence_source_ids']}}
-    return closed_decision(candidate,sources,incoming[-1],{m.message_id for m in incoming})=='recurrence'
+    return closed_decision(candidate,sources+incoming[:-1],incoming[-1],{m.message_id for m in incoming})=='recurrence'
+
+
+def partition_source_roles(value,reply_ids):
+    """Assign only cited roles or actual in-group Reply descendants, never adjacency."""
+    value=value or {}
+    recurrence=set(value.get('recurrence_source_ids',()))
+    working=set(value.get('knownworking_source_ids',()))-recurrence
+    roles={mid:'recurrence' if mid in recurrence else 'working' for mid in reply_ids if mid in working|recurrence}
+    if not working and not recurrence and len(reply_ids)==1:
+        roles[next(iter(reply_ids))]='recurrence'  # An exact B may resolve one source's timing.
+    for _ in reply_ids:
+        additions={mid:roles[parent] for mid,parent in reply_ids.items() if mid not in roles and parent in roles}
+        if not additions: break
+        roles.update(additions)
+    return ({mid for mid,role in roles.items() if role=='working'},
+            {mid for mid,role in roles.items() if role=='recurrence'},set(reply_ids)-set(roles))

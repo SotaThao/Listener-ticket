@@ -36,8 +36,8 @@ def _reject_triggers(connection):
             raise RulesHalt('offline copy has unsupported triggers; manual schema reconciliation required')
 
 
-def _stage_receipt(evidence_sha,attestation):
-    payload=json.dumps([evidence_sha,attestation],ensure_ascii=False,separators=(',',':')).encode('utf-8')
+def _stage_receipt(evidence_sha,attestation,original_state):
+    payload=json.dumps(['legacy.stage/v2',evidence_sha,attestation,original_state],ensure_ascii=False,separators=(',',':')).encode('utf-8')
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -154,6 +154,10 @@ def transition_pristine(path, manifest):
         if connection.execute('SELECT count(*) FROM messages').fetchone()[0]>1 and manifest.get('reviewed_context') is not True:
             raise RulesHalt('operator must review retained context before staging')
         _check_prewrite_attachments(connection,tables,manifest,rows[0][6],rows[0][7])
+        original=connection.execute('SELECT decision,reason FROM messages WHERE chat_id=? AND message_id=?',source_key).fetchone()
+        if original is None or not isinstance(original[0],str) or original[1] is not None and not isinstance(original[1],str):
+            raise RulesHalt('original source state cannot be archived')
+        original_state=json.dumps(dict(version=1,decision=original[0],reason=original[1]),ensure_ascii=False,sort_keys=True,separators=(',',':'))
         evidence_sha=_source_evidence(connection,tables,source_key)
         # No terminal message may hide a write reservation either.
         if connection.execute('SELECT 1 FROM messages WHERE github_called_at IS NOT NULL OR issue_number IS NOT NULL OR issue_url IS NOT NULL LIMIT 1').fetchone():
@@ -167,8 +171,8 @@ def transition_pristine(path, manifest):
             PRIMARY KEY(topic_id,ref),UNIQUE(topic_id,chat_id,message_id))''')
         connection.execute('''CREATE TABLE IF NOT EXISTS rules_legacy_transitions (
             chat_id INTEGER NOT NULL,message_id INTEGER NOT NULL,source_sha256 TEXT NOT NULL,
-            attestation TEXT NOT NULL,source_evidence_sha256 TEXT NOT NULL,PRIMARY KEY(chat_id,message_id))''')
-        if 'source_evidence_sha256' not in {r[1] for r in connection.execute('PRAGMA table_info(rules_legacy_transitions)')}:
+            attestation TEXT NOT NULL,source_evidence_sha256 TEXT NOT NULL,original_state TEXT NOT NULL,PRIMARY KEY(chat_id,message_id))''')
+        if not {'source_evidence_sha256','original_state'} <= {r[1] for r in connection.execute('PRAGMA table_info(rules_legacy_transitions)')}:
             raise RulesHalt('legacy transition ledger lacks source evidence')
         topic=f"{manifest['chat_id']}:{manifest['message_id']}"
         if connection.execute("INSERT INTO rules_topics(topic_id,source_chat_id,last_at,status,phase) VALUES(?,?,?,'OPEN','LEGACY_REVIEW')",
@@ -180,15 +184,15 @@ def transition_pristine(path, manifest):
                               (manifest['chat_id'],manifest['message_id'])).rowcount!=1:
             raise RulesHalt('staging message was not persisted')
         audit=json.dumps(manifest,ensure_ascii=False,sort_keys=True)
-        if connection.execute('INSERT INTO rules_legacy_transitions VALUES(?,?,?,?,?)',
-            (manifest['chat_id'],manifest['message_id'],manifest['sha256'],audit,evidence_sha)).rowcount!=1:
+        if connection.execute('INSERT INTO rules_legacy_transitions VALUES(?,?,?,?,?,?)',
+            (manifest['chat_id'],manifest['message_id'],manifest['sha256'],audit,evidence_sha,original_state)).rowcount!=1:
             raise RulesHalt('staging attestation was not persisted')
         stored=connection.execute('''SELECT t.source_chat_id,t.status,t.phase,s.ref,s.chat_id,s.message_id,m.decision,m.reason,
-            l.source_sha256,l.attestation,l.source_evidence_sha256 FROM rules_topics t JOIN rules_sources s ON s.topic_id=t.topic_id
+            l.source_sha256,l.attestation,l.source_evidence_sha256,l.original_state FROM rules_topics t JOIN rules_sources s ON s.topic_id=t.topic_id
             JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id JOIN rules_legacy_transitions l
             ON l.chat_id=m.chat_id AND l.message_id=m.message_id WHERE t.topic_id=?''',(topic,)).fetchone()
         expected=(manifest['chat_id'],'OPEN','LEGACY_REVIEW',1,manifest['chat_id'],manifest['message_id'],
-                  'pending_review','legacy_reconciled_pending',manifest['sha256'],audit,evidence_sha)
+                  'pending_review','legacy_reconciled_pending',manifest['sha256'],audit,evidence_sha,original_state)
         staged_topic=connection.execute('SELECT source_chat_id,last_at,status,attempts,attempt_reserved,phase,asked,fallback_asked FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
         if (stored!=expected or staged_topic!=(manifest['chat_id'],rows[0][8],'OPEN',0,0,'LEGACY_REVIEW','{}',0) or
                 _source_evidence(connection,tables,source_key)!=evidence_sha or
@@ -197,7 +201,7 @@ def transition_pristine(path, manifest):
                 connection.execute('SELECT count(*) FROM rules_legacy_transitions').fetchone()[0]!=1):
             raise RulesHalt('staging evidence was not persisted')
         connection.execute('COMMIT')
-        return {'transitioned':True,'topic_id':topic,'stage_receipt_sha256':_stage_receipt(evidence_sha,audit),'external_effects_attempted':False}
+        return {'transitioned':True,'outcome':'STAGED_REVIEW_ONLY','functional_verified':False,'stage_receipt_version':'legacy.stage/v2','topic_id':topic,'stage_receipt_sha256':_stage_receipt(evidence_sha,audit,original_state),'external_effects_attempted':False}
     except (sqlite3.Error,OSError) as error:
         raise RulesHalt('offline transition failed; no replay authorized') from error
     finally:
@@ -260,12 +264,19 @@ def release_pristine(path, manifest):
         received_at=connection.execute('SELECT received_at FROM messages WHERE chat_id=? AND message_id=?',source_key).fetchone()
         if not received_at or initial_topic!=(manifest['chat_id'],received_at[0],'OPEN',0,0,'LEGACY_REVIEW','{}',0):
             raise RulesHalt('staged topic state changed; release refused')
+        if 'original_state' not in {r[1] for r in connection.execute('PRAGMA table_info(rules_legacy_transitions)')}:
+            raise RulesHalt('original source archive missing; manual reconciliation required')
         try:
-            stored=connection.execute('SELECT attestation,source_evidence_sha256,source_sha256 FROM rules_legacy_transitions WHERE chat_id=? AND message_id=?',(manifest['chat_id'],manifest['message_id'])).fetchone()
+            stored=connection.execute('SELECT attestation,source_evidence_sha256,source_sha256,original_state FROM rules_legacy_transitions WHERE chat_id=? AND message_id=?',(manifest['chat_id'],manifest['message_id'])).fetchone()
             attestation=json.loads(stored[0])
+            archive=json.loads(stored[3])
+            if (not isinstance(archive,dict) or set(archive)!={'version','decision','reason'} or archive['version']!=1
+                    or archive['decision']!=attestation.get('decision')
+                    or archive['reason'] is not None and not isinstance(archive['reason'],str)):
+                raise RulesHalt('original source archive invalid; manual reconciliation required')
         except (TypeError,ValueError,IndexError):
             raise RulesHalt('staged attestation unavailable') from None
-        if not isinstance(attestation,dict) or attestation.get('sha256')!=stored[2] or _stage_receipt(stored[1],stored[0])!=manifest['stage_receipt_sha256']:
+        if not isinstance(attestation,dict) or attestation.get('sha256')!=stored[2] or _stage_receipt(stored[1],stored[0],stored[3])!=manifest['stage_receipt_sha256']:
             raise RulesHalt('external staged evidence receipt does not match')
         attachment_flags=connection.execute('SELECT has_image,has_document FROM messages WHERE chat_id=? AND message_id=?',(manifest['chat_id'],manifest['message_id'])).fetchone()
         _check_prewrite_attachments(connection,tables,attestation,*attachment_flags)
@@ -288,7 +299,7 @@ def release_pristine(path, manifest):
         recorded=connection.execute('SELECT attestation FROM rules_legacy_releases WHERE chat_id=? AND message_id=?',(manifest['chat_id'],manifest['message_id'])).fetchone()
         final_source=connection.execute('SELECT decision,reason FROM messages WHERE chat_id=? AND message_id=?',source_key).fetchone()
         final_binding=connection.execute('SELECT topic_id,ref,chat_id,message_id FROM rules_sources').fetchall()
-        final_transition=connection.execute('SELECT attestation,source_evidence_sha256,source_sha256 FROM rules_legacy_transitions WHERE chat_id=? AND message_id=?',source_key).fetchone()
+        final_transition=connection.execute('SELECT attestation,source_evidence_sha256,source_sha256,original_state FROM rules_legacy_transitions WHERE chat_id=? AND message_id=?',source_key).fetchone()
         if (state!=(manifest['chat_id'],now,'OPEN',0,0,'HOLD','{}',0) or recorded!=(audit,) or
                 final_source!=('pending_review','legacy_reconciled_pending') or
                 final_binding!=[(topic,1,*source_key)] or final_transition!=stored or
@@ -298,7 +309,7 @@ def release_pristine(path, manifest):
                 _source_evidence(connection,tables,source_key)!=stored[1]):
             raise RulesHalt('release evidence was not persisted')
         connection.execute('COMMIT')
-        return {'released':True,'topic_id':topic,'external_effects_attempted':False}
+        return {'released':True,'outcome':'ARMED_HOLD_ONLY','functional_verified':False,'topic_id':topic,'external_effects_attempted':False}
     except (sqlite3.Error,OSError) as error:
         raise RulesHalt('offline release failed; no replay authorized') from error
     finally:

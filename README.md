@@ -14,8 +14,8 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 ## Tiến độ và công việc để PM kiểm soát
 
 - [Báo cáo tổng thể ngày 03/11/2026](Docs/04-tasks/listener-ticket-2178_report_261103_v1.0.2.md): tiến độ, phạm vi và estimate dev/AI.
-- [Bảng công việc PM-01…PM-13](Docs/04-tasks/listener-completion-2178_tasks_261103_v1.0.0.md): đầu ra, tiêu chí nghiệm thu, phụ thuộc, phân vai và bằng chứng phải nộp.
-- Mã cleanup `520a7de` đã được tích hợp theo yêu cầu Owner; lifecycle/ANALYZE/SQLite vẫn còn việc mở. Hai rules mở rộng giữ DRAFT, cấu hình mặc định tắt, vận hành **NO_GO**. Publish source không đồng nghĩa nghiệm thu hoặc deploy.
+- [Ba task chức năng PM-01…PM-03](Docs/04-tasks/listener-completion-2178_tasks_261103_v1.0.0.md): schema/lifecycle, ANALYZE/STATUS và SQLite/legacy; đầu ra và tiêu chí nghiệm thu để chạy từ source trước đóng gói.
+- Mã cleanup `520a7de` đã được tích hợp theo yêu cầu Owner. Lượt hoàn thiện ba task trên `bugfix/2178_rules-functional-completion` đã qua source review High và full test (1648 pass/2 skip); thay đổi mới chưa commit/push. Hai rules mở rộng giữ DRAFT, cấu hình mặc định tắt, vận hành **NO_GO**. Publish source không đồng nghĩa nghiệm thu hoặc deploy.
 
 ## Bắt đầu đọc từ đâu
 

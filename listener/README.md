@@ -387,3 +387,42 @@ Fresh ingress validation failures expose bounded host metadata only: fixed error
 
 
 Documentation change v1.8.0 — 2026-10-21 10:00 Asia/Saigon: align operator guidance with TG-14 HTML/long-document processing, wire accounting and CONTINUE proofs. Deployment and live success require separate evidence.
+
+## Offline legacy inventory and the narrow transition path
+
+These commands inspect an **isolated consistent offline copy**, never the live database. Retain the untouched original and any external operation/notice evidence. Obtain the copy through an authorized offline procedure; do not hide or discard WAL/SHM/journal files. The inspector refuses sidecars, links, a changing copy, unsupported schemas and incomplete validation. It opens only its private immutable clone with one read transaction; inventory, attachment evidence and recovery assessment share that snapshot. It never initializes `Store` or upgrades the supplied schema.
+
+From `listener/` with `PYTHONPATH=src`:
+
+```powershell
+python -m tg_triage legacy-preflight --db <offline-copy> --attachment-evidence
+python -m tg_triage legacy-transition --db <offline-copy> --manifest <stage.json>
+python -m tg_triage legacy-release --db <offline-copy> --manifest <release.json>
+```
+
+Legacy commands have no `--repo` argument. `legacy-preflight` exit0 means inspection completed; **recovery CLEAR is not conversion eligibility or GO**. Read `inspection`, `recovery_gate`, `conversion`, `binding_codes` and the fixed `operator_actions` separately. Absent ledgers have `ABSENT_UNKNOWN` and null totals, not zero. Missing columns, invalid states/IDs, malformed JSON, or truncated validation cannot authorize conversion. Known table names are fixed category identifiers; unknown nonempty tables are counted without printing their names. Reports exclude message bodies, original reasons, paths, asset names and receipt payloads.
+
+Inspection is bounded: at most1,000 validated JSON rows per ledger,256KiB per JSON field, depth32/10,000 nodes per JSON value and8MiB aggregate validation per ledger; private snapshot input is limited to512MiB, copy/hash passes and SQLite work have bounded deadlines. Exceeding a bound means UNKNOWN/HOLD. Keep the full original; do not delete or crop history to make a report green.
+
+| Observed history | Disposition and operator evidence |
+|---|---|
+| One pristine unlinked queued/pending/pending_review target | A stage candidate still requires explicit attestation and transactional revalidation. Review exact chat/message, no previous POST/issue/Reply/case/group binding, and the complete offline inventory. |
+| Up to1,000 additional inert unlinked text CHAT/noise messages | Existing narrow exception only: `reviewed_context: true`; verify retained fields before/after. More rows or linked/media/non-inert history require separate reconciliation. |
+| Exactly one matching durable prewrite_error attachment | May stage only with exact attested attachment ID/chat/message. Release remains HOLD because immutable attachment bytes are not proven. Missing-chat, uploaded, historical error, uploading or unknown outcomes do not gain replay permission. |
+| Linked issues; completed notices/roots/projections/accounting; advanced hydration | Retain legacy. Privately trace source → partition/root → operation → configured repo issue/readback → notice; terminal history and zero pending counts do not make the pristine converter applicable. |
+| Reserved/ambiguous/failed/unknown external outcome | Preserve reservations. Reconcile actual repository/asset/notice outcome and record the evidence; never reset SQL state, regenerate decisions or retry a POST/send to discover what happened. |
+| Orphan/mismatched source, deferred/inflight/batch, lifecycle or receipt/member binding | HOLD; compare exact chat/source/Reply/topic/partition/notice identities and saved plan/receipt hashes on the copy. A binding row without its real owner cannot exempt legacy pending work. |
+| Missing/old schema, invalid private status, malformed/oversized JSON, unknown table or incomplete snapshot | UNKNOWN/HOLD; obtain complete supported history/schema and a stable offline copy. Do not infer no effects from absent evidence. |
+| Old staged target without an original-state archive | Manual HOLD. Retrieve its original decision/reason from the untouched pre-stage copy or trusted backup. Never fabricate those fields from the overwritten staged row or manufacture a receipt. |
+| Released `HOLD` topic | Armed for normal rules processing only; independently verify the actual functional result, intended effects, restart and duplicate handling. Release alone is not migration completion. |
+
+The stage manifest retains the existing fields: `offline_copy: true`, current copy `sha256`, integer `chat_id`/positive `message_id`, exact original `decision`, `operator` and `reason`; include `reviewed_context: true` only after reviewing retained history, and `prewrite_attachment_ids` only for the existing exact prewrite exception. Staging atomically archives the exact original target decision/reason (including null), source evidence and attestation, binds that archive into the returned `stage_receipt_sha256`, and leaves the topic at `LEGACY_REVIEW`. The archive stays private inside the copy; the command does not print it.
+
+PowerShell hashes must be lowercase because the manifest compares the exact SHA256 text. Set the path to your offline copy and run this before staging, then run it again **after staging** for the release manifest:
+
+```powershell
+$offlineCopy = 'C:\offline\triage-copy.sqlite3'
+(Get-FileHash -LiteralPath $offlineCopy -Algorithm SHA256).Hash.ToLowerInvariant()
+```
+
+Save the external stage receipt separately. The release manifest uses a **fresh post-stage database SHA256**, the same chat/message identity, `offline_copy: true`, `release_for_rules: true`, `operator`, `reason`, saved `stage_receipt_sha256`, and reviewed-context attestation when needed. Read back the copy after each mutation. Source/context/archive/attestation/binding or receipt changes refuse release and roll back. Old stage evidence without the archive is not automatically upgraded. All other nonempty histories remain outside this converter; retain the legacy route until functional and recovery parity is demonstrated.

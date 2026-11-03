@@ -1,171 +1,86 @@
-# Listener-ticket — Bảng kiểm soát đầu ra dành cho PM
+# Listener-ticket — Ba task chức năng trước đóng gói
 
-**Version:** v1.0.0 · **Cập nhật:** 03/11/2026 09:12 (Asia/Saigon)
+**Version:** v1.0.11 · **Cập nhật:** 03/11/2026 16:51 (Asia/Saigon)
 
-**Owner:** AlexChu · **Người lập:** Codex
+**Owner:** AlexChu · **Trạng thái:** Ba task qua review source và full regression; chờ PM nghiệm thu.
 
-**Trạng thái:** Kế hoạch thực hiện; các việc bên dưới chưa nghiệm thu.
+## 1. Mục tiêu đợt này
 
-**Baseline:** commit cleanup `520a7de`; Owner yêu cầu đưa mã hiện có lên main. Việc publish source không phải phê duyệt vận hành.
+Hoàn thiện schema/lifecycle, ANALYZE/STATUS và SQLite/legacy để chạy kiểm chức năng từ source trước khi đóng gói. Baseline trên main: `e2833ec`. CI, đóng gói/review bản cài và setup vận hành không thuộc plan đợt này; các ticket setup đã có giữ nguyên.
 
-## 1. Mốc hiện tại và phạm vi
+Đã có code một phần và test offline xanh; lượt sửa các khoảng trống bắt đầu ngày 03/11/2026 trong worktree `Listener-ticket-functional-2178`, branch `bugfix/2178_rules-functional-completion`. Publish main không đồng nghĩa ba task đã hoàn thành. Rules mở rộng vẫn DRAFT; khi chạy thật cần đúng cấu hình, môi trường kiểm và rules được duyệt.
 
-- Đã có code và kiểm thử offline cho intake, rules cơ bản, pending, reservation, STATUS và một phần lifecycle/ANALYZE/chuyển tiếp SQLite.
-- Đã xác nhận: schema chưa cho phép `reused_success`; tái diễn trực tiếp còn HOLD; ANALYZE còn phụ thuộc trích nguyên văn text; chuyển tiếp lịch sử SQLite chỉ hỗ trợ phạm vi hẹp.
-- Hai rules mở rộng vẫn DRAFT; bot/config mặc định giữ tắt; trạng thái vận hành **NO_GO**.
-- PM dùng bảng này để kiểm output và phụ thuộc. Số lượng test xanh hoặc source đã lên main không tự đóng các việc còn thiếu.
-- Các mã PM-xx là mã kiểm soát nội bộ, không phải số issue GitHub mới. Hiện chưa tạo ticket cho phần hoàn thiện offline. Tracking gốc: [Backlog #2178](https://github.com/vlink-group/vlink-nexora/issues/2178); gói setup hiện hữu: [Task #2488](https://github.com/vlink-group/vlink-nexora/issues/2488).
+### Hiểu nhanh ba task
 
-## 2. Phân vai và định nghĩa trạng thái
+1. **Schema và lifecycle:** thống nhất khuôn dữ liệu model trả cho bot và quy tắc bổ sung/hỏi/tạo lần tái diễn theo vòng đời ticket.
+2. **ANALYZE / STATUS:** phân tích nguồn thành đề xuất việc cần làm và tra trạng thái ghi nhận/xử lý trong sổ bot, đúng yêu cầu và ticket.
+3. **SQLite và legacy:** chuyển tiếp an toàn dữ liệu cục bộ và trạng thái từ luồng cũ sang rules mới, tránh mất dữ liệu hoặc ghi trùng.
 
-| Vai | Trách nhiệm |
-|---|---|
-| Dev / executor | Triển khai, tự kiểm, nộp đầu ra và khai rõ giới hạn; Codex gpt-6.1-sol / Medium theo lựa chọn Owner |
-| Verifier | Chạy kiểm độc lập trên đúng source đã đóng băng, đối chiếu output và phạm vi |
-| Reviewer | Phiên độc lập, High; đối chiếu nghiệp vụ, quyền và tính toàn vẹn dữ liệu; không sửa source để làm xanh |
-| QA / Operator | Kiểm model, bản cài và luồng thật trên môi trường được cho phép; người vận hành máy đích chưa được chỉ định |
-| PM | Ghi người nhận việc, lịch dự kiến/thực tế, kiểm đủ output, theo dõi blocker; không tự ký thay Owner về rules/GO |
-| Owner | Duyệt rules, cấp quyền môi trường thật và quyết định GO |
+[Định nghĩa từng thuật ngữ và phạm vi thực hiện](listener-ticket-2178_report_261103_v1.0.2.md#định-nghĩa-ba-nhóm-việc).
 
-Trạng thái dùng: **Todo → Doing → Review → Accepted**. **Blocked** phải ghi nguyên nhân và điều kiện gỡ. `Accepted` chỉ khi đủ tiêu chí và bên nhận nghiệm thu ghi ngày/bằng chứng. Bảng hiện tại không có việc nào được đánh Accepted.
+[Nơi lưu rules/code/dữ liệu, cách hoạt động và chỉnh thủ công](listener-ticket-2178_report_261103_v1.0.2.md#8-tra-cứu-lưu-trữ-hoạt-động-và-chỉnh-thủ-công).
 
-## 3. Bảng công việc và estimate
+## 2. Bảng PM kiểm soát
 
-| ID | Công việc | Người thực hiện / bên nhận | Phụ thuộc | Dev tham chiếu | Với AI | Trạng thái |
-|---|---|---|---|---:|---:|---|
-| PM-01 | Đồng bộ schema trích dữ kiện | Dev / Reviewer | Baseline | 2–3h | 0,5–0,75h | Todo |
-| PM-02 | Hoàn thiện lifecycle ticket đóng | Dev / Reviewer | PM-01 | 4–7h | 0,5–1,25h | Todo |
-| PM-03 | Hoàn thiện ANALYZE và hồi quy STATUS | Dev / Reviewer | PM-01 | 6–10h | 1,5–3h | Todo |
-| PM-04 | SQLite, ma trận tương thích và cutover legacy | Dev / Reviewer | PM-02, PM-03 | 6–10h | 1,5–3h | Todo |
-| PM-05 | Bổ sung CI | Dev / Verifier | Baseline; chốt output cuối sau PM-04 | 2–4h | 0,5–1h | Todo |
-| PM-06 | Đóng băng, wheel, regression, review và hồ sơ duyệt | Dev + Verifier + Reviewer / PM | PM-01…PM-05 | 4–6h | 1,5–3h | Todo |
-| PM-07 | Duyệt rules mở rộng | Owner / PM ghi quyết định | PM-06 | Không ước tính giờ duyệt | Không ước tính | Blocked: chờ hồ sơ PM-06 |
-| PM-08 | Release máy đích, config và rollback | Dev + Operator / QA | PM-06, PM-07; có máy và quyền | 4h | 0,4–0,8h | Blocked: chờ điều kiện |
-| PM-09 | Model thật và bộ ví dụ | QA + Dev / Owner | PM-08; model/config được chọn khi setup | 4h | 0,4–0,8h | Blocked: chờ điều kiện |
-| PM-10 | Bản cài, service, lock và phục hồi | Operator + QA / PM | PM-08; được phép chạy service test | 4h | 0,4–0,8h | Blocked: chờ điều kiện |
-| PM-11 | Telegram → GitHub và hai group | QA + Operator / Owner | PM-09, PM-10; được phép gửi dữ liệu kiểm | 4h | 0,4–0,8h | Blocked: chờ điều kiện |
-| PM-12 | Triage, hồi quy và bàn giao preflight | Dev + QA / Owner | PM-08…PM-11 | 4h | 0,4–0,8h | Blocked: chờ kết quả |
-| PM-13 | Quyết định vận hành GO/NO_GO | Owner / PM ghi quyết định | PM-12, đủ P1–P13 | Không ước tính giờ duyệt | Không ước tính | Blocked: chưa đủ bằng chứng |
-| **Tổng PM-01…PM-06** | **Hoàn thiện offline** | | | **24–40h** | **6–12h** | |
-| **Tổng PM-08…PM-12** | **Setup hiện hữu** | | | **20h** | **2–4h** | |
-| **Tổng giờ thực hiện** | | | | **44–60h** | **8–16h** | |
+| ID | Task | Output phải nộp | Tiêu chí nhận | Phụ thuộc | Agent dự kiến | Trạng thái |
+|---|---|---|---|---|---:|---|
+| PM-01 | Schema và lifecycle | Contract trích dữ kiện thống nhất; bảng kết quả ticket đóng, bằng chứng cũ/tái diễn, success đã dùng và episode kế tiếp | Schema/provider/parser khớp; hành động đúng Business DOCS; duplicate/restart/ghi chưa rõ kết quả không gây ticket trùng | Baseline | 1–2h | Review — High source APPROVED |
+| PM-02 | ANALYZE / STATUS | Kết quả text, ảnh có pixel thật, tài liệu và Reply context; trạng thái ticket đúng nguồn | Task không đòi nguồn chứa nguyên văn đáp án; đầu ra đủ và có giới hạn; STATUS đúng repo/partition; không tự cấp quyền ghi | PM-01 | 1,5–3h | Review — High source APPROVED |
+| PM-03 | SQLite và legacy | Ma trận chuyển tiếp lịch sử; thử trên bản sao; kết quả chạy các luồng từ source và đề xuất giữ/gỡ legacy | Có kiểm digest/receipt, pending/notice/attachment/reservation; từ chối có rollback; không mất dữ liệu hoặc replay ghi chưa rõ kết quả; mọi giới hạn được ghi rõ | PM-01, PM-02 | 1,5–3h | Review — High source APPROVED R3 |
+| **Tổng** | **Ba task chức năng** | | | | **4–8h** | |
 
-Estimate AI là dự báo chưa đo trên toàn bộ phạm vi; không phải cam kết chất lượng hoặc thời gian. Hai cột là hai cách ước tính cho cùng công việc, không cộng với nhau. Các lát AI nhỏ dùng phân bổ sơ bộ để PM theo dõi, sẽ cập nhật sau vòng thực hiện đầu tiên. Không đổi estimate 20h trên ticket setup hiện hữu trong lần publish này.
+Estimate gồm triển khai, chạy kiểm và review từng task; là dự báo ban đầu, kết quả đo thực tế ghi riêng bên dưới. Không cộng với giờ công tham chiếu hoặc tự đổi Effort trên board. Các mã PM là mã nội bộ; phiên bản này gộp schema/lifecycle thành PM-01, ANALYZE/STATUS thành PM-02, SQLite/legacy thành PM-03; bảng 13 mã cũ chỉ còn giá trị lịch sử và không phải bộ việc đang giao.
 
-Lịch dự kiến với AI: **2–3 ngày khi đủ đầu vào**, chưa gắn ngày bắt đầu/kết thúc cố định. Ngày 1 ưu tiên PM-01…PM-03; ngày 2 PM-04…PM-06; ngày 3 dành cho các việc setup đã đủ điều kiện. Đây là thứ tự dự kiến; thiếu quyền/môi trường hoặc review trả finding thì điều chỉnh lịch, không rút bước kiểm.
+**Cập nhật thực tế 16:51:** Cả ba task High **APPROVED trong phạm vi source đã kiểm**. Full R3 chạy 1.650 test: **1.648 pass, 2 skip**, exit 0 / 537,600 giây; 130 file không đổi khi chạy. PM-01 ~114 phút, PM-02 ~74 phút, PM-03 ~121 phút tới kiểm tổng cuối; lượt triển khai 11:36–16:50 ~5h14 elapsed, không cộng giờ Agent song song. Legacy vẫn giữ cho lịch sử chưa hỗ trợ. Chưa có PM ký nhận nên 0/3 Accepted; real-model/live quality chưa xác minh.
 
-## 4. Đầu ra và tiêu chí nghiệm thu từng việc
+## 3. Cách thực hiện và bằng chứng
 
-### PM-01 — Schema
+[Plan triển khai chi tiết ba task](listener-completion-2178/plan.md): bước sửa, mapping code, checklist, ca kiểm và mốc nhận từng output. Owner đã yêu cầu “bắt đầu tiến hành”; ba task qua review source và kiểm tổng, chưa có PM ký nghiệm thu.
 
-**Đầu ra:** bản contract thống nhất và regression đi qua schema thực sự gửi provider.
+- **Executor:** Codex gpt-6.1-sol / Medium, triển khai một stream tuần tự vì các task dùng chung contract và dữ liệu.
+- **Verifier/reviewer:** phiên độc lập / High; chạy kiểm và đối chiếu nghiệp vụ. Finding được trả về executor sửa.
+- **PM:** nhận từng task khi đủ source SHA, output, command/exit code, PASS/FAIL/SKIP và reviewer verdict; ghi người nhận/ngày nhận và blocker.
+- **Owner:** duyệt thay đổi rules và việc chạy trên môi trường thật khi cần. Không tự đổi DRAFT để vượt lỗi startup.
 
-**Nghiệm thu:** xác định rõ `reused_success` là dữ kiện model hay kết luận host; producer/parser/consumer khớp nhau; test không trả thẳng enum bị schema cấm; không làm đổi contract legacy ngoài phạm vi.
+Task PM-01 phải kiểm schema thật gửi provider, tránh model giả trả thẳng enum bị cấm. PM-02 phải tách kiểm contract giả lập với chất lượng model thật. PM-03 phải phân biệt chuyển được, cần đối soát và phải chặn; chặn an toàn không đồng nghĩa đã chuyển thành công. Chỉ gỡ legacy khi đã chứng minh đủ nghiệp vụ và đường xử lý dữ liệu cũ.
 
-**Bằng chứng:** command, exit code, trường schema quan sát được, kết quả regression, source SHA và reviewer verdict.
+Đã nộp kết quả chạy chức năng từ source cho cả ba luồng và full regression cuối. Nếu thiếu model/môi trường thì ghi rõ ca chưa chạy; không coi test offline là E2E Telegram/model/GitHub thật. Chưa yêu cầu build wheel, installer, CI hoặc setup service trong đợt này.
 
-### PM-02 — Lifecycle
-
-**Đầu ra:** bảng tình huống open/closed, bằng chứng cũ, tái diễn mới, success đã dùng, episode kế tiếp và thiếu thông tin; implementation tương ứng.
-
-**Nghiệm thu:** bằng chứng và chronology hợp lệ được xử lý theo Business DOCS; không tự reopen; không dùng lại success cũ để tạo trùng; duplicate/restart/POST không rõ kết quả không phát lại thao tác ghi.
-
-**Bằng chứng:** kết quả từng tình huống, định danh nguồn/parent/episode đã che dữ liệu riêng, số lần gọi ghi và review độc lập.
-
-### PM-03 — ANALYZE / STATUS
-
-**Đầu ra:** bảng kết quả cho text, Reply context, ảnh có pixel thật, tài liệu và STATUS theo đúng partition.
-
-**Nghiệm thu:** task đầy đủ, đúng giới hạn, không cần nguồn chứa nguyên văn đáp án; không bịa nguyên nhân hoặc cấp quyền ghi issue; STATUS phân biệt đã xác nhận và chưa rõ kết quả, đúng repo/Reply; không gửi notice trùng.
-
-**Bằng chứng:** regression và smoke contract; chất lượng ảnh/ngữ nghĩa từ model thật để PM-09 kiểm riêng, không ghi PASS từ fake provider thay cho model thật.
-
-### PM-04 — SQLite và legacy
-
-**Đầu ra:** ma trận từng loại dữ liệu cũ với quyết định: chuyển tự động có chứng cứ / đối soát thủ công / chặn cutover; thử nghiệm trên bản sao.
-
-**Nghiệm thu:** kiểm digest/receipt, schema, hydration, pending, notice/lựa chọn cũ, attachment và reservation; từ chối phải rollback; giữ dữ liệu và không replay ghi chưa rõ kết quả. Mọi khoảng trống phải được ghi rõ; không coi chặn an toàn là đã chuyển thành công.
-
-**Điều kiện gỡ legacy:** ma trận hành vi không còn khoảng trống nghiệp vụ, có đường giữ/đọc/đối soát dữ liệu cũ và rollback đã thử. Nếu chưa đạt, giữ legacy và đánh việc cutover chưa hoàn tất.
-
-**Bằng chứng:** checksum trước/sau, output từng case, trạng thái sau restart và reviewer verdict.
-
-### PM-05 — CI
-
-**Đầu ra:** workflow kiểm Python 3.11/3.12 trên Windows/Linux, policy và regression cần thiết.
-
-**Nghiệm thu:** pipeline thực sự chạy được trên đúng source; test skip/fail có tên và lý do; lỗi kiểm tra làm job thất bại đúng.
-
-**Bằng chứng:** liên kết CI run, commit SHA, từng job và kết quả. Nếu chỉ kiểm được cấu hình local thì ghi Review/Blocked, chưa Accepted.
-
-### PM-06 — Bản đóng gói và review
-
-**Đầu ra:** source đã đóng băng, wheel kiểm thử, bảng fingerprint/resource, báo cáo checks, finding và previews rules/ví dụ để duyệt.
-
-**Nghiệm thu:** cài wheel vào môi trường tạm, import/resource thực sự từ bản cài; CLI và checks khớp; verifier và reviewer độc lập; mọi finding mức cao được xử lý hoặc chuyển Owner quyết định rõ. Không thay hash/trace để tạo kết luận tương đương nghiệp vụ.
-
-**Bằng chứng:** SHA và checksum wheel, lệnh cài/kiểm, log tóm tắt, scope diff, danh sách skip, verdict theo đúng phiên bản. Rules mới giữ DRAFT cho tới PM-07.
-
-### PM-07 — Phê duyệt rules
-
-**Đầu ra:** quyết định Owner nêu đúng phiên bản rules, ví dụ và câu chữ đã xem.
-
-**Nghiệm thu:** ghi ngày/người duyệt; chỉ áp dụng ACTIVE cho đúng bản được duyệt. Phê duyệt rules chưa cấp GO vận hành.
-
-### PM-08…PM-12 — Gói setup 20h
-
-| ID | Output PM cần nhận | Tiêu chí nhận |
-|---|---|---|
-| PM-08 | Phiếu release/config đã che bí mật và biên bản rollback | Xác định đúng SHA/wheel/config; rollback đã chạy và giữ nguyên dữ liệu cần giữ |
-| PM-09 | Bảng từng ví dụ model thật: expected, actual, PASS/FAIL, lỗi | Dùng đúng cấu hình được duyệt; không suy chất lượng từ schema hợp lệ; fail giữ NO_GO |
-| PM-10 | Readback service/PID/fingerprint và test restart/lock | Đúng bản cài; một tiến trình/DB; phục hồi không gây ghi trùng |
-| PM-11 | Biên bản từng luồng Telegram/GitHub và hai group | Dùng tin kiểm mới đã cho phép; ticket/ảnh/Reply đúng nguồn; text bot đúng ops group; không replay lịch sử thật |
-| PM-12 | Danh sách finding, kết quả regression và phiếu preflight P1–P13 | Mọi mục có bằng chứng hoặc trạng thái thiếu/chặn rõ; chỉ đề xuất GO khi đủ điều kiện |
-
-Ánh xạ tracking hiện hữu: PM-08 → [#2489](https://github.com/vlink-group/vlink-nexora/issues/2489); PM-09 → [#2490](https://github.com/vlink-group/vlink-nexora/issues/2490); PM-10 → [#2491](https://github.com/vlink-group/vlink-nexora/issues/2491); PM-11 → [#2492](https://github.com/vlink-group/vlink-nexora/issues/2492); PM-12 → [#2493](https://github.com/vlink-group/vlink-nexora/issues/2493). Đây là ánh xạ theo hồ sơ đã tạo; lần publish này không thay trạng thái hoặc Effort trên GitHub.
-
-### PM-13 — GO
-
-**Đầu ra:** quyết định GO/NO_GO có người ký và phiên bản áp dụng.
-
-**Nghiệm thu:** Owner ký khi đủ phiếu preflight; commit/push main hoặc test offline xanh không thay quyết định này.
-
-## 5. Mẫu cập nhật để PM kiểm soát
-
-Mỗi lần bàn giao phải có:
+## 4. Mẫu cập nhật tiến độ
 
 ```text
-Mã việc: PM-xx
-Người nhận việc / người nghiệm thu:
+Mã task / người thực hiện / người nghiệm thu:
 Trạng thái: Todo | Doing | Review | Accepted | Blocked
 Source SHA / branch:
-Estimate dev / AI; thời gian thực tế đã dùng:
-Output đã nộp: đường dẫn hoặc artifact URL
-Tiêu chí đã đạt / chưa đạt:
-Lệnh kiểm + exit code + số PASS/FAIL/SKIP:
-Reviewer/verifier và verdict:
-Blocker; người gỡ; điều kiện gỡ:
-Việc tiếp theo và thời điểm cập nhật tiếp:
+Output đã nộp:
+Lệnh chạy + exit code + PASS/FAIL/SKIP:
+Reviewer verdict:
+Thời gian Agent thực tế / estimate còn lại:
+Phần chưa xác minh / blocker / việc tiếp theo:
 ```
 
-PM chỉ ghi Accepted sau khi đối chiếu output với tiêu chí. Không đóng việc theo câu “đã xong” của executor. Không tính giờ tiết kiệm AI thành giờ thực tế. Artifact log/SQLite/session/token không đưa vào commit; bản tóm tắt kiểm chứng và link tới bằng chứng có thể đưa vào tài liệu review.
-
-## 6. Phạm vi mở rộng và giới hạn
-
-Installer .exe/wizard, adapter Jira/Azure và refactor module ngoài nhu cầu tương đương nghiệp vụ là backlog mở rộng, cần scope và estimate riêng. Không tự gộp vào 44–60h / 8–16h. Công cụ harness-verify hiện yêu cầu Node; repo Python phải ghi giới hạn này, dùng checks Python thật và không giả PASS của gate.
-
-## 7. Related Documents
+## 5. Related Documents
 
 - [Master overview](../00-master/telegram-triage-noissue_overview_261027_v1.0.0.md)
 - [Business DOCS](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md)
-- [Engineering / nghiên cứu](../02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md)
-- [QA acceptance](../03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md)
-- [Audit và gói setup](../02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md)
-- [Rules spec hiện hữu](telegram-triage-noissue_rules-spec_261029_v1.0.0.md)
-- [Báo cáo tổng thể](listener-ticket-2178_report_261103_v1.0.2.md)
+- [Engineering](../02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md)
+- [QA](../03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md)
+- [Báo cáo](listener-ticket-2178_report_261103_v1.0.2.md)
+- [Tracking gốc #2178](https://github.com/vlink-group/vlink-nexora/issues/2178)
 
-## 8. Changelog
+## 6. Changelog
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Nội dung |
 |---|---|---|---|
-| v1.0.0 | 03/11/2026 09:12 | Codex / Owner AlexChu | Chia 13 việc với output, acceptance, dependencies, trách nhiệm và estimate; giữ NO_GO |
+| v1.0.11 | 03/11/2026 16:51 | Codex / Owner AlexChu | Ba task source APPROVED; full R3 1648 pass/2 skip, elapsed ~5h14; giữ legacy và chờ PM nhận |
+| v1.0.10 | 03/11/2026 16:03 | Codex / Owner AlexChu | PM-03 R1 CHANGES_NEEDED, hai full suite cùng lỗi restart; R2 đang sửa, chưa nghiệm thu |
+| v1.0.9 | 03/11/2026 14:47 | Codex / Owner AlexChu | PM-02 High source APPROVED sau hoàn tất kiểm file-backed; bắt đầu PM-03, giữ giới hạn live/global gate |
+| v1.0.8 | 03/11/2026 13:31 | Codex / Owner AlexChu | PM-01 High R5 source APPROVED; bắt đầu PM-02, phân biệt source review với PM Accepted và global gate |
+| v1.0.7 | 03/11/2026 13:08 | Codex / Owner AlexChu | Cập nhật PM-01 R4 và hai lỗi High R3; giữ 0/3 nghiệm thu, chưa triển khai PM-02/03 |
+| v1.0.6 | 03/11/2026 12:23 | Codex / Owner AlexChu | Ghi tiến độ PM-01 R2 và finding độc lập; tiếp tục R3, chưa nghiệm thu |
+| v1.0.5 | 03/11/2026 11:37 | Codex / Owner AlexChu | Bắt đầu PM-01 trong worktree riêng; giữ hai task sau Todo và 0/3 nghiệm thu |
+| v1.0.4 | 03/11/2026 11:17 | Codex / Owner AlexChu | Bổ sung plan triển khai tuần tự ba task, đầu ra, kiểm chứng và mốc nhận |
+| v1.0.3 | 03/11/2026 09:35 | Codex / Owner AlexChu | Liên kết hướng dẫn vị trí lưu trữ, hoạt động và chỉnh thủ công cho ba task |
+| v1.0.2 | 03/11/2026 09:32 | Codex / Owner AlexChu | Thêm diễn giải ngắn ba task và liên kết tới định nghĩa chi tiết |
+| v1.0.1 | 03/11/2026 09:27 | Codex / Owner AlexChu | Owner thu hẹp đợt này còn ba task để chạy từ source trước đóng gói; thay bảng 13 mã bằng ba đầu ra nghiệm thu, estimate 4–8h |
+| v1.0.0 | 03/11/2026 09:12 | Codex / Owner AlexChu | Kế hoạch tổng thể cũ gồm 13 mã việc |

@@ -1,6 +1,6 @@
 # Telegram triage → GitHub ticket — Overview và bàn giao
 
-**Version**: v1.0.2 · **Updated**: 2026-11-03 09:12 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Author**: Claude; cập nhật liên kết quản lý: Codex · **Baseline code lịch sử**: `d8accc8`
+**Version**: v1.0.3 · **Updated**: 2026-11-03 09:27 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Author**: Claude; cập nhật liên kết quản lý: Codex · **Baseline code lịch sử**: `d8accc8`
 
 **Status**: Tài liệu bàn giao. Không thay thế nguồn nghiệp vụ. Mọi quy tắc ở đây trỏ về TG-ID trong [Business DOCS](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md); quy tắc chi tiết dạng MUST/MUST NOT nằm ở [Rulebook](../01-product/telegram-triage-noissue_rulebook_261027_v1.0.0.md).
 
@@ -230,10 +230,11 @@ Các mục dưới đây **chưa được Owner chốt**. Không tự sửa; ghi
 
 ## Changelog
 
-Tài liệu kiểm soát hiện hành: [Báo cáo tổng thể](../04-tasks/listener-ticket-2178_report_261103_v1.0.2.md) và [bảng công việc PM-01…PM-13](../04-tasks/listener-completion-2178_tasks_261103_v1.0.0.md). Đây là phần triển khai tiếp trên baseline cleanup `520a7de`; các mô tả lịch sử trong overview cần được đọc cùng Business DOCS và trạng thái trong báo cáo. Chưa có GO vận hành.
+Tài liệu kiểm soát hiện hành: [Báo cáo tổng thể](../04-tasks/listener-ticket-2178_report_261103_v1.0.2.md) và [bảng ba task chức năng PM-01…PM-03](../04-tasks/listener-completion-2178_tasks_261103_v1.0.0.md). Đây là phần triển khai tiếp trên baseline cleanup `520a7de`; các mô tả lịch sử trong overview cần được đọc cùng Business DOCS và trạng thái trong báo cáo. Chưa có GO vận hành.
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.0.3 | 2026-11-03 09:27 | Codex / owner AlexChu | Đồng bộ liên kết plan ba task chức năng trước đóng gói theo chỉ định Owner |
 | v1.0.2 | 2026-11-03 09:12 | Codex / owner AlexChu | Liên kết báo cáo và bảng output/acceptance cho PM; ghi baseline cũ là lịch sử, giữ NO_GO |
 | v1.0.1 | 2026-10-28 | Claude / owner AlexChu | Thêm link thư mục template log ticket. Sửa G-01: tin trong group đã được đổi "Bạn" → "Anh/Chị" khi gửi; chỉ body issue còn "Bạn". |
 | v1.0.0 | 2026-10-27 02:30 | Claude / owner AlexChu | Tạo overview bàn giao: phạm vi, kiến trúc, hai đường xử lý, thuật ngữ, bản đồ tài liệu/code, cấu hình, vai trò, quy trình A–E, điểm dừng, quyết định còn mở. |

@@ -153,7 +153,7 @@ class CloudProvider(OllamaProvider):
     def _ask(self, body, parse, attempts=2):
         c = self.model_config
         has_images = any("images" in m for m in body["messages"])
-        if c.cloud_consent and (not has_images or self.cloud_images):
+        if body.get("_evidence_pin") != "local" and c.cloud_consent and (not has_images or self.cloud_images):
             result = self._ask_cloud(body, parse, attempts)
             if result is not None:
                 return result
@@ -166,7 +166,10 @@ class CloudProvider(OllamaProvider):
             return None
         local = dict(body, messages=body.get("_local_messages") or body["messages"], model=c.fallback_model, think=c.fallback_think,
                      options=dict(body.get("options", {})))
-        return self._fallback._ask(local, parse, attempts)
+        result = self._fallback._ask(local, parse, attempts)
+        if result is not None and isinstance(body.get("_evidence_view"), dict):
+            body["_evidence_view"].update(kind="local", messages=local["messages"])
+        return result
 
     def _ask_cloud(self, body, parse, attempts):
         from .ai_transport import complete, read_key, ProviderError
@@ -230,6 +233,8 @@ class CloudProvider(OllamaProvider):
                 if outcome is not None:
                     self._record(outcome, usage, started)
             if result is not None:
+                if isinstance(body.get("_evidence_view"), dict):
+                    body["_evidence_view"].update(kind="cloud", messages=_evidence_messages(messages))
                 return result
             if outcome not in (("invalid_output", "invalid_json") if turn else ("invalid_output",)):
                 return None
@@ -243,3 +248,25 @@ class CloudProvider(OllamaProvider):
                 if messages is None or has_document_context(messages) and not request_fits(dict(body,messages=messages)):
                     return None
         return None
+
+
+def _evidence_messages(messages):
+    """Normalize actual successful wire evidence, retaining document host markers."""
+    result=[]
+    for message in messages:
+        row=dict(message)
+        if isinstance(row.get('content'),list):
+            parts=row['content']
+            row['content']=next(p['text'] for p in parts if p['type']=='text')
+            row['images']=[p['image_url']['url'].split(';base64,',1)[1] for p in parts if p['type']=='image_url']
+        # Keep host JSON typing for another consent/redaction pass: redacting
+        # the serialized string would mistake long numeric source IDs for phones.
+        from .thinking import ContextJSON
+        if row.get('role')=='user' and isinstance(row.get('content'),str):
+            try:
+                packet=json.loads(row['content'])
+            except (ValueError,TypeError):packet=None
+            if isinstance(packet,dict) and 'source_ids' in packet and 'sources' in packet and not isinstance(row['content'],ContextJSON):
+                row['content']=ContextJSON(row['content'])
+        result.append(row)
+    return result

@@ -145,6 +145,9 @@ class RulesBootstrapTests(unittest.TestCase):
         from tg_triage.store import Store
         from tg_triage.rules_pending_store import RulesPendingStore, check_before_recovery
         db=self.root/'safe.sqlite3'; store=Store(db); pending=RulesPendingStore(store)
+        from tests.helpers import message
+        store.enqueue(message(1));store.enqueue(message(2))
+        with store.connection:store.connection.execute("UPDATE messages SET decision='chat' WHERE message_id=2")
         pending.create('topic',-1001234567890,1); pending.reserve_attempt('topic',3)
         pending.reserve_comment(-1001234567890,2,'sandbox/triage',42); pending.finish_comment(-1001234567890,2,100)
         store.close()
@@ -192,9 +195,29 @@ class RulesBootstrapTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(db.read_bytes()).digest(), before)
 
     def test_completed_legacy_effects_are_not_treated_as_pending(self):
-        import sqlite3
+        # A terminal status alone cannot establish a supported schema or owner.
+        # Produce actual completed legacy work through the existing fake pipeline.
+        from tests.test_followups import FollowupTests,answer
         from tg_triage.rules_pending_store import check_before_recovery
-        db = self.root / 'complete.sqlite3'
+        fixture=FollowupTests('test_update_comment_only_uses_trusted_number_and_keeps_body')
+        self.addCleanup(fixture.doCleanups)
+        db=self.root/'complete.sqlite3'
+        store,model,github,sent,pipeline=fixture.setup_case(path=db)
+        model.value=answer('update')
+        fixture.reply(pipeline,mid=1000,target=901,text='Thông tin rõ hơn')
+        self.assertEqual('done',store.connection.execute('SELECT status FROM followup_jobs').fetchone()[0])
+        self.assertEqual('done',store.connection.execute('SELECT status FROM followup_operations').fetchone()[0])
+        self.assertEqual(1,len(github.calls));self.assertEqual(1,len(github.comments))
+        result=store.connection.execute('SELECT result FROM followup_jobs').fetchone()[0]
+        self.assertIsInstance(result,str)
+        with self.assertRaises(ValueError):json.loads(result)  # Producer stores opaque notice text, not JSON.
+        store.close();before=db.read_bytes();check_before_recovery(db)
+        self.assertEqual(before,db.read_bytes())
+
+    def test_status_only_completed_legacy_schema_is_unknown(self):
+        import sqlite3
+        from tg_triage.rules_pending_store import check_before_recovery,RulesHalt
+        db=self.root/'status-only.sqlite3'
         with contextlib.closing(sqlite3.connect(db)) as connection:
             with connection:
                 connection.execute('CREATE TABLE followup_jobs (status TEXT)')
@@ -203,7 +226,9 @@ class RulesBootstrapTests(unittest.TestCase):
                 connection.execute("INSERT INTO followup_operations VALUES ('done')")
                 connection.execute('CREATE TABLE group_notices (status TEXT)')
                 connection.execute("INSERT INTO group_notices VALUES ('sent')")
-        check_before_recovery(db)
+        before=db.read_bytes()
+        with self.assertRaises(RulesHalt):check_before_recovery(db)
+        self.assertEqual(before,db.read_bytes())
 
     def test_run_stops_on_legacy_pending_before_store_or_provider(self):
         import hashlib
@@ -318,7 +343,7 @@ class RulesBootstrapTests(unittest.TestCase):
         from tg_triage.store import Store
         db=self.root/'attachment-evidence.sqlite3'; store=Store(db)
         for status in ('prewrite_error','error','uploading'):
-            ident=store.reserve_attachment_call('case',99,'private-name',10)
+            ident=store.reserve_attachment_call('case',99,'private-name',10,chat_id=-1001234567890)
             store.finish_attachment(ident,status)
         store.close(); before=hashlib.sha256(db.read_bytes()).digest()
         result=attachment_evidence(db,limit=2)

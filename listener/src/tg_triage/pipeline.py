@@ -451,16 +451,25 @@ class Pipeline:
         return tuple(dict.fromkeys(
             value for value in analysis.key_message_ids if type(value) is int and value in present))
 
-    def _images(self, case_key, messages, *, live, document_reads=()):
+    def _images(self, case_key, messages, *, live, document_reads=(), asset_proofs=None):
         try:
-            return self.attachments.process(case_key, messages, live=live,
-                                            prepared=self._prepared_images,document_reads=document_reads)
+            options=dict(prepared=self._prepared_images,document_reads=document_reads)
+            if asset_proofs is not None: options['asset_proofs']=asset_proofs
+            result=self.attachments.process(case_key,messages,live=live,**options)
+            if asset_proofs is not None and not isinstance(result,AttachmentResult):
+                from .rules_pending_store import RulesHalt
+                raise RulesHalt('required attachment processor result invalid; write refused')
+            return result
         except Exception as error:
             from .attachments import AttachmentAmbiguous
             if isinstance(error,AttachmentAmbiguous):
                 from .rules_intake import attachment_halt_warning
                 attachment_halt_warning(self,messages)
                 raise
+            from .rules_pending_store import RulesHalt
+            if isinstance(error,RulesHalt): raise
+            if asset_proofs is not None:
+                raise RulesHalt('required attachment processing or proof unavailable; write refused') from None
             LOG.warning("Attachments failed exception=%s", type(error).__name__)
             return AttachmentResult(notes=[f"Ảnh đính kèm không tải được: {type(error).__name__}"])
 

@@ -217,13 +217,51 @@ class AttachmentProcessor:
         """Private, bounded batch shared by vision and upload; caller must close it."""
         return PreparedImages(self, case_key, messages)
 
-    def process(self, case_key, messages, *, live, prepared=None, document_reads=()) -> AttachmentResult:
+    def capture_proof(self, case_key, messages, *, prepared=None, document_reads=()):
+        """Immutable downloaded-byte receipts; this never claims model viewing."""
+        import hashlib
+        result=AttachmentResult(); proof={}
+        with tempfile.TemporaryDirectory(prefix='tg-triage-proof-') as folder:
+            directory=Path(folder); os.chmod(directory,0o700)
+            for message in messages:
+                for kind,enabled in (('image',message.has_image),('document',message.has_document)):
+                    if not enabled: continue
+                    if kind=='image' and self.settings.max_per_case<=0:
+                        accepted=[]
+                    elif kind=='image':
+                        accepted=self._download(case_key,[message],directory,result,limit=1,reuse=prepared)
+                    else:
+                        accepted=self._download_documents([message],directory,result,document_reads)
+                    key=f'{kind}:{message.message_id}'
+                    proof[key]=({'sha256':hashlib.sha256(accepted[0][1].read_bytes()).hexdigest(),
+                                 'byte_count':accepted[0][1].stat().st_size} if accepted and accepted[0][1].stat().st_size<=self.settings.max_bytes else None)
+        return proof
+
+    @staticmethod
+    def _check_asset_proofs(images,documents,proof,required):
+        from .rules_pending_store import RulesHalt
+        import hashlib
+        actual={f'{kind}:{message.message_id}' for kind,accepted in (('image',images),('document',documents)) for message,path in accepted}
+        if not required<=actual:
+            raise RulesHalt('attachment bytes unavailable for saved lifecycle proof; write refused')
+        for kind,accepted in (('image',images),('document',documents)):
+            for message,path in accepted:
+                expected=proof.get(f'{kind}:{message.message_id}')
+                if (not isinstance(expected,dict) or set(expected)!={'sha256','byte_count'}
+                        or type(expected['byte_count']) is not int
+                        or expected['byte_count']!=path.stat().st_size
+                        or expected['sha256']!=hashlib.sha256(path.read_bytes()).hexdigest()):
+                    raise RulesHalt('attachment bytes do not match saved lifecycle proof; write refused')
+
+    def process(self, case_key, messages, *, live, prepared=None, document_reads=(), asset_proofs=None) -> AttachmentResult:
         result = AttachmentResult()
         limits = self.settings
         candidates = [m for m in messages if m.has_image] if limits.max_per_case > 0 else []
         documents = ([m for m in messages if m.has_document]
                      if limits.max_documents_per_case > 0 else [])
         if not candidates and not documents:
+            if asset_proofs is not None and any(m.has_attachment for m in messages):
+                raise RulesHalt('configured attachment gates no longer permit saved assets; write refused')
             return result
         result.attempted = len(candidates)
         directory = Path(tempfile.mkdtemp(prefix="tg-triage-"))
@@ -240,6 +278,10 @@ class AttachmentProcessor:
                         "_common.md", "note.unseen_images", {"count": str(unseen)}))
             accepted_documents = (self._download_documents(documents, directory, result, document_reads)
                                   if documents else [])
+            if asset_proofs is not None:
+                self._check_asset_proofs(accepted,accepted_documents,asset_proofs,
+                    {f'image:{m.message_id}' for m in candidates[:limits.max_per_case]} |
+                    {f'document:{m.message_id}' for m in documents[:limits.max_documents_per_case]})
             if not live:
                 result.dry_run_count = len(accepted)
                 result.documents_dry_run = len(accepted_documents)
@@ -249,6 +291,8 @@ class AttachmentProcessor:
                 self._upload(case_key, accepted, result, state)
             if accepted_documents:
                 self._upload_documents(case_key, accepted_documents, result, state)
+            if asset_proofs is not None and (len(result.images)!=len(accepted) or len(result.documents)!=len(accepted_documents)):
+                raise RulesHalt('required saved assets did not complete upload; write refused')
         finally:
             # Temporary files never outlive the case, whether or not upload worked.
             shutil.rmtree(directory, ignore_errors=True)

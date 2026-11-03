@@ -140,6 +140,8 @@ class Decision:
     asked_fields: tuple[str, ...]
     fingerprint: str
     task: Mapping | None = None
+    lifecycle: Mapping | None = None
+    analysis_review: Mapping | None = None
 
 
 class RulesSnapshot:

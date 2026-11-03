@@ -1,6 +1,8 @@
 """Durable message deduplication, result storage and owner CSV export."""
 
 import csv
+import json
+import hashlib
 import os
 import sqlite3
 import threading
@@ -894,11 +896,49 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
     def count_recent_issues(self, now=None) -> int:
         now = self.clock() if now is None else now
         with self._lock:
-            row = self.connection.execute("""
-                SELECT COUNT(*) FROM messages WHERE github_called_at IS NOT NULL
+            rows = self.connection.execute("""
+                SELECT chat_id,message_id FROM messages WHERE github_called_at IS NOT NULL
                 AND julianday(github_called_at) >= julianday(?)
-            """, ((now - timedelta(minutes=60)).isoformat(),)).fetchone()
-            return row[0] + self.followup_create_count(now)
+            """, ((now - timedelta(minutes=60)).isoformat(),)).fetchall()
+            calls={(row['chat_id'],row['message_id']) for row in rows}
+            count=len(calls)
+            # Related batches reserve every source mapping, but make one POST.
+            # Preserve legacy per-message counting outside these exact receipts.
+            if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rules_related_receipts'").fetchone():
+                try:
+                    plans={hashlib.sha256(json.dumps(json.loads(row[0]),sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf8')).hexdigest():json.loads(row[0])
+                        for row in self.connection.execute('SELECT plan FROM rules_batch_groups')}
+                    receipts=self.connection.execute("""SELECT r.plan_hash,r.recurrence_keys,r.source_keys,e.chat_id,e.source_id,e.status,e.issue_number,e.repo
+                        FROM rules_related_receipts r JOIN rules_related_episodes e
+                        ON e.chat_id=r.chat_id AND e.repo=r.repo AND e.parent_number=r.parent_number""").fetchall()
+                except (ValueError,TypeError,sqlite3.Error):
+                    plans={}; receipts=[]
+                for receipt in receipts:
+                    try:
+                        plan=plans[receipt[0]]
+                        if not isinstance(plan,dict): continue
+                        original=json.loads(receipt[2]); recurrence=json.loads(receipt[1])
+                        lifecycle=plan.get('lifecycle') or {}
+                        from .lifecycle import partition_source_roles
+                        links={key[1]:self.connection.execute('SELECT reply_to_id FROM messages WHERE chat_id=? AND message_id=?',key).fetchone()[0] for key in plan['source_keys']}
+                        history,_,unknown=partition_source_roles(lifecycle,links)
+                        if unknown: continue
+                        expected=[key for key in plan['source_keys'] if key[1] not in history]
+                        if original!=plan['source_keys'] or recurrence!=expected: continue
+                        keys={tuple(key) for key in recurrence}
+                        if (not keys or len(keys)!=len(recurrence) or (receipt[3],receipt[4]) not in keys
+                                or any(len(key)!=2 or key[0]!=receipt[3] or any(type(value) is not int for value in key) for key in keys)
+                                or not keys<=calls): continue
+                        mappings=[self.connection.execute('SELECT issue_number,issue_url FROM messages WHERE chat_id=? AND message_id=?',key).fetchone() for key in keys]
+                        if receipt[5]=='done':
+                            if any(not row or tuple(row)!=(receipt[6],f'https://github.com/{receipt[7]}/issues/{receipt[6]}') for row in mappings): continue
+                        elif receipt[5] not in ('reserved','verified') or any(not row or row[0] is not None or row[1] for row in mappings):
+                            continue
+                    except (ValueError,TypeError,KeyError,IndexError):
+                        continue  # Incomplete/tampered proof cannot relax a quota.
+                    count-=len(keys)-1
+                    calls-=keys
+            return count + self.followup_create_count(now)
 
     def export_csv(self, out):
         with self._lock:

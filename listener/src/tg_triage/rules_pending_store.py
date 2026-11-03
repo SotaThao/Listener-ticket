@@ -5,6 +5,7 @@ must treat an unfinished reservation as consumed, not as permission to resend.
 """
 import json
 import hashlib
+import sqlite3
 from datetime import timedelta
 
 
@@ -52,26 +53,86 @@ def _recoverable_batch_groups(connection):
                 recover.append((batch_id,ordinal,'PLANNED')); continue
             if state == 'MEDIA_ONLY':
                 recover.append((batch_id,ordinal,'PLANNED')); continue
-            if state == 'LIFECYCLE_QUESTION':
-                if len(keys)!=1 or len(plan.get('targets',()))!=1: raise ValueError()
+            if state == 'RELATED':
+                if not plan.get('targets') or len({p['number'] for p in plan['targets']})!=1: raise ValueError()
+                if any(key[0]!=keys[0][0] for key in keys): raise ValueError()
+                import sqlite3
+                from .store import _to_message
+                from .rules_intake import _source_evidence_id
+                old_factory=connection.row_factory
+                try:
+                    connection.row_factory=sqlite3.Row
+                    rows=[connection.execute('SELECT * FROM messages WHERE chat_id=? AND message_id=?',key).fetchone() for key in keys]
+                    context=[connection.execute('SELECT * FROM messages WHERE chat_id=? AND message_id=?',(keys[0][0],int(mid))).fetchone()
+                        for mid in plan.get('lifecycle_context',{})]
+                finally:
+                    connection.row_factory=old_factory
+                if any(row is None for row in [*rows,*context]): raise ValueError()
+                members=[_to_message(row) for row in rows]
+                lifecycle=plan.get('lifecycle') or {}
+                from .lifecycle import partition_source_roles
+                history,_,unknown=partition_source_roles(lifecycle,{m.message_id:m.reply_to_id for m in members})
+                if unknown: raise ValueError()
+                recurrence=sorted([m for m in members if m.message_id not in history],key=lambda m:(m.received_at,m.message_id))
+                if not recurrence: raise ValueError()
+                anchor=recurrence[0]; authority=[keys[0][0],plan['targets'][0]['reply_message_id']]
+                notice_key=[anchor.chat_id,anchor.message_id]
+                episode=connection.execute('SELECT status,issue_number,issue_url,notice_body,repo,parent_number FROM rules_related_episodes WHERE chat_id=? AND source_id=? AND answer_id=?',
+                    (*notice_key,anchor.message_id)).fetchone()
+                answer=connection.execute('SELECT status,choice,answer_id FROM rules_lifecycle_answers WHERE chat_id=? AND source_id=?',authority).fetchone()
+                notice=connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',notice_key).fetchone()
+                question_notice=connection.execute('SELECT 1 FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',authority).fetchone()
+                if episode is None and answer is None and notice is None and question_notice is None:
+                    recover.append((batch_id,ordinal,'PLANNED')); continue
+                if episode is not None:
+                    expected_hash=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf8')).hexdigest()
+                    receipt=connection.execute('SELECT plan_hash,recurrence_keys,source_keys FROM rules_related_receipts WHERE chat_id=? AND repo=? COLLATE NOCASE AND parent_number=?',
+                        (anchor.chat_id,episode[4],episode[5])).fetchone()
+                    if (not receipt or receipt[0]!=expected_hash
+                            or json.loads(receipt[1])!=[[m.chat_id,m.message_id] for m in recurrence]
+                            or json.loads(receipt[2])!=keys
+                            or plan.get('lifecycle_sources')!={str(m.message_id):_source_evidence_id(m) for m in members}
+                            or plan.get('lifecycle_context')!={str(row['message_id']):_source_evidence_id(_to_message(row)) for row in context}): raise ValueError()
+                    for row in rows:
+                        historical=row['message_id'] in history
+                        target_number=episode[5] if historical else episode[1]
+                        target_url=f'https://github.com/{episode[4]}/issues/{target_number}'
+                        expected_decision='issue' if row['message_id']==anchor.message_id else 'followup'
+                        if (row['decision']!=expected_decision or row['issue_number']!=target_number or row['issue_url']!=target_url
+                                or row['reason']!='lifecycle_related_episode' or not historical and not row['github_called_at']): raise ValueError()
+                    current=connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
+                    if (episode[0]=='done' and episode[5]==plan['targets'][0]['number']
+                            and episode[2]==f'https://github.com/{episode[4]}/issues/{episode[1]}'
+                            and answer and tuple(answer)==('done','recurrence',anchor.message_id)
+                            and current and current[0]=='CLOSED' and notice and notice[0]=='LIFECYCLE_EPISODE'
+                            and notice[1]=='sent' and type(notice[2]) is int and notice[2]>anchor.message_id
+                            and connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(anchor.chat_id,notice[2])).fetchone()[0]==1
+                            and not connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(anchor.chat_id,notice[2])).fetchone()):
+                        recover.append((batch_id,ordinal,'DONE')); continue
+                    raise ValueError()
+                if answer is not None: raise ValueError()
+            if state in ('LIFECYCLE_QUESTION','RELATED'):
+                if not plan.get('targets') or len({p['number'] for p in plan['targets']})!=1: raise ValueError()
                 target=plan['targets'][0]
+                question_key=[target['chat_id'],target['reply_message_id']]
+                if question_key not in keys: raise ValueError()
                 batch=connection.execute('SELECT fingerprint FROM rules_batches WHERE batch_id=?',(batch_id,)).fetchone()
-                q=connection.execute('SELECT parent_number,repo,plan_id,question,fingerprint,evidence_answer,recurrence_answer,batch_id,ordinal FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',keys[0]).fetchone()
-                notice=connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',keys[0]).fetchone()
+                q=connection.execute('SELECT parent_number,repo,plan_id,question,fingerprint,evidence_answer,recurrence_answer,batch_id,ordinal FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',question_key).fetchone()
+                notice=connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',question_key).fetchone()
                 if q is None and notice is None:
                     recover.append((batch_id,ordinal,'PLANNED')); continue
                 current=connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
-                source=connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='pending_review' AND reason='lifecycle_question_sent'",keys[0]).fetchone()
+                source=connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='pending_review' AND reason='lifecycle_question_sent'",question_key).fetchone()
                 import sqlite3
                 old_factory=connection.row_factory
                 try:
                     connection.row_factory=sqlite3.Row
-                    evidence_row=connection.execute('SELECT * FROM messages WHERE chat_id=? AND message_id=?',keys[0]).fetchone()
+                    evidence_row=connection.execute('SELECT * FROM messages WHERE chat_id=? AND message_id=?',question_key).fetchone()
                 finally:
                     connection.row_factory=old_factory
                 from .store import _to_message
                 from .rules_intake import _source_evidence_id
-                evidence_ok=bool(evidence_row and plan.get('lifecycle_source_evidence')==_source_evidence_id(_to_message(evidence_row)))
+                evidence_ok=bool(evidence_row and (plan.get('lifecycle_sources') or {}).get(str(question_key[1]),plan.get('lifecycle_source_evidence'))==_source_evidence_id(_to_message(evidence_row)))
                 parent=target['reply_to_id']; root_id=target.get('target_source_id',parent)
                 if parent>=target['reply_message_id']: raise ValueError()
                 if root_id!=parent and not (root_id<parent<target['reply_message_id']): raise ValueError()
@@ -81,21 +142,27 @@ def _recoverable_batch_groups(connection):
                 if root_id!=parent and connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(target['chat_id'],parent)).fetchone()[0]!=1: raise ValueError()
                 if root_id!=parent and connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(target['chat_id'],parent)).fetchone(): raise ValueError()
                 root=connection.execute("SELECT issue_number,issue_url FROM messages WHERE chat_id=? AND message_id=? AND decision IN ('issue','followup')",(target['chat_id'],root_id)).fetchone()
+                root_ok=bool(root and q and root[0]==target.get('recurrence_origin_number',q[0])
+                    and root[1]==f'https://github.com/{q[1]}/issues/{root[0]}')
+                if root_ok and target.get('recurrence_origin_number'):
+                    from .rules_intake import _stored_recurrence_lineage
+                    chain=_stored_recurrence_lineage(connection,target['chat_id'],q[1],root[0])
+                    root_ok=any(edge=={'number':q[0],'source_id':target.get('recurrence_parent_source_id')} for edge in chain)
                 if (q and notice and batch and current and current[0]=='OPEN' and source and evidence_ok and
                         q[0]==target['number'] and q[3]==plan.get('lifecycle_question') and q[4]==batch[0] and
                         q[5]==plan.get('lifecycle_evidence_answer') and q[6]==plan.get('lifecycle_recurrence_answer') and
                         q[7]==batch_id and q[8]==ordinal and
-                        root and root[0]==q[0] and root[1]==f'https://github.com/{q[1]}/issues/{q[0]}' and
+                        root_ok and
                         q[2]==readonly_plan_id(batch_id,ordinal,batch[0],plan) and
-                        notice[0]=='LIFECYCLE_QUESTION' and notice[1]=='sent' and type(notice[2]) is int and notice[2]>keys[0][1] and
-                        not connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(keys[0][0],notice[2])).fetchone() and
-                        connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(keys[0][0],notice[2])).fetchone()[0]==1):
+                        notice[0]=='LIFECYCLE_QUESTION' and notice[1]=='sent' and type(notice[2]) is int and notice[2]>question_key[1] and
+                        not connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(question_key[0],notice[2])).fetchone() and
+                        connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(question_key[0],notice[2])).fetchone()[0]==1):
                     recover.append((batch_id,ordinal,'DONE')); continue
                 raise ValueError()
             if state in ('ANALYZE','STATUS'):
-                if len(keys)!=1: raise ValueError()
+                if len(keys)!=1 and (state=='STATUS' or not plan.get('analysis_review')): raise ValueError()
                 reason='semantic_analyze' if state=='ANALYZE' else 'semantic_status'
-                finished=connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='chat' AND reason=?",(*keys[0],reason)).fetchone()
+                finished=all(connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='chat' AND reason=?",(*key,reason)).fetchone() for key in keys)
                 notice=connection.execute("SELECT status,notice_message_id,kind FROM group_notices WHERE chat_id=? AND message_id=?",keys[0]).fetchone()
                 proof=connection.execute("SELECT kind,plan_id,body_hash,body FROM rules_readonly_notices WHERE chat_id=? AND message_id=?",keys[0]).fetchone()
                 batch=connection.execute('SELECT fingerprint FROM rules_batches WHERE batch_id=?',(batch_id,)).fetchone()
@@ -104,8 +171,17 @@ def _recoverable_batch_groups(connection):
                 if content_ok and state=='ANALYZE':
                     from .analysis_task import render, render_excerpts, explicit_task
                     source=connection.execute('SELECT text,is_forward FROM messages WHERE chat_id=? AND message_id=?',keys[0]).fetchone()
-                    content_ok=bool(source and proof[3]==(render(plan['task']) if explicit_task(plan['task'],source[0],source[1]) else render_excerpts(plan['task'])))
-                if finished and notice and proof and proof[0]==state and proof[1]==expected and content_ok and notice[2]==state and notice[0]=='sent' and type(notice[1]) is int and notice[1]>0:
+                    content_ok=bool(source and proof[3]==(render(plan['task']) if plan.get('analysis_review') or explicit_task(plan['task'],source[0],source[1]) else render_excerpts(plan['task'])))
+                from .rules_analysis import has_binding
+                if state=='ANALYZE' and not plan.get('analysis_review') and has_binding(connection,keys): raise ValueError()
+                if plan.get('analysis_review'):
+                    from .rules_analysis import load
+                    receipt=load(connection,plan,batch[0])
+                    from .rules_analysis import source_bindings_valid,member_states_valid
+                    content_ok=content_ok and receipt is not None and source_bindings_valid(connection,receipt) and member_states_valid(connection,plan,topic)
+                    finished=content_ok
+                from .ticket_status import sent_notice_identity
+                if finished and notice and proof and proof[0]==state and proof[1]==expected and content_ok and notice[2]==state and notice[0]=='sent' and type(notice[1]) is int and notice[1]>0 and sent_notice_identity(connection,keys[0][0],notice[1]):
                     current=connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
                     if not current or current[0] not in ('OPEN','CLOSED'): raise ValueError()
                     recover.append((batch_id,ordinal,'DONE')); continue
@@ -163,89 +239,116 @@ def check_before_recovery(db_path):
     connection=None
     try:
         connection=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
-        tables={row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        checks=(('rules_comments',"SELECT 1 FROM rules_comments WHERE status IN ('reserved','ambiguous') LIMIT 1"),
-                ('rules_append_completions',"SELECT 1 FROM rules_append_completions WHERE status!='done' OR status IS NULL LIMIT 1"),
-                ('rules_notices',"SELECT 1 FROM rules_notices WHERE status IN ('reserved','ambiguous') LIMIT 1"),
-                ('rules_lifecycle_answers',"SELECT 1 FROM rules_lifecycle_answers WHERE status IN ('reserved','ambiguous') LIMIT 1"),
-                ('rules_related_episodes',"SELECT 1 FROM rules_related_episodes WHERE status != 'done' OR status IS NULL LIMIT 1"),
-                ('rules_batch_groups',"SELECT 1 FROM rules_batch_groups WHERE status='AMBIGUOUS' LIMIT 1"))
-        for table,query in checks:
-            if table in tables and connection.execute(query).fetchone():
-                raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
-        if _unmarked_open_comment(connection,tables):
-            raise RulesHalt('unmarked open comment requires Owner inspection')
-        # Legacy work is not represented by rules_topics. Do not let Store's
-        # startup recovery rewrite it or feed it to a different decision path.
-        # This is a barrier, not a migration or permission to replay it.
-        legacy_checks = (
-            ('followup_jobs', "SELECT 1 FROM followup_jobs WHERE status NOT IN ('done','blocked') OR status IS NULL LIMIT 1"),
-            ('followup_operations', "SELECT 1 FROM followup_operations WHERE status != 'done' OR status IS NULL LIMIT 1"),
-            ('followup_analysis_retries', "SELECT 1 FROM followup_analysis_retries WHERE edit_status != 'done' OR edit_status IS NULL LIMIT 1"),
-            ('autonomous_confirmations', "SELECT 1 FROM autonomous_confirmations WHERE status != 'sent' OR status IS NULL LIMIT 1"),
-            ('group_notices', "SELECT 1 FROM group_notices WHERE status != 'sent' OR status IS NULL LIMIT 1"),
-            ('attachments', "SELECT 1 FROM attachments WHERE status NOT IN ('uploaded','prewrite_error') OR status IS NULL LIMIT 1"),
-        )
-        for table, query in legacy_checks:
-            if table in tables and connection.execute(query).fetchone():
-                raise RulesHalt('unsupported legacy pending or uncertain operation; Owner inspection required')
-        if 'autonomous_plans' in tables:
-            # Legacy numbered offers remain replyable indefinitely. Until the
-            # rules route supports their selection ledger, never silently
-            # switch them to a classifier that cannot honor those replies.
-            for (raw,) in connection.execute('SELECT plan FROM autonomous_plans'):
-                try:
-                    plan=json.loads(raw)
-                    if not isinstance(plan,dict): raise ValueError()
-                    if plan.get('action')=='ANALYZE' and 'task' not in plan and plan.get('options'):
-                        raise RulesHalt('legacy analysis offer needs reconciliation before rules mode')
-                except (TypeError,ValueError):
-                    raise RulesHalt('cannot inspect legacy plan safely; Owner inspection required') from None
-        if 'messages' in tables:
-            bound = ("AND NOT EXISTS (SELECT 1 FROM rules_sources s WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id)"
-                     if 'rules_sources' in tables else '')
-            if 'rules_deferred_ops' in tables:
-                bound += " AND NOT EXISTS (SELECT 1 FROM rules_deferred_ops d WHERE d.chat_id=m.chat_id AND d.message_id=m.message_id)"
-            if connection.execute("SELECT 1 FROM messages m WHERE m.decision IN ('queued','classifying','in_case','pending','pending_review') " + bound + " LIMIT 1").fetchone():
-                raise RulesHalt('unsupported legacy pending messages; Owner inspection required')
-            columns={row[1] for row in connection.execute('PRAGMA table_info(messages)')}
-            # Older stores may have errors from before POST reservations existed.
-            # Their outcome cannot be inferred from a missing reservation column.
-            uncertain = ("m.github_called_at IS NOT NULL AND m.decision IN ('pending','error','queued','classifying','in_case','pending_review')"
-                         if 'github_called_at' in columns else "m.decision='error'")
-            if connection.execute('SELECT 1 FROM messages m WHERE ' + uncertain + ' LIMIT 1').fetchone():
-                raise RulesHalt('unresolved legacy POST outcome; Owner inspection required')
-        if 'cases' in tables:
-            bound = ("AND (NOT EXISTS (SELECT 1 FROM messages m WHERE m.case_key=c.case_key) OR EXISTS (SELECT 1 FROM messages m WHERE m.case_key=c.case_key AND NOT EXISTS (SELECT 1 FROM rules_sources s WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id)))"
-                     if {'messages','rules_sources'} <= tables else '')
-            if connection.execute("SELECT 1 FROM cases c WHERE c.status IN ('open','analyzing') " + bound + " LIMIT 1").fetchone():
-                raise RulesHalt('unsupported legacy pending case; Owner inspection required')
-        for table in ('cases','groups'):
-            if table not in tables: continue
-            columns={row[1] for row in connection.execute('PRAGMA table_info('+table+')')}
-            if 'github_called_at' not in columns:
-                condition="status='error'"
-            elif 'issue_number' not in columns:
-                condition='github_called_at IS NOT NULL'
-            else:
-                condition='github_called_at IS NOT NULL AND (issue_number IS NULL OR issue_number<=0)'
-            if connection.execute('SELECT 1 FROM '+table+' WHERE '+condition+' LIMIT 1').fetchone():
-                raise RulesHalt('unresolved legacy issue reservation; Owner inspection required')
-        if {'rules_sources','attachments'} <= tables:
-            columns={row[1] for row in connection.execute('PRAGMA table_info(attachments)')}
-            join=("(a.chat_id=s.chat_id AND a.message_id=s.message_id) OR (a.chat_id IS NULL AND a.case_key=s.topic_id AND a.message_id=s.message_id)"
-                  if 'chat_id' in columns else "a.case_key=s.topic_id AND a.message_id=s.message_id")
-            if connection.execute("SELECT 1 FROM attachments a JOIN rules_sources s ON " + join + " WHERE a.status IN ('uploading','ambiguous') LIMIT 1").fetchone():
-                raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
-        if 'rules_batch_groups' in tables: _recoverable_batch_groups(connection)
-        if {'rules_sources','messages'} <= tables and connection.execute("""SELECT 1 FROM rules_sources s
-            JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
-            WHERE m.github_called_at IS NOT NULL AND m.decision IN ('pending','error') LIMIT 1""").fetchone():
-            raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+        check_connection_before_recovery(connection)
     except sqlite3.Error:
         raise RulesHalt('cannot inspect operation ledger safely; Owner inspection required') from None
     finally:
         if connection is not None: connection.close()
+
+
+def check_connection_before_recovery(connection):
+    """Pure local gate; caller owns one stable read snapshot. No schema writes or tools."""
+    tables={row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if local_binding_blockers(connection,tables):raise RulesHalt('invalid local ownership or receipt binding; Owner inspection required')
+    from .legacy_preflight import REGISTRY,_category,MAX_ROWS
+    for table,spec in REGISTRY.items():
+        if table not in tables:continue
+        assessment=_category(connection,table,spec,MAX_ROWS)
+        if assessment['schema']!='SUPPORTED' or not assessment['validation_complete']:
+            raise RulesHalt('unknown schema, identifier, state or record; Owner inspection required')
+    for table in ('messages','cases','groups'):
+        if table in tables and not {'github_called_at','issue_number','issue_url'} <= {r[1] for r in connection.execute('PRAGMA table_info('+table+')')}:
+            raise RulesHalt('reservation schema unknown; Owner inspection required')
+        if table in tables and connection.execute('SELECT 1 FROM '+table+" WHERE github_called_at IS NOT NULL AND (typeof(issue_number)!='integer' OR issue_number<=0 OR typeof(issue_url)!='text' OR issue_url='') LIMIT 1").fetchone():
+            raise RulesHalt('unconfirmed issue metadata; Owner inspection required')
+    checks=(('rules_comments',"SELECT 1 FROM rules_comments WHERE status IN ('reserved','ambiguous') LIMIT 1"),
+            ('rules_append_completions',"SELECT 1 FROM rules_append_completions WHERE status!='done' OR status IS NULL LIMIT 1"),
+            ('rules_notices',"SELECT 1 FROM rules_notices WHERE status IN ('reserved','ambiguous') LIMIT 1"),
+            ('rules_lifecycle_answers',"SELECT 1 FROM rules_lifecycle_answers WHERE status IN ('reserved','ambiguous') LIMIT 1"),
+            ('rules_related_episodes',"SELECT 1 FROM rules_related_episodes WHERE status != 'done' OR status IS NULL LIMIT 1"),
+            ('rules_batch_groups',"SELECT 1 FROM rules_batch_groups WHERE status='AMBIGUOUS' LIMIT 1"))
+    for table,query in checks:
+        if table in tables and connection.execute(query).fetchone():
+            raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+    if _unmarked_open_comment(connection,tables):
+        raise RulesHalt('unmarked open comment requires Owner inspection')
+    # Legacy work is not represented by rules_topics. Do not let Store's
+    # startup recovery rewrite it or feed it to a different decision path.
+    # This is a barrier, not a migration or permission to replay it.
+    legacy_checks = (
+        ('followup_jobs', "SELECT 1 FROM followup_jobs WHERE status NOT IN ('done','blocked') OR status IS NULL LIMIT 1"),
+        ('followup_operations', "SELECT 1 FROM followup_operations WHERE status != 'done' OR status IS NULL LIMIT 1"),
+        ('followup_analysis_retries', "SELECT 1 FROM followup_analysis_retries WHERE edit_status != 'done' OR edit_status IS NULL LIMIT 1"),
+        ('autonomous_confirmations', "SELECT 1 FROM autonomous_confirmations WHERE status != 'sent' OR status IS NULL LIMIT 1"),
+        ('group_notices', "SELECT 1 FROM group_notices WHERE status != 'sent' OR status IS NULL LIMIT 1"),
+        ('attachments', "SELECT 1 FROM attachments WHERE status NOT IN ('uploaded','prewrite_error') OR status IS NULL LIMIT 1"),
+    )
+    for table, query in legacy_checks:
+        if table in tables and connection.execute(query).fetchone():
+            raise RulesHalt('unsupported legacy pending or uncertain operation; Owner inspection required')
+    if 'autonomous_plans' in tables:
+        # Legacy numbered offers remain replyable indefinitely. Until the
+        # rules route supports their selection ledger, never silently
+        # switch them to a classifier that cannot honor those replies.
+        rows=connection.execute('SELECT CASE WHEN length(CAST(plan AS BLOB))<=262144 THEN plan ELSE NULL END FROM autonomous_plans LIMIT 1001')
+        used=0
+        for index,(raw,) in enumerate(rows):
+            used+=len(raw.encode('utf8')) if isinstance(raw,str) else 0
+            if index>=1000 or used>8*1024*1024:raise RulesHalt('legacy plan validation truncated; Owner inspection required')
+            try:
+                plan=json.loads(raw)
+                if not isinstance(plan,dict): raise ValueError()
+                if plan.get('action')=='ANALYZE' and 'task' not in plan and plan.get('options'):
+                    raise RulesHalt('legacy analysis offer needs reconciliation before rules mode')
+            except (TypeError,ValueError):
+                raise RulesHalt('cannot inspect legacy plan safely; Owner inspection required') from None
+    if 'messages' in tables:
+        bound = ("AND NOT EXISTS (SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id AND t.status='OPEN' AND t.phase IN ('NEW','HOLD','WAITING','LEGACY_REVIEW'))"
+                 if 'rules_sources' in tables else '')
+        if 'rules_deferred_ops' in tables:
+            bound += " AND NOT EXISTS (SELECT 1 FROM rules_deferred_ops d JOIN rules_topics t ON t.topic_id=d.topic_id WHERE d.chat_id=m.chat_id AND d.message_id=m.message_id AND t.status='OPEN')"
+        unowned=connection.execute("SELECT m.chat_id,m.message_id FROM messages m WHERE m.decision IN ('queued','classifying','in_case','pending','pending_review') " + bound + " LIMIT 1001").fetchall()
+        if unowned:
+            settled=_proven_closed_chat_sources(connection)
+            if len(unowned)>1000 or any(tuple(row) not in settled for row in unowned):
+                raise RulesHalt('unsupported legacy pending messages; Owner inspection required')
+        columns={row[1] for row in connection.execute('PRAGMA table_info(messages)')}
+        # Older stores may have errors from before POST reservations existed.
+        # Their outcome cannot be inferred from a missing reservation column.
+        uncertain = ("m.github_called_at IS NOT NULL AND m.decision IN ('pending','error','queued','classifying','in_case','pending_review')"
+                     if 'github_called_at' in columns else "m.decision='error'")
+        if connection.execute('SELECT 1 FROM messages m WHERE ' + uncertain + ' LIMIT 1').fetchone():
+            raise RulesHalt('unresolved legacy POST outcome; Owner inspection required')
+    if 'cases' in tables:
+        bound = ("AND (NOT EXISTS (SELECT 1 FROM messages m WHERE m.case_key=c.case_key) OR EXISTS (SELECT 1 FROM messages m WHERE m.case_key=c.case_key AND NOT EXISTS (SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id AND t.status='OPEN' AND t.phase IN ('NEW','HOLD','WAITING','LEGACY_REVIEW'))))"
+                 if {'messages','rules_sources'} <= tables else '')
+        if connection.execute("SELECT 1 FROM cases c WHERE c.status IN ('open','analyzing') " + bound + " LIMIT 1").fetchone():
+            raise RulesHalt('unsupported legacy pending case; Owner inspection required')
+    for table in ('cases','groups'):
+        if table not in tables: continue
+        columns={row[1] for row in connection.execute('PRAGMA table_info('+table+')')}
+        if 'github_called_at' not in columns:
+            condition="status='error'"
+        elif 'issue_number' not in columns:
+            condition='github_called_at IS NOT NULL'
+        else:
+            condition='github_called_at IS NOT NULL AND (issue_number IS NULL OR issue_number<=0)'
+        if connection.execute('SELECT 1 FROM '+table+' WHERE '+condition+' LIMIT 1').fetchone():
+            raise RulesHalt('unresolved legacy issue reservation; Owner inspection required')
+    if {'rules_sources','attachments'} <= tables:
+        columns={row[1] for row in connection.execute('PRAGMA table_info(attachments)')}
+        join=("(a.chat_id=s.chat_id AND a.message_id=s.message_id) OR (a.chat_id IS NULL AND a.case_key=s.topic_id AND a.message_id=s.message_id)"
+              if 'chat_id' in columns else "a.case_key=s.topic_id AND a.message_id=s.message_id")
+        if connection.execute("SELECT 1 FROM attachments a JOIN rules_sources s ON " + join + " WHERE a.status IN ('uploading','ambiguous') LIMIT 1").fetchone():
+            raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+    if 'rules_batch_groups' in tables:
+        rows=connection.execute("SELECT length(CAST(plan AS BLOB)) FROM rules_batch_groups WHERE status IN ('RESERVED','AMBIGUOUS') LIMIT 1001").fetchall()
+        if len(rows)>1000 or sum(row[0] or 0 for row in rows)>8*1024*1024 or any(row[0] is None or row[0]>262144 for row in rows):raise RulesHalt('checkpoint validation incomplete; Owner inspection required')
+        _recoverable_batch_groups(connection)
+    if {'rules_sources','messages'} <= tables and connection.execute("""SELECT 1 FROM rules_sources s
+        JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+        WHERE m.github_called_at IS NOT NULL AND m.decision IN ('pending','error') LIMIT 1""").fetchone():
+        raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
 
 
 class RulesPendingStore:
@@ -289,6 +392,8 @@ class RulesPendingStore:
             store.connection.execute('''CREATE TABLE IF NOT EXISTS rules_append_completions (
                 chat_id INTEGER NOT NULL,message_id INTEGER NOT NULL,topic_id TEXT NOT NULL,status TEXT NOT NULL,
                 PRIMARY KEY(chat_id,message_id))''')
+            from .rules_analysis import init_store as init_analysis_store
+            init_analysis_store(store.connection)
             store.connection.execute('''CREATE TABLE IF NOT EXISTS rules_readonly_notices (
                 chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, kind TEXT NOT NULL,
                 plan_id TEXT NOT NULL, body_hash TEXT NOT NULL, body TEXT NOT NULL,
@@ -310,6 +415,9 @@ class RulesPendingStore:
                 source_id INTEGER NOT NULL,answer_id INTEGER NOT NULL,status TEXT NOT NULL,
                 issue_number INTEGER,issue_url TEXT,notice_body TEXT,
                 PRIMARY KEY(chat_id,repo,parent_number),UNIQUE(chat_id,answer_id))''')
+            store.connection.execute("""CREATE TABLE IF NOT EXISTS rules_related_receipts (
+                chat_id INTEGER NOT NULL,repo TEXT NOT NULL,parent_number INTEGER NOT NULL,
+                plan_hash TEXT NOT NULL,recurrence_keys TEXT NOT NULL,source_keys TEXT NOT NULL,PRIMARY KEY(chat_id,repo,parent_number))""")
             store.connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS rules_related_parent_once ON rules_related_episodes(repo COLLATE NOCASE,parent_number)')
             # An interrupted model call consumed its attempt; no operation may be replayed.
             store.connection.execute('UPDATE rules_topics SET attempt_reserved=0 WHERE attempt_reserved=1')
@@ -327,6 +435,10 @@ class RulesPendingStore:
                         if plan.get('state') in ('ANALYZE','STATUS'):
                             key=plan['source_keys'][0]
                             topic=plan.get('pending_topic') or f'{key[0]}:{key[1]}'
+                            if plan.get('analysis_review'):
+                                from .rules_analysis import finish_members
+                                from .models import Decision
+                                finish_members(store,plan,Decision('chat','rule',case_key=topic,reason='semantic_analyze'))
                             store.connection.execute("UPDATE rules_topics SET status='CLOSED' WHERE topic_id=? AND status='OPEN'",(topic,))
                     store.connection.execute("UPDATE rules_batch_groups SET status=? WHERE batch_id=? AND ordinal=? AND status='RESERVED'",(status,batch_id,ordinal))
             # Internal claims have no external effect of their own.  Reconcile
@@ -595,3 +707,213 @@ class RulesPendingStore:
             self.store.connection.execute('INSERT INTO rules_ops_replies VALUES(?,?,?,?)', (ops_chat_id,message_id,row['topic_id'],ref))
             self.store.connection.execute('UPDATE rules_topics SET last_at=? WHERE topic_id=?', (self.store.clock().isoformat(),row['topic_id']))
             return row['topic_id'],ref
+
+def local_binding_blockers(connection,tables=None,limit=1000):
+    """Bounded local ownership/receipt checks, usable on a read-only old-schema snapshot."""
+    tables=tables or {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    blockers=[]
+    def check(code,sql):
+        try:
+            if connection.execute(sql).fetchone():blockers.append(code)
+        except sqlite3.Error:blockers.append('BINDING_SCHEMA_UNKNOWN')
+    if 'rules_sources' in tables:
+        cross=("AND NOT EXISTS (SELECT 1 FROM rules_ops_replies o WHERE o.topic_id=s.topic_id AND o.ref=s.ref AND o.chat_id=s.chat_id AND o.message_id=s.message_id)" if 'rules_ops_replies' in tables else '')
+        check('ORPHAN_RULES_SOURCE',"""SELECT 1 FROM rules_sources s LEFT JOIN rules_topics t ON t.topic_id=s.topic_id
+            LEFT JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+            WHERE t.topic_id IS NULL OR m.message_id IS NULL OR typeof(s.ref)!='integer' OR s.ref<=0
+            OR (t.source_chat_id!=s.chat_id """+cross+") LIMIT 1")
+    for table in ('rules_deferred_ops','rules_ops_replies'):
+        if table not in tables:continue
+        check('ORPHAN_OPS_BINDING',f'''SELECT 1 FROM {table} d LEFT JOIN rules_topics t ON t.topic_id=d.topic_id
+            LEFT JOIN messages m ON m.chat_id=d.chat_id AND m.message_id=d.message_id
+            WHERE t.topic_id IS NULL OR m.message_id IS NULL LIMIT 1''')
+    if 'rules_deferred_ops' in tables:
+        check('MISMATCH_DEFERRED_NOTICE',"""SELECT 1 FROM rules_deferred_ops d JOIN messages m ON m.chat_id=d.chat_id AND m.message_id=d.message_id
+            WHERE NOT EXISTS (SELECT 1 FROM rules_notices n WHERE n.topic_id=d.topic_id AND n.ops_chat_id=d.chat_id AND n.notice_id=m.reply_to_id AND n.kind='question' AND n.status='sent') OR
+            (SELECT count(*) FROM rules_notices n WHERE n.ops_chat_id=d.chat_id AND n.notice_id=m.reply_to_id AND n.status='sent')!=1 LIMIT 1""")
+    if 'rules_notices' in tables:
+        check('ORPHAN_RULES_NOTICE',"""SELECT 1 FROM rules_notices n WHERE NOT EXISTS
+            (SELECT 1 FROM rules_topics t WHERE t.topic_id=n.topic_id) OR typeof(n.sequence)!='integer' OR n.sequence<=0
+            OR typeof(n.ops_chat_id)!='integer' OR n.ops_chat_id=0 OR (n.status='sent' AND (typeof(n.notice_id)!='integer' OR n.notice_id<=0)) LIMIT 1""")
+    if 'rules_ops_replies' in tables:
+        check('MISMATCH_OPS_SOURCE','''SELECT 1 FROM rules_ops_replies o WHERE NOT EXISTS
+            (SELECT 1 FROM rules_sources s WHERE s.topic_id=o.topic_id AND s.ref=o.ref AND s.chat_id=o.chat_id AND s.message_id=o.message_id) LIMIT 1''')
+    if 'rules_inflight_topics' in tables:
+        check('ORPHAN_INFLIGHT','''SELECT 1 FROM rules_inflight_topics i LEFT JOIN rules_topics t ON t.topic_id=i.topic_id
+            WHERE t.topic_id IS NULL OR (i.batch_id='single:'||i.topic_id AND i.ordinal!=0) OR (i.batch_id!='single:'||i.topic_id AND NOT EXISTS
+            (SELECT 1 FROM rules_batch_groups g WHERE g.batch_id=i.batch_id AND g.ordinal=i.ordinal)) LIMIT 1''')
+    if 'rules_batch_groups' in tables:
+        check('ORPHAN_BATCH_GROUP','''SELECT 1 FROM rules_batch_groups g WHERE NOT EXISTS
+            (SELECT 1 FROM rules_batches b WHERE b.batch_id=g.batch_id) LIMIT 1''')
+    for table,keys in (('rules_readonly_notices',('chat_id','message_id')),('rules_comments',('chat_id','message_id')),
+                       ('rules_lifecycle_questions',('chat_id','source_id')),('rules_lifecycle_answers',('chat_id','source_id'))):
+        if table in tables:
+            check('ORPHAN_SOURCE_LEDGER',f'''SELECT 1 FROM {table} l WHERE NOT EXISTS
+                (SELECT 1 FROM messages m WHERE m.chat_id=l.{keys[0]} AND m.message_id=l.{keys[1]}) LIMIT 1''')
+    if 'rules_append_completions' in tables:
+        check('ORPHAN_APPEND_COMPLETION','''SELECT 1 FROM rules_append_completions a WHERE NOT EXISTS
+            (SELECT 1 FROM rules_comments c WHERE c.chat_id=a.chat_id AND c.message_id=a.message_id AND c.status='done')
+            OR NOT EXISTS (SELECT 1 FROM rules_topics t WHERE t.topic_id=a.topic_id) LIMIT 1''')
+    if 'rules_lifecycle_questions' in tables:
+        check('ORPHAN_LIFECYCLE_QUESTION','''SELECT 1 FROM rules_lifecycle_questions q WHERE NOT EXISTS
+            (SELECT 1 FROM rules_topics t WHERE t.topic_id=q.topic_id) OR NOT EXISTS
+            (SELECT 1 FROM rules_batch_groups g WHERE g.batch_id=q.batch_id AND g.ordinal=q.ordinal) LIMIT 1''')
+    if 'rules_lifecycle_answers' in tables:
+        q=("EXISTS (SELECT 1 FROM rules_lifecycle_questions q WHERE q.chat_id=a.chat_id AND q.source_id=a.source_id)" if 'rules_lifecycle_questions' in tables else '0')
+        e=("EXISTS (SELECT 1 FROM rules_related_episodes e WHERE e.chat_id=a.chat_id AND e.answer_id=a.answer_id)" if 'rules_related_episodes' in tables else '0')
+        check('ORPHAN_LIFECYCLE_ANSWER',f'SELECT 1 FROM rules_lifecycle_answers a WHERE NOT ({q} OR {e}) LIMIT 1')
+    if 'rules_related_episodes' in tables:
+        check('ORPHAN_RELATED_EPISODE','''SELECT 1 FROM rules_related_episodes e WHERE NOT EXISTS
+            (SELECT 1 FROM messages m WHERE m.chat_id=e.chat_id AND m.message_id=e.source_id) OR NOT EXISTS
+            (SELECT 1 FROM rules_lifecycle_answers a WHERE a.chat_id=e.chat_id AND a.answer_id=e.answer_id) LIMIT 1''')
+    for table in ('rules_legacy_transitions','rules_legacy_releases'):
+        if table in tables:
+            check('ORPHAN_TRANSITION_RELEASE',f'''SELECT 1 FROM {table} l WHERE NOT EXISTS
+                (SELECT 1 FROM messages m WHERE m.chat_id=l.chat_id AND m.message_id=l.message_id) OR NOT EXISTS
+                (SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id
+                 WHERE s.chat_id=l.chat_id AND s.message_id=l.message_id) LIMIT 1''')
+    if 'rules_legacy_releases' in tables:
+        check('ORPHAN_RELEASE','''SELECT 1 FROM rules_legacy_releases r WHERE NOT EXISTS
+            (SELECT 1 FROM rules_legacy_transitions t WHERE t.chat_id=r.chat_id AND t.message_id=r.message_id) LIMIT 1''')
+    if 'rules_analysis_review_members' in tables:
+        check('ORPHAN_ANALYSIS_MEMBER','''SELECT 1 FROM rules_analysis_review_members m WHERE NOT EXISTS
+            (SELECT 1 FROM rules_analysis_reviews r WHERE r.review_id=m.review_id) OR NOT EXISTS
+            (SELECT 1 FROM messages s WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id) LIMIT 1''')
+    def rows(table,columns):
+        try:
+            json_columns={'plan','receipt','recurrence_keys','source_keys'}
+            selected=','.join(f'CASE WHEN length(CAST({column} AS BLOB))<=262144 THEN {column} ELSE NULL END' if column in json_columns else column for column in columns.split(','))
+            result=[];used=0
+            for index,row in enumerate(connection.execute('SELECT '+selected+' FROM '+table+' LIMIT ?',(limit+1,))):
+                used+=sum(len(v.encode('utf8')) for v in row if isinstance(v,str))
+                if index>=limit or used>8*1024*1024:blockers.append('BINDING_VALIDATION_TRUNCATED');break
+                result.append(row)
+            return result
+        except sqlite3.Error:
+            blockers.append('BINDING_SCHEMA_UNKNOWN');return []
+    def decode(raw):
+        from .legacy_preflight import _json
+        return _json(raw)
+    if 'rules_analysis_reviews' in tables:
+        from .rules_analysis import load,source_bindings_valid
+        for ident,raw in rows('rules_analysis_reviews','review_id,receipt'):
+            try:
+                value=decode(raw)
+                found=connection.execute('SELECT g.plan,b.fingerprint FROM rules_batch_groups g JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.batch_id=? AND g.ordinal=?',
+                    (value['batch_id'],value['ordinal'])).fetchone()
+                if not found or load(connection,decode(found[0]),found[1])!=value or not source_bindings_valid(connection,value):raise ValueError()
+            except (ValueError,TypeError,KeyError,IndexError,UnicodeError,sqlite3.Error):blockers.append('ANALYSIS_RECEIPT_MISMATCH')
+    if 'rules_related_receipts' in tables:
+        plan_hashes={}
+        if 'rules_batch_groups' in tables:
+            for raw, in rows('rules_batch_groups','plan'):
+                try:
+                    value=decode(raw);sha=hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                    plan_hashes[sha]=value
+                except (ValueError,TypeError):blockers.append('MALFORMED_BINDING_RECORD')
+        for chat,repo,parent,sha,recurrence,source in rows('rules_related_receipts','chat_id,repo,parent_number,plan_hash,recurrence_keys,source_keys'):
+            try:
+                plan=plan_hashes.get(sha);keys=decode(source);recurring=decode(recurrence)
+                episode=connection.execute('SELECT source_id,answer_id FROM rules_related_episodes WHERE chat_id=? AND repo=? COLLATE NOCASE AND parent_number=?',(chat,repo,parent)).fetchone()
+                if not plan or keys!=plan['source_keys'] or not recurring or not episode or any(k not in keys for k in recurring):raise ValueError()
+            except (ValueError,TypeError,KeyError,sqlite3.Error):blockers.append('RELATED_RECEIPT_MISMATCH')
+    blockers.extend(_lifecycle_relation_blockers(connection,tables))
+    return sorted(set(blockers))
+
+def _proven_closed_chat_sources(connection):
+    """Recognize the existing completed CHAT checkpoint, never arbitrary closed-topic bindings."""
+    from .legacy_preflight import _json
+    tables={row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'rules_batch_groups','rules_batches','rules_topics','rules_sources','rules_decisions'}<=tables:return set()
+    recoverable={(batch,ordinal) for batch,ordinal,status in _recoverable_batch_groups(connection) if status=='DONE'}
+    proven=set()
+    rows=connection.execute("""SELECT g.batch_id,g.ordinal,g.plan,g.status,b.fingerprint FROM rules_batch_groups g
+        JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.status IN ('RESERVED','DONE') LIMIT 1001""").fetchall()
+    if len(rows)>1000:raise RulesHalt('CHAT ownership validation incomplete; Owner inspection required')
+    for batch,ordinal,raw,status,fingerprint in rows:
+        try:
+            plan=_json(raw);snapshot=plan.get('pending_snapshot');topic=plan.get('pending_topic')
+            if plan.get('state')!='CHAT' or not topic or not isinstance(snapshot,dict):continue
+            if status=='RESERVED' and (batch,ordinal) not in recoverable:continue
+            current=connection.execute('SELECT status,last_at,asked,fallback_asked FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
+            sources=[list(row) for row in connection.execute('SELECT ref,chat_id,message_id FROM rules_sources WHERE topic_id=? ORDER BY ref',(topic,))]
+            if (not current or current[0]!='CLOSED' or snapshot.get('status')!='OPEN'
+                    or sources!=snapshot.get('sources') or tuple(current[1:])!=(snapshot.get('last_at'),snapshot.get('asked'),snapshot.get('fallback_asked'))):continue
+            if not connection.execute("SELECT 1 FROM rules_decisions WHERE topic_id=? AND state='CHAT' AND fingerprint=? AND decision_rule=?",(topic,fingerprint,plan['rule'])).fetchone():continue
+            keys=plan['source_keys'];members={(chat,mid) for _,chat,mid in sources}
+            if not keys or any(tuple(key) not in members or not connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='chat' AND reason=?",(*key,plan['rule'])).fetchone() for key in keys):continue
+            for _,chat,mid in sources:
+                row=connection.execute('SELECT decision,github_called_at,issue_number,issue_url FROM messages WHERE chat_id=? AND message_id=?',(chat,mid)).fetchone()
+                if row and row[0]=='pending_review' and all(value is None for value in row[1:]):proven.add((chat,mid))
+        except (ValueError,TypeError,KeyError,sqlite3.Error):continue
+    return proven
+
+
+def _lifecycle_relation_blockers(connection,tables):
+    """Question-backed A/B and direct related episodes have different durable authority proofs."""
+    from .legacy_preflight import _json
+    blockers=[];questions={}
+    if 'rules_lifecycle_questions' in tables:
+        try:
+            rows=connection.execute('''SELECT chat_id,source_id,
+                CASE WHEN length(topic_id)<=1000 THEN topic_id END,parent_number,
+                CASE WHEN length(repo)<=200 THEN repo END,plan_id,fingerprint,batch_id,ordinal,
+                CASE WHEN length(evidence_answer)<=2000 THEN evidence_answer END,
+                CASE WHEN length(recurrence_answer)<=2000 THEN recurrence_answer END,
+                CASE WHEN length(question)<=2000 THEN question END
+                FROM rules_lifecycle_questions LIMIT 1001''').fetchall()
+            if len(rows)>1000:blockers.append('LIFECYCLE_VALIDATION_TRUNCATED')
+            for row in rows[:1000]:
+                chat,source,topic,parent,repo,planid,fp,batch,ordinal,evidence,recurrence,question_text=row
+                try:
+                    saved=connection.execute('SELECT g.plan,b.fingerprint FROM rules_batch_groups g JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.batch_id=? AND g.ordinal=?',(batch,ordinal)).fetchone()
+                    if not saved:raise ValueError()
+                    plan=_json(saved[0]);targets=[p for p in plan.get('targets',[]) if p.get('chat_id')==chat and p.get('reply_message_id')==source]
+                    expected_topic=plan.get('pending_topic') or f"{plan['source_keys'][0][0]}:{min(k[1] for k in plan['source_keys'])}"
+                    if (plan.get('state') not in ('LIFECYCLE_QUESTION','RELATED') or fp!=saved[1]
+                            or planid!=readonly_plan_id(batch,ordinal,fp,plan) or topic!=expected_topic
+                            or len(targets)!=1 or targets[0]['number']!=parent
+                            or question_text!=plan.get('lifecycle_question') or not isinstance(question_text,str) or not question_text
+                            or evidence!=plan.get('lifecycle_evidence_answer') or recurrence!=plan.get('lifecycle_recurrence_answer')
+                            or not isinstance(repo,str) or not isinstance(evidence,str) or not evidence or not isinstance(recurrence,str) or not recurrence):raise ValueError()
+                    # The plan retains the original Reply target even when the question binds a later episode.
+                    # Episode-notice aliases resolve to their durable source, not a synthetic Telegram message.
+                    target=targets[0];origin=target.get('recurrence_origin_number',parent)
+                    target_source=target.get('target_source_id',target.get('reply_to_id'))
+                    original=connection.execute('SELECT issue_number,issue_url FROM messages WHERE chat_id=? AND message_id=?',
+                        (chat,target_source)).fetchone()
+                    if (not original or original[0]!=origin
+                            or original[1]!=f'https://github.com/{repo}/issues/{origin}'):raise ValueError()
+                    notice=connection.execute("SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?",(chat,source)).fetchone()
+                    from .ticket_status import sent_notice_identity
+                    if (not notice or notice[0]!='LIFECYCLE_QUESTION' or notice[1]!='sent'
+                            or not sent_notice_identity(connection,chat,notice[2])):raise ValueError()
+                    questions[(chat,source)]=(evidence,recurrence,notice[2])
+                except (ValueError,TypeError,KeyError,sqlite3.Error):blockers.append('LIFECYCLE_QUESTION_MISMATCH')
+        except sqlite3.Error:blockers.append('BINDING_SCHEMA_UNKNOWN')
+    if 'rules_lifecycle_answers' in tables:
+        try:
+            rows=connection.execute('SELECT chat_id,source_id,answer_id,choice FROM rules_lifecycle_answers LIMIT 1001').fetchall()
+            if len(rows)>1000:blockers.append('LIFECYCLE_VALIDATION_TRUNCATED')
+            for chat,source,answer,choice in rows[:1000]:
+                try:
+                    if choice not in ('evidence','recurrence'):raise ValueError()
+                    message=connection.execute('''SELECT reply_to_id,is_forward,
+                        CASE WHEN length(text)<=2000 THEN text END FROM messages WHERE chat_id=? AND message_id=?''',(chat,answer)).fetchone()
+                    if not message:raise ValueError()
+                    question=questions.get((chat,source))
+                    if question:
+                        expected=question[0] if choice=='evidence' else question[1]
+                        if message[0]!=question[2] or message[1] or not isinstance(message[2],str) or message[2].strip()!=expected:raise ValueError()
+                    else:
+                        # No question is valid only for host-grounded direct recurrence, bound by its related receipt.
+                        if connection.execute('SELECT 1 FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',(chat,source)).fetchone():raise ValueError()
+                        episode=connection.execute('''SELECT e.parent_number,r.source_keys,r.recurrence_keys FROM rules_related_episodes e
+                            JOIN rules_related_receipts r ON r.chat_id=e.chat_id AND r.repo=e.repo COLLATE NOCASE AND r.parent_number=e.parent_number
+                            WHERE e.chat_id=? AND e.source_id=? AND e.answer_id=?''',(chat,answer,answer)).fetchone()
+                        if choice!='recurrence' or not episode:raise ValueError()
+                        keys=_json(episode[1]);recurring=_json(episode[2])
+                        if [chat,source] not in keys or [chat,answer] not in recurring:raise ValueError()
+                except (ValueError,TypeError,KeyError,sqlite3.Error):blockers.append('LIFECYCLE_ANSWER_MISMATCH')
+        except sqlite3.Error:blockers.append('BINDING_SCHEMA_UNKNOWN')
+    return blockers

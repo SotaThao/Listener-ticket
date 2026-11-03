@@ -79,10 +79,8 @@ def main(argv=None) -> int:
             print(json.dumps(action(args.db,manifest),ensure_ascii=False,indent=2))
             return 0
         if args.command == 'legacy-preflight':
-            from .legacy_preflight import inspect, attachment_evidence
-            report=inspect(args.db)
-            if args.attachment_evidence:
-                report['attachment_evidence']=attachment_evidence(args.db)
+            from .legacy_preflight import inspect
+            report=inspect(args.db,include_attachment_evidence=args.attachment_evidence)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
         if args.command == "trace":

@@ -1438,3 +1438,33 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         self.assertEqual((result.issue_number,provider.document_ref),(42,2))
         self.assertEqual(len(uploader.files),1)
         self.assertEqual(tuple(store.connection.execute('SELECT chat_id,message_id FROM attachments').fetchone()),(settings.telegram.ops_chat_id,42))
+
+
+    def test_genuine_deferred_ops_reply_raw_recovery_before_completed_binding(self):
+        from tg_triage.rules_pending_store import check_before_recovery
+        snapshot=self.snapshot()
+        class Provider:
+            settings=SimpleNamespace(model='test');think=False;supports_vision=False
+            calls=0
+            def _ask(self,body,parse,attempts):
+                self.calls+=1
+                return parse('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]}}}]}')
+        db=Path(self.temp.name)/'deferred-raw-restart.sqlite3';store=Store(db)
+        settings=replace(config(),mode='live',autonomous_enabled=True,decision_rules_enabled=True,
+                         telegram=replace(config().telegram,ops_chat_id=-1009876543210))
+        provider=Provider();github=FakeGitHub();sent=[]
+        pipeline=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 78)
+        pipeline.process(message(42,text='bị lỗi'))
+        pending=pipeline.rules_pending;topic=f'{message().chat_id}:42'
+        self.assertTrue(pending.claim_topic(topic,pending.topic_snapshot(topic)))
+        late=message(101,text='POS kẹt giấy',chat_id=settings.telegram.ops_chat_id,reply_to_id=78,received_at=store.clock())
+        self.assertTrue(pending.accept_ops_message(late,7))
+        self.assertTrue(pending.is_deferred_ops_reply(late.chat_id,late.message_id))
+        self.assertIsNone(store.connection.execute('SELECT 1 FROM rules_ops_replies WHERE message_id=101').fetchone())
+        store.close();before=db.read_bytes();check_before_recovery(db);self.assertEqual(before,db.read_bytes())
+        store=Store(db);self.addCleanup(store.close)
+        restarted=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 79)
+        result=restarted.process(late)
+        self.assertIsNone(result)  # Store recovery already retained the queued deferred Reply as HOLD.
+        self.assertEqual(('pending_review','rules_reply_deferred_during_effect'),tuple(store.connection.execute('SELECT decision,reason FROM messages WHERE chat_id=? AND message_id=?',(late.chat_id,late.message_id)).fetchone()))
+        self.assertEqual(1,provider.calls);self.assertEqual([],github.calls);self.assertEqual(1,len(sent))

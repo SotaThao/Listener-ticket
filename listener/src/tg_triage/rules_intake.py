@@ -15,6 +15,34 @@ def _source_evidence_id(message):
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()
 
 
+def _grounded_lifecycle(value,context,members,documents=()):
+    from dataclasses import replace
+    from .lifecycle import grounded_recurrence
+    text={row['message_id']:row.get('text','') for row in documents if row.get('read_status')=='read'}
+    evidence=[replace(m,text=m.text+'\n'+text[m.message_id]) if m.message_id in text else m for m in members]
+    return grounded_recurrence(value,context,evidence)
+
+
+def _lifecycle_originals(pipeline,source,plan):
+    from .store import _to_message
+    rows=[pipeline.store.get(*key) for key in plan.get('source_keys',[[source.chat_id,source.message_id]])]
+    if any(row is None for row in rows): raise ValueError('missing recurrence source')
+    originals=[_to_message(row) for row in rows]
+    if any(m.chat_id!=source.chat_id or m.is_forward for m in originals): raise ValueError('untrusted recurrence members')
+    return originals
+
+
+def _related_members(pipeline,source,plan):
+    originals=_lifecycle_originals(pipeline,source,plan)
+    lifecycle=plan.get('lifecycle') or {}
+    from .lifecycle import partition_source_roles
+    historical,recurring,unknown=partition_source_roles(lifecycle,{m.message_id:m.reply_to_id for m in originals})
+    recurrence=[m for m in originals if m.message_id in recurring|unknown]
+    if not recurrence: raise ValueError('empty recurrence')
+    recurrence.sort(key=lambda m:(m.received_at,m.message_id))
+    return originals,recurrence,[m for m in originals if m.message_id in historical]
+
+
 def _task_grounded(task, members, read_context=(), documents=()):
     import re
     from .analysis_task import projection, render_excerpts, explicit_task
@@ -78,8 +106,9 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
     early = early_decision(snapshot, sources)
     if early is not None: return ((tuple(sources),early),)
     from .rules_extraction import partition_and_extract
+    reviews={}
     try:
-        groups = partition_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context)
+        groups = partition_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=reviews)
         if groups is None: return None
         if allow_mixed and len(groups) != 1: return None
         owner = {mid: n for n,(ids,_) in enumerate(groups) for mid in ids}
@@ -89,7 +118,7 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
             if target is not None and (source.has_image or target.has_image) and owner[source.message_id] != owner[target.message_id]:
                 return None
         outcomes = []
-        for ids, facts in groups:
+        for group_index,(ids, facts) in enumerate(groups):
             members = tuple(source for source in sources if source.message_id in ids)
             if len(members) != len(ids): return None
             if snapshot.extensions:
@@ -103,21 +132,18 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
                     grounded_sources = {m.message_id for m in members if m.text.strip()}
                     if selected == 'ANALYZE':
                         grounded_sources |= set(images or {}) & set(ids)
-                    if (len(members) != 1 or not intent.get('source_ids') or
+                    if ((selected=='STATUS' and len(members)!=1) or not intent.get('source_ids') or
                             not set(intent['source_ids']) <= set(ids) or
                             not set(intent['source_ids']) & grounded_sources or
                             (selected == 'ANALYZE' and 'task' not in facts) or
                             code_facts(members).command != '∅'):
                         return None
                     if selected == 'ANALYZE':
-                        # Conservative grounding: until semantic claims can be
-                        # independently verified, each output phrase must occur
-                        # in source or actually-read context/document text.
-                        if not _task_grounded(facts['task'],members,read_context,documents or ()):
-                            return None
+                        if group_index not in reviews: return None
+                        members=tuple(sorted(members,key=lambda m:m.message_id))
                     outcomes.append((members, Decision(selected, intent['value'], 'extension',
                         'extension_' + intent['value'], MappingProxyType({}), (), (),
-                        snapshot.fingerprint, facts.get('task'))))
+                        snapshot.fingerprint, facts.get('task'), analysis_review=reviews.get(group_index))))
                     continue
             target = reply_target_for(members) if reply_target_for is not None else 'none'
             lifecycle = facts.get('lifecycle')
@@ -154,9 +180,9 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
                     evaluated=replace(evaluated,state='APPEND_CLOSED',rule='lifecycle_direct_evidence')
                     outcomes.append((members,evaluated))
                     continue
-                if (lifecycle['kind'] in ('unclear', 'reused_success') and len(members)==1
+                if (lifecycle['kind'] in ('unclear', 'reused_success') and not any(m.is_forward for m in members)
                         and snapshot.extensions.disposition(lifecycle['kind'])=='QUESTION'):
-                    evaluated=replace(evaluated,state='LIFECYCLE_QUESTION',rule='lifecycle_clarification')
+                    evaluated=replace(evaluated,state='LIFECYCLE_QUESTION',rule='lifecycle_clarification',lifecycle=lifecycle)
                     outcomes.append((members,evaluated))
                     continue
                 # Related episode and clarification need their own durable
@@ -167,8 +193,12 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
                 reason='lifecycle_'+lifecycle['kind']+'_pending'
                 if lifecycle['kind']=='recurrence':
                     from .lifecycle import grounded_recurrence
-                    if grounded_recurrence(lifecycle,trusted_context,members):
-                        reason='lifecycle_recurrence_grounded_pending'
+                    if (not any(m.is_forward for m in members)
+                            and _grounded_lifecycle(lifecycle,trusted_context,members,documents or ())
+                            and snapshot.extensions.disposition('recurrence')=='RELATED'):
+                        evaluated=replace(evaluated,state='RELATED',rule='lifecycle_direct_recurrence',lifecycle=lifecycle)
+                        outcomes.append((members,evaluated))
+                        continue
                 evaluated = replace(evaluated,state='HOLD',rule=reason)
             if evaluated.state == 'NEED_INFO' and unread_doc_ids:
                 return None
@@ -302,13 +332,13 @@ def _process_single_with_images(pipeline, message):
     return result
 
 
-def _read_only_result(pipeline, source, topic, decision, *, plan_id=None):
+def _read_only_result(pipeline, source, topic, decision, *, plan_id=None, evidence_plan=None, evidence_origin=None):
     """Render validated analysis or re-read host status; no issue write authority."""
     import hashlib
     from . import analysis_task, ticket_status
     from .models import Decision
     if decision.state == 'ANALYZE':
-        body = (analysis_task.render(decision.task) if analysis_task.explicit_task(decision.task,source.text,source.is_forward)
+        body = (analysis_task.render(decision.task) if evidence_plan and evidence_plan.get('analysis_review') or analysis_task.explicit_task(decision.task,source.text,source.is_forward)
                 else analysis_task.render_excerpts(decision.task))
         reason = 'semantic_analyze'
     elif decision.state == 'STATUS':
@@ -321,11 +351,24 @@ def _read_only_result(pipeline, source, topic, decision, *, plan_id=None):
         return Decision('pending_review','rule',case_key=topic,reason='readonly_notice_unavailable')
     if pipeline.config.mode != 'dry-run' and plan_id is None:
         return Decision('pending_review','rule',case_key=topic,reason='readonly_plan_missing')
-    pipeline.store.finish(source, result)
+    if decision.state=='ANALYZE' and evidence_plan and evidence_plan.get('analysis_review'):
+        from .rules_analysis import validate
+        if not validate(pipeline,evidence_plan,evidence_origin):
+            return Decision('pending_review','rule',case_key=topic,reason='rules_analysis_evidence_changed')
+    reviewed=decision.state=='ANALYZE' and evidence_plan and evidence_plan.get('analysis_review')
+    if not reviewed:
+        pipeline.store.finish(source,result)
+    elif pipeline.config.mode=='dry-run':
+        from .rules_analysis import finish_members
+        with pipeline.store._lock,pipeline.store.connection:finish_members(pipeline.store,evidence_plan,result)
     if pipeline.config.mode != 'dry-run':
         from .rules_pending_store import RulesHalt
         store=pipeline.store
         with store._lock, store.connection:
+            if decision.state=='ANALYZE' and evidence_plan and evidence_plan.get('analysis_review'):
+                from .rules_analysis import metadata_valid
+                if not metadata_valid(pipeline,evidence_plan,evidence_origin):
+                    raise RulesHalt('analysis evidence changed before notice reservation')
             existing=store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(source.chat_id,source.message_id)).fetchone()
             if existing:
                 return Decision('pending_review','rule',case_key=topic,reason='readonly_notice_conflict')
@@ -339,7 +382,20 @@ def _read_only_result(pipeline, source, topic, decision, *, plan_id=None):
             sent=None
         status='sent' if type(sent) is int and sent>0 else 'failed'
         try:
-            store.finish_group_notice(source.chat_id,source.message_id,status,sent if status=='sent' else None)
+            if reviewed and status=='sent':
+                from .rules_analysis import metadata_valid,finish_members
+                with store._lock,store.connection:
+                    proof=store.connection.execute('SELECT kind,plan_id,body_hash,body FROM rules_readonly_notices WHERE chat_id=? AND message_id=?',
+                        (source.chat_id,source.message_id)).fetchone()
+                    changed=store.connection.execute("UPDATE group_notices SET status='sent',finished_at=?,notice_message_id=? WHERE chat_id=? AND message_id=? AND kind='ANALYZE' AND status='reserved'",
+                        (store.clock().isoformat(),sent,source.chat_id,source.message_id))
+                    valid=(changed.rowcount==1 and proof is not None and tuple(proof)==('ANALYZE',plan_id,hashlib.sha256(body.encode('utf-8')).hexdigest(),body)
+                        and metadata_valid(pipeline,evidence_plan,evidence_origin)
+                        and ticket_status.sent_notice_identity(store.connection,source.chat_id,sent))
+                    if valid:finish_members(store,evidence_plan,result)
+                if not valid:raise RulesHalt('analysis confirmation proof changed; sent receipt retained')
+            else:
+                store.finish_group_notice(source.chat_id,source.message_id,status,sent if status=='sent' else None)
         except Exception as error:
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required') from error
         if status!='sent':
@@ -353,7 +409,7 @@ def _read_only_result(pipeline, source, topic, decision, *, plan_id=None):
         except Exception as error:
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required') from error
         expected=(decision.state,'sent',sent,decision.state,plan_id,hashlib.sha256(body.encode('utf-8')).hexdigest(),body)
-        if notice is None or tuple(notice)!=expected:
+        if notice is None or tuple(notice)!=expected or not ticket_status.sent_notice_identity(store.connection,source.chat_id,sent):
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required')
     return result
 
@@ -367,7 +423,7 @@ def _send_lifecycle_question(pipeline, source, topic, target, question, plan_id,
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_question_dry_run')
     if pipeline.notice_sender is None:
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_question_unavailable')
-    if _resolve_reply_target(pipeline,source)!=target or target['state']!='closed':
+    if _resolve_lifecycle_target(pipeline,source,target)!=target or target['state']!='closed':
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_lookup_failed')
     store=pipeline.store
     store.finish(source,result)
@@ -393,7 +449,7 @@ def _send_lifecycle_question(pipeline, source, topic, target, question, plan_id,
                 WHERE n.chat_id=? AND n.message_id=?''',(source.chat_id,source.message_id)).fetchone()
             collisions=store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(source.chat_id,sent)).fetchone()[0]
             local_collision=store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(source.chat_id,sent)).fetchone()
-        if (type(sent) is not int or sent<=source.message_id or row is None or tuple(row)!=
+        if (type(sent) is not int or sent<=max(pair[1] for pair in pipeline.rules_pending.sources(topic).values()) or row is None or tuple(row)!=
                 ('LIFECYCLE_QUESTION','sent',sent,topic,target['number'],pipeline.config.gh_repo,plan_id,question,
                  pipeline.rules_snapshot.fingerprint,choices['evidence_answer'],choices['recurrence_answer'],batch_id,ordinal) or collisions!=1 or local_collision):
             raise RulesHalt('lifecycle question outcome unresolved; Owner inspection required')
@@ -405,6 +461,16 @@ def _send_lifecycle_question(pipeline, source, topic, target, question, plan_id,
 
 
 def _lifecycle_answer(pipeline,message):
+    previous=pipeline._prepared_images
+    try:
+        return _lifecycle_answer_inner(pipeline,message)
+    finally:
+        if pipeline._prepared_images is not previous:
+            if pipeline._prepared_images is not None: pipeline._prepared_images.close()
+            pipeline._prepared_images=previous
+
+
+def _lifecycle_answer_inner(pipeline,message):
     """Process only an exact reply to a sent lifecycle question in the same chat."""
     if message.reply_to_id is None or not pipeline.rules_snapshot.extensions:
         return None
@@ -442,6 +508,9 @@ def _lifecycle_answer(pipeline,message):
     if source_row is None:
         store.finish(message,waiting); return waiting
     source=_to_message(source_row)
+    from .store import _aware
+    if _aware(message.received_at)<_aware(source.received_at):
+        store.finish(message,waiting); return waiting
     from .rules_pending_store import readonly_plan_id
     import json
     with store._lock:
@@ -451,8 +520,9 @@ def _lifecycle_answer(pipeline,message):
         plan=json.loads(planned['plan']) if planned else None
         if (not planned or planned['status']!='DONE' or planned['fingerprint']!=q['fingerprint']
                 or readonly_plan_id(q['batch_id'],q['ordinal'],q['fingerprint'],plan)!=q['plan_id']
-                or plan.get('state')!='LIFECYCLE_QUESTION' or plan.get('source_keys')!=[[message.chat_id,q['source_id']]]
-                or plan.get('lifecycle_source_evidence')!=_source_evidence_id(source)
+                or plan.get('state') not in ('LIFECYCLE_QUESTION','RELATED') or [message.chat_id,q['source_id']] not in plan.get('source_keys',())
+                or any(key[0]!=message.chat_id for key in plan.get('source_keys',()))
+                or (plan.get('lifecycle_sources') or {}).get(str(source.message_id),plan.get('lifecycle_source_evidence'))!=_source_evidence_id(source)
                 or plan.get('lifecycle_question')!=q['question'] or plan.get('lifecycle_evidence_answer')!=q['evidence_answer']
                 or plan.get('lifecycle_recurrence_answer')!=q['recurrence_answer']):
             raise ValueError('question plan mismatch')
@@ -460,13 +530,20 @@ def _lifecycle_answer(pipeline,message):
         pipeline.rules_pending.add_source(q['topic_id'],message.chat_id,message.message_id)
         store.finish(message,waiting); return waiting
     try:
-        proof=_resolve_reply_target(pipeline,source)
+        expected=next(p for p in plan.get('targets',()) if p['reply_message_id']==source.message_id)
+        proof=_resolve_lifecycle_target(pipeline,source,expected)
     except Exception:
         proof=None
-    if not proof or proof['state']!='closed' or proof['number']!=q['parent_number'] or plan.get('targets')!=[proof]:
+    if not proof or proof['state']!='closed' or proof['number']!=q['parent_number'] or proof not in plan.get('targets',()):
         pipeline.rules_pending.add_source(q['topic_id'],message.chat_id,message.message_id)
         store.finish(message,waiting); return waiting
     choice='evidence' if message.text.strip()==choices['evidence_answer'] else 'recurrence'
+    try:
+        originals=_lifecycle_originals(pipeline,source,plan)
+        docs,context=_validate_saved_lifecycle_evidence(pipeline,q['topic_id'],plan,originals)
+        if choice=='recurrence': _validate_recurrence_roles(plan,originals,context,docs)
+    except Exception:
+        store.finish(message,waiting); return waiting
     with store._lock,store.connection:
         topic_state=store.connection.execute("SELECT status FROM rules_topics WHERE topic_id=?",(q['topic_id'],)).fetchone()
         if topic_state is None or topic_state['status']!='OPEN':
@@ -487,23 +564,30 @@ def _lifecycle_answer(pipeline,message):
     # An explicit A can append additional text as evidence, but it cannot
     # authorize media, forwarded instructions or unrelated conversation.
     # Recurrence still requires its own fresh success proof and holds context.
-    supported_context=(choice=='evidence' and member_count==len(bound) and len(context)<=8 and
+    planned_keys={tuple(key) for key in plan['source_keys']}
+    extras=[m for m in context if (m.chat_id,m.message_id) not in planned_keys]
+    supported_context=(choice=='evidence' and member_count==len(bound) and len(extras)<=8 and
         all(m.chat_id==source.chat_id and source.message_id<m.message_id<message.message_id and
             m.reply_to_id==source.message_id and not m.is_forward and not m.has_attachment and
             m.text.strip().startswith(choices['evidence_context_prefix']+' ') and
             m.text.strip()[len(choices['evidence_context_prefix']):].strip()
-            for m in context))
+            for m in extras))
     exact_members=(member_count==len(bound) and {(r['chat_id'],r['message_id']) for r in bound}.issuperset(
         {(source.chat_id,source.message_id),(message.chat_id,message.message_id)}))
-    if not exact_members or (member_count!=2 and not supported_context):
+    original_members={(r['chat_id'],r['message_id']) for r in bound if r['message_id']!=message.message_id}
+    exact_members=exact_members and planned_keys<=original_members and all(_aware(message.received_at)>=_aware(_to_message(row).received_at) for row in bound)
+    if not exact_members or (member_count!=len(planned_keys)+1 and not supported_context):
         with store._lock,store.connection:
             changed=store.connection.execute("UPDATE rules_lifecycle_answers SET status='awaiting_context' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",(message.chat_id,q['source_id'],message.message_id)).rowcount
         if changed!=1: raise RulesHalt('lifecycle answer outcome unresolved; Owner inspection required')
         store.finish(message,waiting)
         return waiting
     if choice=='recurrence':
+        hashes=plan.get('lifecycle_sources')
+        if hashes and hashes!={str(row['message_id']):_source_evidence_id(_to_message(row)) for row in bound if row['message_id']!=message.message_id}:
+            store.finish(message,waiting); return waiting
         return _create_related_episode(pipeline,q,source,message,proof,plan)
-    result=_append_batch_group(pipeline,q['topic_id'],[source,*context,message],SimpleNamespace(state='APPEND_CLOSED',present={},rule='lifecycle_confirmed_evidence'),[proof],())
+    result=_append_batch_group(pipeline,q['topic_id'],[source,*context,message],SimpleNamespace(state='APPEND_CLOSED',present={},rule='lifecycle_confirmed_evidence'),plan['targets'],plan.get('document_reads',()),asset_proofs=plan.get('lifecycle_assets'),evidence_plan=plan,plan_origin=(q['batch_id'],q['ordinal']))
     if result.decision!='followup':
         raise RulesHalt('lifecycle answer outcome unresolved; Owner inspection required')
     with store._lock,store.connection:
@@ -512,7 +596,319 @@ def _lifecycle_answer(pipeline,message):
     return result
 
 
-def _create_related_episode(pipeline,q,source,answer,proof,plan):
+def _stored_recurrence_lineage(connection,chat_id,repo,number,owned_reservation=None):
+    """Follow only verified same-chat episode edges; never guess a latest target."""
+    chain=[]; seen={number}
+    for _ in range(40):
+        rows=connection.execute("""SELECT chat_id,source_id AS anchor,answer_id,issue_number,status FROM rules_related_episodes
+            WHERE repo=? COLLATE NOCASE AND parent_number=?""",(repo,number)).fetchall()
+        legacy=connection.execute("""SELECT e.chat_id,e.anchor_message_id AS anchor,e.issue_number FROM followup_episodes e
+            JOIN followup_roots r ON r.root_key=e.parent_root_key
+            WHERE e.repo=? COLLATE NOCASE AND r.issue_number=?""",(repo,number)).fetchall()
+        if not rows and not legacy: return chain
+        if len(rows)+len(legacy)!=1: raise ValueError('ambiguous episode successor')
+        edge=rows[0] if rows else legacy[0]
+        if (rows and len(rows)==1 and not legacy and owned_reservation is not None
+                and (number,edge['anchor'],edge['answer_id'])==owned_reservation
+                and edge['chat_id']==chat_id and edge['status']=='reserved' and edge['issue_number'] is None): return chain
+        if edge['chat_id']!=chat_id or rows and edge['status']!='done': raise ValueError('unresolved episode successor')
+        child=edge['issue_number']; anchor=edge['anchor']
+        if type(child) is not int or child<=0 or child in seen: raise ValueError('invalid episode lineage')
+        source=connection.execute('SELECT decision,issue_number,issue_url FROM messages WHERE chat_id=? AND message_id=?',(chat_id,anchor)).fetchone()
+        if (not source or source['decision'] not in ('issue','followup') or source['issue_number']!=child
+                or source['issue_url']!=f'https://github.com/{repo}/issues/{child}'): raise ValueError('invalid episode source')
+        chain.append({'number':child,'source_id':anchor}); seen.add(child); number=child
+    raise ValueError('episode lineage limit')
+
+
+def _resolve_lifecycle_target(pipeline,message,expected,owned_reservation=None):
+    """A recurrence question may bind a verified latest descendant of the Reply."""
+    proof=_resolve_reply_target(pipeline,message)
+    if not expected.get('recurrence_origin_number'): return proof
+    if not proof or proof['number']!=expected['recurrence_origin_number']: return None
+    with pipeline.store._lock:
+        chain=_stored_recurrence_lineage(pipeline.store.connection,message.chat_id,pipeline.config.gh_repo,proof['number'],owned_reservation)
+    if not chain: return None
+    latest=chain[-1]; number=latest['number']
+    observed=pipeline.github.lifecycle_snapshot(number)
+    if (observed.get('number')!=number or observed.get('repo','').casefold()!=pipeline.config.gh_repo.casefold()
+            or observed.get('state')!='closed' or not observed.get('observed_at')
+            or not isinstance(observed.get('updated_at'),str) or not observed['updated_at'].strip()): return None
+    return dict(proof,number=number,state='closed',updated_at=observed['updated_at'],
+        recurrence_origin_number=proof['number'],recurrence_parent_source_id=latest['source_id'])
+
+
+def _recurrence_predecessor(pipeline,source,parent):
+    """Validate report chronology against both durable episode lineages."""
+    from .store import _aware
+    from datetime import datetime
+    store=pipeline.store; repo=pipeline.config.gh_repo
+    with store._lock:
+        origins=store.connection.execute("""SELECT chat_id,source_id AS anchor,status FROM rules_related_episodes
+            WHERE repo=? COLLATE NOCASE AND issue_number=?""",(repo,parent)).fetchall()
+        legacy=store.connection.execute("""SELECT chat_id,anchor_message_id AS anchor,created_at FROM followup_episodes
+            WHERE repo=? COLLATE NOCASE AND issue_number=?""",(repo,parent)).fetchall()
+        if len(origins)+len(legacy)>1: raise ValueError('ambiguous episode lineage')
+        for origin in [*origins,*legacy]:
+            row=store.get(origin['chat_id'],origin['anchor'])
+            if (origin['chat_id']!=source.chat_id or row is None or row['issue_number']!=parent
+                    or row['issue_url']!=f'https://github.com/{repo}/issues/{parent}'
+                    or source.message_id<=origin['anchor']
+                    or _aware(source.received_at)<_aware(datetime.fromisoformat(row['received_at']))):
+                raise ValueError('report predates latest episode')
+        if origins and origins[0]['status']!='done': raise ValueError('episode unresolved')
+        if legacy and _aware(source.received_at)<_aware(datetime.fromisoformat(legacy[0]['created_at'])):
+            raise ValueError('report predates verified legacy episode')
+    return bool(origins or legacy)
+
+
+def _direct_related_episode(pipeline,source,topic,plan,batch_id,ordinal):
+    """Use the existing episode reservation for directly grounded evidence."""
+    from .models import Decision
+    from .rules_pending_store import readonly_plan_id
+    store=pipeline.store
+    proof=plan['targets'][0]
+    from .store import _to_message
+    source=_to_message(store.get(source.chat_id,proof['reply_message_id']))
+    originals,recurrence,historical=_related_members(pipeline,source,plan)
+    answer=recurrence[0]
+    parent=proof['number']
+    with store._lock:
+        successor=store.connection.execute('SELECT 1 FROM rules_related_episodes WHERE repo=? COLLATE NOCASE AND parent_number=?',
+            (pipeline.config.gh_repo,parent)).fetchone()
+        legacy_successor=store.connection.execute("""SELECT 1 FROM followup_episodes e JOIN followup_roots r
+            ON r.root_key=e.parent_root_key WHERE r.issue_number=? AND e.repo=? COLLATE NOCASE LIMIT 1""",
+            (parent,pipeline.config.gh_repo)).fetchone()
+    try:
+        predecessor=_recurrence_predecessor(pipeline,source,parent)
+    except (ValueError,TypeError):
+        return Decision('pending_review','rule',case_key=topic,reason='lifecycle_chronology_unavailable')
+    # Receipt time dates the report, not an event described retrospectively.
+    # The existing bound A/B question is the only host-verifiable assertion
+    # that success happened AFTER the latest episode; arbitrary prose is not.
+    if successor or legacy_successor or predecessor:
+        if successor or legacy_successor:
+            import json
+            updated=[]
+            try:
+                for target in plan['targets']:
+                    original_source=_to_message(store.get(target['chat_id'],target['reply_message_id']))
+                    latest=_resolve_lifecycle_target(pipeline,original_source,dict(target,recurrence_origin_number=target['number']))
+                    if latest is None: raise ValueError('latest episode unavailable')
+                    updated.append(latest)
+                with store._lock,store.connection:
+                    row=store.connection.execute("SELECT plan FROM rules_batch_groups WHERE batch_id=? AND ordinal=? AND status='RESERVED'",(batch_id,ordinal)).fetchone()
+                    if row is None or json.loads(row[0])!=plan: raise ValueError('question plan changed')
+                    plan['targets']=updated
+                    store.connection.execute('UPDATE rules_batch_groups SET plan=? WHERE batch_id=? AND ordinal=?',
+                        (json.dumps(plan,ensure_ascii=False,separators=(',',':')),batch_id,ordinal))
+                proof=updated[0]
+            except (ValueError,TypeError):
+                return Decision('pending_review','rule',case_key=topic,reason='lifecycle_latest_episode_unavailable')
+        if pipeline.rules_snapshot.extensions.disposition('reused_success')!='QUESTION':
+            return Decision('pending_review','rule',case_key=topic,reason='lifecycle_reused_success_pending')
+        return _send_lifecycle_question(pipeline,source,topic,proof,
+            pipeline.rules_snapshot.extensions.clarification['question'],
+            readonly_plan_id(batch_id,ordinal,pipeline.rules_snapshot.fingerprint,plan),batch_id,ordinal)
+    with store._lock,store.connection:
+        inserted=store.connection.execute("INSERT OR IGNORE INTO rules_lifecycle_answers VALUES(?,?,?,?,'reserved')",
+            (source.chat_id,source.message_id,answer.message_id,'recurrence')).rowcount
+    if not inserted:
+        return Decision('pending_review','rule',case_key=topic,reason='lifecycle_recurrence_pending')
+    return _create_related_episode(pipeline,{'topic_id':topic,'parent_number':parent,'batch_id':batch_id,'ordinal':ordinal},source,answer,proof,plan,direct=True)
+
+
+def _validate_saved_lifecycle_evidence(pipeline,topic,plan,originals,*,owned_reservation=None,fresh_assets=False,check_targets=True):
+    """Validate host snapshots for either clarification answer before any write."""
+    from . import document_reader
+    from .store import _to_message
+    import hashlib
+    hashes=plan.get('lifecycle_sources')
+    if hashes and hashes!={str(m.message_id):_source_evidence_id(m) for m in originals}:
+        raise ValueError('source provenance changed')
+    context=[]
+    for mid,digest in (plan.get('lifecycle_context') or {}).items():
+        row=pipeline.store.get(originals[0].chat_id,int(mid))
+        if row is None or _source_evidence_id(_to_message(row))!=digest: raise ValueError('context provenance changed')
+        context.append(_to_message(row))
+    if check_targets:
+        for target in plan.get('targets',()):
+            authority=next((m for m in originals if (m.chat_id,m.message_id)==(target['chat_id'],target['reply_message_id'])),None)
+            if authority is None or _resolve_lifecycle_target(pipeline,authority,target,owned_reservation)!=target:
+                raise ValueError('saved lifecycle target changed')
+    docs=[]
+    if any(m.has_document for m in originals):
+        stored=plan.get('document_reads')
+        if not stored: raise ValueError('document proof missing')
+        docs=document_reader.read_documents(originals,pipeline.attachments.downloader)
+        if (not document_reader.valid_proof(stored,originals)
+                or document_reader.proof(docs)!=[{k:v for k,v in row.items() if k!='processing'} for row in stored]):
+            raise ValueError('document provenance changed')
+    inspection=pipeline._prepared_images; owned=None
+    try:
+        if plan.get('lifecycle_pixels'):
+            if fresh_assets:
+                owned=pipeline.attachments.prepare_images(topic,originals);inspection=owned
+            elif inspection is None:
+                pipeline._prepared_images=pipeline.attachments.prepare_images(topic,originals);inspection=pipeline._prepared_images
+            pixels=inspection.for_messages(originals)
+            if plan['lifecycle_pixels']!={str(mid):hashlib.sha256(path.read_bytes()).hexdigest() for mid,path in pixels.items()}:
+                raise ValueError('pixel provenance changed')
+        if any(m.has_attachment for m in originals):
+            expected=plan.get('lifecycle_assets')
+            if not isinstance(expected,dict) or any(value is None for value in expected.values()):
+                raise ValueError('attachment proof missing')
+            actual=pipeline.attachments.capture_proof(topic,originals,prepared=inspection if not fresh_assets or owned is not None else None,
+                document_reads=plan.get('document_reads',()))
+            if actual!=expected or any(value is None for value in actual.values()): raise ValueError('attachment bytes changed')
+    finally:
+        if owned is not None:owned.close()
+    return docs,context
+
+
+def _prewrite_lifecycle_guard(pipeline,topic,plan,members,plan_origin,*,owned_reservation=None,require_roles=False,question_answer=False):
+    """Reload all authority after waits; no DB lock is held during I/O or POST."""
+    from .rules_pending_store import RulesHalt
+    from .store import _to_message
+    import json,hashlib
+    store=pipeline.store
+    try:
+        # Always reconstruct from SQLite, never validate stale Message objects.
+        with store._lock:
+            originals=[]
+            for key in plan['source_keys']:
+                row=store.get(*key)
+                if row is None: raise ValueError('source missing')
+                originals.append(_to_message(row))
+        docs,context=_validate_saved_lifecycle_evidence(pipeline,topic,plan,originals,owned_reservation=owned_reservation,fresh_assets=True,check_targets=False)
+        if require_roles: _validate_recurrence_roles(plan,originals,context,docs)
+        # Trusted target GET is the last external read after all file waits.
+        for target in plan['targets']:
+            row=store.get(target['chat_id'],target['reply_message_id'])
+            if row is None or _resolve_lifecycle_target(pipeline,_to_message(row),target,owned_reservation)!=target:
+                raise ValueError('target changed during proof reads')
+        # Document/download/trusted-GET checks can wait. Finish with an atomic
+        # metadata/plan/reservation read, then release SQLite before the POST.
+        with store._lock:
+            try:
+                store.connection.execute('BEGIN IMMEDIATE')
+                stored=store.connection.execute("""SELECT g.plan,g.status,b.fingerprint FROM rules_batch_groups g
+                    JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.batch_id=? AND g.ordinal=?""",plan_origin).fetchone()
+                if (not stored or stored['status']!=('DONE' if question_answer else 'RESERVED') or json.loads(stored['plan'])!=plan
+                        or stored['fingerprint']!=pipeline.rules_snapshot.fingerprint): raise ValueError('saved plan changed')
+                bound_topic=store.connection.execute('SELECT status,source_chat_id,phase FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
+                if (not bound_topic or bound_topic['status']!='OPEN' or bound_topic['source_chat_id']!=originals[0].chat_id
+                        or bound_topic['phase']=='LEGACY_REVIEW'): raise ValueError('bound topic is no longer active')
+                if not question_answer:
+                    batch_topic=store.connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(plan_origin[0],)).fetchone()
+                    if not batch_topic or batch_topic['status']!='OPEN': raise ValueError('batch topic is no longer active')
+                expected={tuple(key) for key in plan['source_keys']} | {(m.chat_id,m.message_id) for m in members}
+                actual={tuple(row) for row in store.connection.execute('SELECT chat_id,message_id FROM rules_sources WHERE topic_id=?',(topic,))}
+                if actual!=expected: raise ValueError('source membership changed')
+                for message in members:
+                    row=store.get(message.chat_id,message.message_id)
+                    if row is None or _source_evidence_id(_to_message(row))!=_source_evidence_id(message): raise ValueError('source or confirmation changed')
+                for mid,digest in (plan.get('lifecycle_sources') or {}).items():
+                    row=store.get(originals[0].chat_id,int(mid))
+                    if row is None or _source_evidence_id(_to_message(row))!=digest: raise ValueError('saved source changed')
+                for mid,digest in (plan.get('lifecycle_context') or {}).items():
+                    row=store.get(originals[0].chat_id,int(mid))
+                    if row is None or _source_evidence_id(_to_message(row))!=digest: raise ValueError('saved context changed')
+                authority=plan['targets'][0]
+                from .lifecycle import partition_source_roles
+                _,recurring,unknown=partition_source_roles(plan.get('lifecycle'),{m.message_id:m.reply_to_id for m in originals})
+                if require_roles and unknown: raise ValueError('source roles changed')
+                original_ids={m.message_id for m in originals}
+                for message in members:
+                    row=store.get(message.chat_id,message.message_id)
+                    if any(row[field] is not None for field in ('issue_number','issue_url','case_key','group_key')):
+                        raise ValueError('source ownership changed')
+                    reserved=owned_reservation is not None and message.message_id in recurring and message.message_id in original_ids
+                    if (reserved and (row['decision']!='pending' or not row['github_called_at'])
+                            or not reserved and (row['github_called_at'] is not None or row['decision'] not in ('pending_review','classifying','queued'))):
+                        raise ValueError('source reservation changed')
+                if question_answer:
+                    from .rules_pending_store import readonly_plan_id
+                    question=store.connection.execute('SELECT parent_number,repo,plan_id,fingerprint,question FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',
+                        (authority['chat_id'],authority['reply_message_id'])).fetchone()
+                    expected_question=(authority['number'],pipeline.config.gh_repo,readonly_plan_id(*plan_origin,pipeline.rules_snapshot.fingerprint,plan),
+                        pipeline.rules_snapshot.fingerprint,plan['lifecycle_question'])
+                    question_notice=store.connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',
+                        (authority['chat_id'],authority['reply_message_id'])).fetchone()
+                    if (not question or tuple(question)!=expected_question or not question_notice
+                            or tuple(question_notice)!=('LIFECYCLE_QUESTION','sent',members[-1].reply_to_id)
+                            or store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(members[-1].chat_id,members[-1].reply_to_id)).fetchone()[0]!=1
+                            or store.get(members[-1].chat_id,members[-1].reply_to_id) is not None):
+                        raise ValueError('question authority changed')
+                answer=store.connection.execute('SELECT choice,status,answer_id FROM rules_lifecycle_answers WHERE chat_id=? AND source_id=?',
+                    (authority['chat_id'],authority['reply_message_id'])).fetchone()
+                expected_answer=(('recurrence','reserved',owned_reservation[2]) if owned_reservation is not None
+                    else ('evidence','reserved',members[-1].message_id))
+                if not answer or tuple(answer)!=expected_answer: raise ValueError('confirmation reservation changed')
+                if owned_reservation is not None:
+                    parent,anchor,notice=owned_reservation
+                    operation=store.connection.execute('SELECT source_id,answer_id,status FROM rules_related_episodes WHERE chat_id=? AND repo=? AND parent_number=?',
+                        (originals[0].chat_id,pipeline.config.gh_repo,parent)).fetchone()
+                    receipt=store.connection.execute('SELECT plan_hash,recurrence_keys,source_keys FROM rules_related_receipts WHERE chat_id=? AND repo=? AND parent_number=?',
+                        (originals[0].chat_id,pipeline.config.gh_repo,parent)).fetchone()
+                    digest=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf8')).hexdigest()
+                    if (not operation or tuple(operation)!=(anchor,notice,'reserved') or not receipt or receipt[0]!=digest
+                            or json.loads(receipt[1])!=[[m.chat_id,m.message_id] for m in sorted(originals,key=lambda m:(m.received_at,m.message_id)) if m.message_id in recurring]
+                            or json.loads(receipt[2])!=plan['source_keys']):
+                        raise ValueError('related reservation changed')
+                else:
+                    authority=plan['targets'][0]
+                    operation=store.connection.execute('SELECT repo,issue_number,status FROM rules_comments WHERE chat_id=? AND message_id=?',
+                        (authority['chat_id'],authority['reply_message_id'])).fetchone()
+                    if not operation or tuple(operation)!=(pipeline.config.gh_repo,authority['number'],'reserved'):
+                        raise ValueError('comment reservation changed')
+                store.connection.commit()
+            except Exception:
+                if store.connection.in_transaction: store.connection.rollback()
+                raise
+    except Exception as error:
+        if isinstance(error,RulesHalt): raise
+        raise RulesHalt('saved lifecycle evidence changed or unavailable before POST; reservation retained') from None
+
+
+def _validate_recurrence_roles(plan,originals,context,docs):
+    """B resolves event timing, not an unproved source-role partition."""
+    lifecycle=plan.get('lifecycle')
+    if lifecycle and (lifecycle.get('knownworking_source_ids') or lifecycle.get('recurrence_source_ids')):
+        if not _grounded_lifecycle(dict(lifecycle,kind='recurrence'),context,originals,docs):
+            raise ValueError('source roles ungrounded')
+    elif len(originals)!=1:
+        raise ValueError('batch source roles remain uncertain')
+    from .lifecycle import partition_source_roles
+    _,_,unknown=partition_source_roles(lifecycle,{m.message_id:m.reply_to_id for m in originals})
+    if unknown: raise ValueError('uncited source role has no proven Reply binding')
+
+
+def _create_related_episode(pipeline,q,source,answer,proof,plan,*,direct=False):
+    """Recheck all supplied evidence before the shared related reservation."""
+    from .models import Decision
+    from .rules_pending_store import RulesHalt
+    previous=pipeline._prepared_images
+    try:
+        originals,_,_=_related_members(pipeline,source,plan)
+        docs,context=_validate_saved_lifecycle_evidence(pipeline,q['topic_id'],plan,originals)
+        _validate_recurrence_roles(plan,originals,context,docs)
+        return _create_related_episode_inner(pipeline,q,source,answer,proof,plan,direct=direct)
+    except Exception as error:
+        if isinstance(error,RulesHalt):raise
+        with pipeline.store._lock,pipeline.store.connection:
+            pipeline.store.connection.execute("UPDATE rules_lifecycle_answers SET status='awaiting_recurrence' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",
+                (source.chat_id,source.message_id,answer.message_id))
+        result=Decision('pending_review','rule',case_key=q['topic_id'],reason='lifecycle_recurrence_evidence_changed')
+        pipeline.store.finish(answer,result)
+        return result
+    finally:
+        if pipeline._prepared_images is not previous:
+            if pipeline._prepared_images is not None: pipeline._prepared_images.close()
+            pipeline._prepared_images=previous
+
+
+def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=False):
     """Create the first explicitly confirmed recurrence with readback and no replay."""
     from dataclasses import replace
     from .models import Classification, Decision
@@ -521,6 +917,11 @@ def _create_related_episode(pipeline,q,source,answer,proof,plan):
     from .rules_pending_store import RulesHalt
     from .ticket_templates import active
     store=pipeline.store; repo=pipeline.config.gh_repo; parent=q['parent_number']
+    originals,recurrence,historical=_related_members(pipeline,source,plan)
+    anchor=recurrence[0]
+    notice_source=anchor if direct else answer
+    recurrence_ids={m.message_id for m in recurrence}
+    all_members=originals if direct else [*originals,answer]
     def defer():
         with store._lock,store.connection:
             changed=store.connection.execute("UPDATE rules_lifecycle_answers SET status='awaiting_recurrence' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",(source.chat_id,source.message_id,answer.message_id)).rowcount
@@ -529,12 +930,14 @@ def _create_related_episode(pipeline,q,source,answer,proof,plan):
         store.finish(answer,result)
         return result
     if (pipeline.rules_snapshot.extensions.disposition('recurrence')!='RELATED' or pipeline.config.mode=='dry-run'
-            or pipeline.notice_sender is None or source.has_attachment or not source.text.strip()):
+            or pipeline.notice_sender is None or not any(m.text.strip() or m.has_attachment for m in recurrence)):
         return defer()
     try:
-        facts=dict(plan['present'])
-        facts['intent']={'value':plan['intent'],'source_ids':[source.message_id]}
-        ready=pipeline.rules_snapshot.evaluate(facts,code_facts([source],reply_target='none'))
+        facts={name:field for name,field in plan['present'].items() if set(field['source_ids'])<=recurrence_ids}
+        facts['intent']={'value':plan['intent'],'source_ids':[anchor.message_id]}
+        ready=pipeline.rules_snapshot.evaluate(facts,code_facts(recurrence if direct else [*recurrence,answer],reply_target='none',
+            seen_image_ids=frozenset(int(mid) for mid in (plan.get('lifecycle_pixels') or {}) if int(mid) in recurrence_ids),
+            document_text_ids=frozenset(row['message_id'] for row in plan.get('document_reads',()) if row.get('read_status')=='read' and row['message_id'] in recurrence_ids)))
         if ready.state!='READY' or ready.intent not in ('bug','task','feedback'):
             return defer()
         values=[ready.present[name].value for name in ('object','observed','work','problem','proposal') if name in ready.present]
@@ -544,18 +947,31 @@ def _create_related_episode(pipeline,q,source,answer,proof,plan):
     except (ValueError,KeyError,TypeError):
         return defer()
     try:
-        issue=format_issue(source,classification,'rule',False,pipeline.config.ollama.model,
-                           case_messages=[source,answer],key_message_ids=(source.message_id,),max_quoted=2,details={})
-        issue=replace(issue,body=_recurrence_body(issue.body,f'https://github.com/{repo}/issues/{parent}'))
-    except Exception:
-        return defer()
-    try:
-        if _resolve_reply_target(pipeline,source)!=proof: return defer()
+        if _resolve_lifecycle_target(pipeline,source,proof)!=proof: return defer()
+        for target in plan.get('targets',()):
+            authority=next(m for m in originals if m.message_id==target['reply_message_id'])
+            if _resolve_lifecycle_target(pipeline,authority,target)!=target: return defer()
+        from .store import _aware
+        from datetime import datetime
+        target_row=store.get(source.chat_id,proof.get('recurrence_parent_source_id',proof.get('target_source_id',proof['reply_to_id'])))
+        if target_row is None: return defer()
+        for member in recurrence:
+            if (member.message_id<=target_row['message_id'] or _aware(member.received_at)<_aware(datetime.fromisoformat(target_row['received_at']))): return defer()
+            _recurrence_predecessor(pipeline,member,parent)
+        if _recurrence_predecessor(pipeline,source,parent) and direct: return defer()
     except Exception:
         return defer()
     with store._lock:
         try:
             store.connection.execute('BEGIN IMMEDIATE')
+            try:
+                boundary=_recurrence_predecessor(pipeline,source,parent)
+            except (ValueError,TypeError):
+                store.connection.rollback()
+                return defer()
+            if boundary and direct:
+                store.connection.rollback()
+                return defer()
             # Existing legacy episodes or operations make this deliberately
             # narrow first-episode path ineligible; never reuse old success.
             prior=store.connection.execute('''SELECT 1 FROM followup_episodes e JOIN followup_roots r
@@ -564,23 +980,42 @@ def _create_related_episode(pipeline,q,source,answer,proof,plan):
                 JOIN followup_roots r ON r.root_key=j.root_key WHERE r.issue_number=?
                 AND o.kind='related_create' LIMIT 1''',(parent,)).fetchone()
             existing=store.connection.execute('SELECT 1 FROM rules_related_episodes WHERE repo=? COLLATE NOCASE AND parent_number=?',(repo,parent)).fetchone()
-            notice=store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(answer.chat_id,answer.message_id)).fetchone()
+            notice=store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(notice_source.chat_id,notice_source.message_id)).fetchone()
             members=store.connection.execute('SELECT count(*) FROM rules_sources WHERE topic_id=?',(q['topic_id'],)).fetchone()[0]
-            source_state=store.connection.execute('SELECT decision,github_called_at,case_key,group_key FROM messages WHERE chat_id=? AND message_id=?',(source.chat_id,source.message_id)).fetchone()
-            if (prior or prior_op or existing or notice or members!=2 or source_state is None or tuple(source_state)!=('pending_review',None,None,None)
+            source_states=[store.connection.execute('SELECT decision,github_called_at,case_key,group_key FROM messages WHERE chat_id=? AND message_id=?',(m.chat_id,m.message_id)).fetchone() for m in originals]
+            if (prior or prior_op or existing or notice or members!=len(all_members) or any(row is None or tuple(row)!=('pending_review',None,None,None) for row in source_states)
                     or store.count_recent_issues()>=pipeline.config.max_issues_per_hour):
                 store.connection.rollback()
                 return defer()
             store.connection.execute("INSERT INTO rules_related_episodes(chat_id,repo,parent_number,source_id,answer_id,status) VALUES(?,?,?,?,?,'reserved')",
-                (source.chat_id,repo,parent,source.message_id,answer.message_id))
-            changed=store.connection.execute("UPDATE messages SET decision='pending',github_called_at=? WHERE chat_id=? AND message_id=? AND decision='pending_review' AND github_called_at IS NULL",
-                (store.clock().isoformat(),source.chat_id,source.message_id)).rowcount
-            if changed!=1: raise RulesHalt('recurrence reservation changed')
+                (source.chat_id,repo,parent,anchor.message_id,notice_source.message_id))
+            import hashlib,json
+            plan_hash=hashlib.sha256(json.dumps(plan,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf8')).hexdigest()
+            store.connection.execute('INSERT INTO rules_related_receipts VALUES(?,?,?,?,?,?)',
+                (source.chat_id,repo,parent,plan_hash,json.dumps([[m.chat_id,m.message_id] for m in recurrence]),json.dumps(plan['source_keys'])))
+            for member in recurrence:
+                changed=store.connection.execute("UPDATE messages SET decision='pending',github_called_at=? WHERE chat_id=? AND message_id=? AND decision='pending_review' AND github_called_at IS NULL",
+                    (store.clock().isoformat(),member.chat_id,member.message_id)).rowcount
+                if changed!=1: raise RulesHalt('recurrence reservation changed')
             store.connection.commit()
         except Exception as error:
             if store.connection.in_transaction: store.connection.rollback()
             raise RulesHalt('recurrence reservation unresolved; Owner inspection required') from error
     try:
+        found=pipeline._images(q['topic_id'],recurrence,live=True,
+            document_reads=[row for row in plan.get('document_reads',()) if row['message_id'] in recurrence_ids],asset_proofs=plan.get('lifecycle_assets')) if any(m.has_attachment for m in recurrence) else None
+        # Upload may wait: re-read target and latest boundary immediately before POST.
+        if _resolve_lifecycle_target(pipeline,source,proof,(parent,anchor.message_id,notice_source.message_id))!=proof:
+            raise RulesHalt('related target changed after attachment processing')
+        if _recurrence_predecessor(pipeline,source,parent) and direct:
+            raise RulesHalt('related predecessor changed after attachment processing')
+        issue=format_issue(anchor,classification,'rule',False,pipeline.config.ollama.model,
+            case_messages=recurrence if direct else [*recurrence,answer],key_message_ids=tuple(m.message_id for m in recurrence),
+            max_quoted=len(recurrence)+(0 if direct else 1),details={},
+            images=found.images if found else (),documents=found.documents if found else (),notes=found.notes if found else ())
+        issue=replace(issue,body=_recurrence_body(issue.body,f'https://github.com/{repo}/issues/{parent}'))
+        _prewrite_lifecycle_guard(pipeline,q['topic_id'],plan,all_members,(q['batch_id'],q['ordinal']),
+            owned_reservation=(parent,anchor.message_id,notice_source.message_id),require_roles=True,question_answer=not direct)
         number,_=pipeline.github.create_issue(issue)
         if type(number) is not int or number<=0 or pipeline.github.verify_created_issue(number,issue)!=number:
             raise ValueError('related issue readback not verified')
@@ -591,22 +1026,25 @@ def _create_related_episode(pipeline,q,source,answer,proof,plan):
                 (number,url,notice_body,source.chat_id,repo,parent)).rowcount
             if changed!=1: raise RulesHalt('related issue ledger changed')
             store.connection.execute("INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at) VALUES(?,?,?,'reserved',?)",
-                (answer.chat_id,answer.message_id,'LIFECYCLE_EPISODE',store.clock().isoformat()))
-        sent=pipeline.notice_sender(answer.chat_id,answer.message_id,notice_body)
-        if type(sent) is not int or sent<=answer.message_id: raise RulesHalt('related episode notice unresolved')
-        store.finish_group_notice(answer.chat_id,answer.message_id,'sent',sent)
+                (notice_source.chat_id,notice_source.message_id,'LIFECYCLE_EPISODE',store.clock().isoformat()))
+        sent=pipeline.notice_sender(notice_source.chat_id,notice_source.message_id,notice_body)
+        if type(sent) is not int or sent<=max(m.message_id for m in all_members): raise RulesHalt('related episode notice unresolved')
+        store.finish_group_notice(notice_source.chat_id,notice_source.message_id,'sent',sent)
         with store._lock,store.connection:
-            notice=store.connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',(answer.chat_id,answer.message_id)).fetchone()
+            notice=store.connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',(notice_source.chat_id,notice_source.message_id)).fetchone()
             episode=store.connection.execute('SELECT status,issue_number,issue_url,notice_body FROM rules_related_episodes WHERE chat_id=? AND repo=? AND parent_number=?',(source.chat_id,repo,parent)).fetchone()
-            collisions=store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(answer.chat_id,sent)).fetchone()[0]
-            local_collision=store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(answer.chat_id,sent)).fetchone()
+            collisions=store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(notice_source.chat_id,sent)).fetchone()[0]
+            local_collision=store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(notice_source.chat_id,sent)).fetchone()
             if notice is None or tuple(notice)!=('LIFECYCLE_EPISODE','sent',sent) or collisions!=1 or local_collision or episode is None or tuple(episode)!=('verified',number,url,notice_body):
                 raise RulesHalt('related episode notice unresolved')
-            for item,state in ((source,'issue'),(answer,'followup')):
+            mappings=[(m,'issue' if m.message_id==anchor.message_id else 'followup',number,url) for m in recurrence]
+            mappings += [(m,'followup',parent,f'https://github.com/{repo}/issues/{parent}') for m in historical]
+            if not direct: mappings.append((answer,'followup',number,url))
+            for item,state,target_number,target_url in mappings:
                 changed=store.connection.execute("UPDATE messages SET decision=?,tier='rule',issue_number=?,issue_url=?,reason='lifecycle_related_episode' WHERE chat_id=? AND message_id=?",
-                    (state,number,url,item.chat_id,item.message_id)).rowcount
+                    (state,target_number,target_url,item.chat_id,item.message_id)).rowcount
                 mapped=store.connection.execute('SELECT decision,issue_number,issue_url,reason FROM messages WHERE chat_id=? AND message_id=?',(item.chat_id,item.message_id)).fetchone()
-                if changed!=1 or mapped is None or tuple(mapped)!=(state,number,url,'lifecycle_related_episode'):
+                if changed!=1 or mapped is None or tuple(mapped)!=(state,target_number,target_url,'lifecycle_related_episode'):
                     raise RulesHalt('related source mapping unresolved')
             if store.connection.execute("UPDATE rules_related_episodes SET status='done' WHERE chat_id=? AND repo=? AND parent_number=? AND status='verified'",(source.chat_id,repo,parent)).rowcount!=1:
                 raise RulesHalt('related issue ledger changed')
@@ -682,6 +1120,9 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
     batch_id=batch_id or 'batch:' + str(sources[0].chat_id) + ':' + str(min(m.message_id for m in sources))
     cached=pending.batch(batch_id)
     if cached is None:
+        from .rules_analysis import has_binding
+        if has_binding(pipeline.store.connection,[(m.chat_id,m.message_id) for m in sources]):
+            return Decision('pending_review','rule',case_key=batch_id,reason='rules_analysis_orphaned_receipt')
         pending.create(batch_id,sources[0].chat_id,sources[0].message_id)
         for source in sources[1:]: pending.add_source(batch_id,source.chat_id,source.message_id)
         attempt=pending.reserve_attempt(batch_id,pipeline.rules_snapshot.limits['hold_max_retries'])
@@ -783,22 +1224,43 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
         for index,(members,decision) in enumerate(groups):
             pending_group=pending_groups.get(index)
             if pending_group: decision=pending_group[1]
-            if decision.state not in ('READY','APPEND','APPEND_CLOSED','NEED_INFO','CHAT','MEDIA_ONLY','ANALYZE','STATUS','HOLD','LIFECYCLE_QUESTION'):
+            if decision.state not in ('READY','APPEND','APPEND_CLOSED','NEED_INFO','CHAT','MEDIA_ONLY','ANALYZE','STATUS','HOLD','LIFECYCLE_QUESTION','RELATED'):
                 pending.finish_attempt(batch_id,attempt)
                 return Decision('pending_review','rule',case_key=batch_id,reason='rules_unsupported')
+            assets=None
+            if decision.state in ('RELATED','LIFECYCLE_QUESTION'):
+                from dataclasses import replace
+                if len(members)>pipeline.config.aggregation.max_messages_per_window:
+                    decision=replace(decision,state='HOLD',rule='lifecycle_attachment_evidence_unavailable')
+                else:
+                    try:
+                        assets=pipeline.attachments.capture_proof(batch_id,members,prepared=pipeline._prepared_images,
+                            document_reads=document_reader.proof([row for row in documents if row['message_id'] in {m.message_id for m in members}]))
+                        if any(value is None for value in assets.values()):raise ValueError('attachment unavailable')
+                    except Exception:
+                        assets=None
+                        decision=replace(decision,state='HOLD',rule='lifecycle_attachment_evidence_unavailable')
+            from .rules_analysis import persist as persist_analysis_review
             plans.append(dict(source_keys=[[m.chat_id,m.message_id] for m in members],state=decision.state,
                 intent=decision.intent,intent_rule=decision.intent_rule,rule=decision.rule,
                 present={k:{'value':v.value,'source_ids':list(v.source_ids)} for k,v in decision.present.items()},
                 questions=list(decision.questions),asked_fields=list(decision.asked_fields),
-                task=decision.task,
-                lifecycle_question=(pipeline.rules_snapshot.extensions.clarification['question'] if decision.state=='LIFECYCLE_QUESTION' else None),
-                lifecycle_evidence_answer=(pipeline.rules_snapshot.extensions.clarification['evidence_answer'] if decision.state=='LIFECYCLE_QUESTION' else None),
-                lifecycle_recurrence_answer=(pipeline.rules_snapshot.extensions.clarification['recurrence_answer'] if decision.state=='LIFECYCLE_QUESTION' else None),
-                lifecycle_source_evidence=(_source_evidence_id(members[0]) if decision.state=='LIFECYCLE_QUESTION' else None),
+                task=decision.task, analysis_review=(persist_analysis_review(pipeline.store,dict(decision.analysis_review,batch_id=batch_id,ordinal=index)) if decision.analysis_review else None),
+                analysis_origin=([batch_id,index] if decision.analysis_review else None),
+                lifecycle=decision.lifecycle,lifecycle_assets=assets,
+                lifecycle_sources=({str(m.message_id):_source_evidence_id(m) for m in members} if decision.state in ('RELATED','LIFECYCLE_QUESTION') else None),
+                lifecycle_pixels=({str(mid):__import__('hashlib').sha256(path.read_bytes()).hexdigest() for mid,path in images.items()
+                    if mid in {m.message_id for m in members}} if decision.state in ('RELATED','LIFECYCLE_QUESTION') else None),
+                lifecycle_context=({str(m.message_id):_source_evidence_id(m) for m in context
+                    if m.message_id in {item.reply_to_id for item in members}} if decision.state in ('RELATED','LIFECYCLE_QUESTION') else None),
+                lifecycle_question=(pipeline.rules_snapshot.extensions.clarification['question'] if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
+                lifecycle_evidence_answer=(pipeline.rules_snapshot.extensions.clarification['evidence_answer'] if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
+                lifecycle_recurrence_answer=(pipeline.rules_snapshot.extensions.clarification['recurrence_answer'] if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
+                lifecycle_source_evidence=(_source_evidence_id(members[0]) if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
                 targets=[proofs[m.message_id] for m in members if proofs.get(m.message_id)],
                 pending_topic=pending_group[0] if pending_group else None,
                 pending_reply_ids=list(pending_group[2]) if pending_group else [],
-                document_reads=document_reader.proof([row for row in documents if row['message_id'] in {m.message_id for m in members}])))
+                document_reads=document_reader.proof(sorted([row for row in documents if row['message_id'] in {m.message_id for m in members}],key=lambda row:row['message_id']) if decision.analysis_review else [row for row in documents if row['message_id'] in {m.message_id for m in members}])))
         updates=[(index,group[0],group[3],group[4]) for index,group in pending_groups.items()]
         if not pending.save_batch(batch_id,pipeline.rules_snapshot.fingerprint,plans,updates):
             pending.finish_attempt(batch_id,attempt)
@@ -822,6 +1284,29 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
         ids={key[1] for key in plan['source_keys']}
         if any(row is None for row in rows):
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
+        if plan.get('state')=='RELATED':
+            from .store import _to_message
+            from .lifecycle import grounded_recurrence
+            current=[_to_message(row) for row in rows]
+            context=pipeline.store.autonomous_read_context(current)
+            context=[m for m in context if m.message_id in {item.reply_to_id for item in current}]
+            if (any(m.is_forward for m in current) or plan.get('pending_topic')
+                    or not plan.get('targets') or len({p['number'] for p in plan['targets']})!=1 or plan.get('rule')!='lifecycle_direct_recurrence'
+                    or plan.get('lifecycle_source_evidence')!=_source_evidence_id(current[0])
+                    or plan.get('lifecycle_context')!={str(m.message_id):_source_evidence_id(m) for m in context}
+                    or plan.get('lifecycle_sources')!={str(m.message_id):_source_evidence_id(m) for m in current}):
+                return Decision('pending_review','rule',case_key=batch_id,reason='lifecycle_recurrence_pending')
+            from . import document_reader
+            docs=document_reader.read_documents(current,pipeline.attachments.downloader) if plan.get('document_reads') else []
+            stored=plan.get('document_reads',())
+            if (stored and (not document_reader.valid_proof(stored,current)
+                    or document_reader.proof(docs)!=[{k:v for k,v in row.items() if k!='processing'} for row in stored])):
+                return Decision('pending_review','rule',case_key=batch_id,reason='rules_document_provenance_changed')
+            pixels=pipeline._prepared_images.for_messages(current) if pipeline._prepared_images is not None else {}
+            import hashlib
+            if (plan.get('lifecycle_pixels')!={str(mid):hashlib.sha256(path.read_bytes()).hexdigest() for mid,path in pixels.items()}
+                    or not _grounded_lifecycle(plan.get('lifecycle'),context,current,docs)):
+                return Decision('pending_review','rule',case_key=batch_id,reason='lifecycle_recurrence_pending')
         if plan.get('state')=='APPEND_CLOSED':
             from .store import _to_message
             if (plan.get('rule')!='lifecycle_direct_evidence' or plan.get('pending_topic')
@@ -830,19 +1315,23 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 return Decision('pending_review','rule',case_key=batch_id,reason='lifecycle_evidence_pending')
         if plan.get('state')=='LIFECYCLE_QUESTION':
             from .store import _to_message
-            if (len(rows)!=1 or plan.get('pending_topic') or len(plan.get('targets',()))!=1
+            if (plan.get('pending_topic') or not plan.get('targets') or len({p['number'] for p in plan['targets']})!=1
                     or plan.get('lifecycle_question')!=pipeline.rules_snapshot.extensions.clarification['question']
                     or plan.get('lifecycle_source_evidence')!=_source_evidence_id(_to_message(rows[0]))
+                    or plan.get('lifecycle_sources') and plan['lifecycle_sources']!={str(row['message_id']):_source_evidence_id(_to_message(row)) for row in rows}
                     or plan.get('lifecycle_evidence_answer')!=pipeline.rules_snapshot.extensions.clarification['evidence_answer']
                     or plan.get('lifecycle_recurrence_answer')!=pipeline.rules_snapshot.extensions.clarification['recurrence_answer']):
                 return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
         if plan['state'] in ('ANALYZE','STATUS'):
             from .analysis_task import valid_task
-            if (len(rows)!=1 or plan.get('pending_topic') or plan.get('targets') or
+            if ((len(rows)!=1 and (plan['state']=='STATUS' or not plan.get('analysis_review'))) or plan.get('pending_topic') or plan.get('targets') or
                     (plan['state']=='ANALYZE' and not valid_task(plan.get('task'))) or
                     (plan['state']=='STATUS' and plan.get('task') is not None)):
                 return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
             if plan['state']=='ANALYZE':
+                from .rules_analysis import has_binding
+                if not plan.get('analysis_review') and has_binding(pipeline.store.connection,plan['source_keys']):
+                    return Decision('pending_review','rule',case_key=batch_id,reason='rules_analysis_receipt_missing')
                 from .store import _to_message
                 from . import document_reader
                 source_members=[_to_message(row) for row in rows]
@@ -857,7 +1346,11 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                             or not document_reader.valid_contents(evidence_docs)
                             or document_reader.proof(evidence_docs)!=raw_proof):
                         return Decision('pending_review','rule',case_key=batch_id,reason='rules_document_provenance_changed')
-                if not _task_grounded(plan.get('task'),source_members,context,evidence_docs):
+                if plan.get('analysis_review'):
+                    from .rules_analysis import validate
+                    if not validate(pipeline,plan):
+                        return Decision('pending_review','rule',case_key=batch_id,reason='rules_analysis_evidence_changed')
+                elif not _task_grounded(plan.get('task'),source_members,context,evidence_docs):
                     return Decision('pending_review','rule',case_key=batch_id,reason='rules_task_ungrounded')
             continue
         for reply_id in plan.get('pending_reply_ids',()):
@@ -870,7 +1363,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             expected={p['reply_message_id']:p for p in plan.get('targets',())}
             for row in rows:
                 if row['reply_to_id'] is not None and row['reply_to_id'] not in ids:
-                    if _resolve_reply_target(pipeline,_to_message(row)) != expected.get(row['message_id']):
+                    if _resolve_lifecycle_target(pipeline,_to_message(row),expected.get(row['message_id']) or {}) != expected.get(row['message_id']):
                         return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
         except Exception:
             return Decision('pending_review','rule',case_key=batch_id,reason='lifecycle_lookup_failed')
@@ -915,9 +1408,17 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             from dataclasses import replace
             journal={k:Field(v.value,tuple(refs[(first.chat_id,mid)] for mid in v.source_ids)) for k,v in decision.present.items()}
             pending.record_decision(topic,replace(decision,present=journal))
-        if decision.state=='LIFECYCLE_QUESTION':
+        if decision.state=='RELATED':
+            result=_direct_related_episode(pipeline,first,topic,plan,batch_id,ordinal)
+            if result.decision=='pending_review' and result.reason!='lifecycle_question_sent':
+                pipeline.store.finish(first,result)
+                pending.transition_group(batch_id,ordinal,'RESERVED','BLOCKED')
+                results.append(result)
+                continue
+        elif decision.state=='LIFECYCLE_QUESTION':
             from .rules_pending_store import readonly_plan_id
-            result=_send_lifecycle_question(pipeline,first,topic,plan['targets'][0],plan['lifecycle_question'],
+            authority=next(m for m in members if m.message_id==plan['targets'][0]['reply_message_id'])
+            result=_send_lifecycle_question(pipeline,authority,topic,plan['targets'][0],plan['lifecycle_question'],
                 readonly_plan_id(batch_id,ordinal,fingerprint,plan),batch_id,ordinal)
             if result.reason!='lifecycle_question_sent':
                 pipeline.store.finish(first,result)
@@ -926,7 +1427,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 continue
         elif decision.state in ('ANALYZE','STATUS'):
             from .rules_pending_store import readonly_plan_id
-            result=_read_only_result(pipeline,first,topic,decision,plan_id=readonly_plan_id(batch_id,ordinal,fingerprint,plan))
+            result=_read_only_result(pipeline,first,topic,decision,plan_id=readonly_plan_id(batch_id,ordinal,fingerprint,plan),evidence_plan=plan,evidence_origin=(batch_id,ordinal))
             if result.decision=='pending_review':
                 pipeline.store.finish(first,result)
                 pending.transition_group(batch_id,ordinal,'RESERVED','BLOCKED')
@@ -994,6 +1495,11 @@ def _resolve_reply_target(pipeline,message):
     if (row is not None and row['decision']=='pending_review' and
             isinstance(row['reason'],str) and row['reason'].startswith('lifecycle_')):
         raise ValueError('closed lifecycle is awaiting reconciliation')
+    if row is not None:
+        from .store import _aware
+        from datetime import datetime
+        if _aware(datetime.fromisoformat(row['received_at']))>_aware(message.received_at):
+            raise ValueError('reply report predates its target')
     number=row['issue_number'] if row is not None else None
     if (row is None or type(number) is not int or number <= 0 or row['decision'] not in ('issue','followup')
             or row['issue_url'] != f'https://github.com/{pipeline.config.gh_repo}/issues/{number}'):
@@ -1026,7 +1532,7 @@ def _finish_comment_proven(pipeline, chat_id, message_id, number, comment_id):
         raise RulesHalt('comment outcome unresolved; Owner inspection required') from error
 
 
-def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads):
+def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,asset_proofs=None,evidence_plan=None,plan_origin=None):
     from .models import Decision
     from .pipeline import Plan
     from .followups import _enrichment_comment, _source_body
@@ -1035,7 +1541,7 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads):
     if not proofs or len({p['number'] for p in proofs}) != 1: raise ValueError('invalid append target')
     proof=proofs[0]; number=proof['number']
     authority=next(m for m in members if m.message_id==proof['reply_message_id'])
-    current=_resolve_reply_target(pipeline,authority)
+    current=_resolve_lifecycle_target(pipeline,authority,proof)
     expected_state = 'closed' if decision.state == 'APPEND_CLOSED' else 'open'
     if current != proof or current['state'] != expected_state:
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_lookup_failed')
@@ -1052,18 +1558,25 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads):
     for member in members:
         link=telegram_link(member)
         if member is not authority and link: body=_source_body(body,link)
-    found=pipeline._images(topic,members,live=True,document_reads=document_reads) if any(m.has_attachment for m in members) else None
+    found=pipeline._images(topic,members,live=True,document_reads=document_reads,asset_proofs=asset_proofs) if any(m.has_attachment for m in members) else None
     if found:
         body += ''.join('\n\n!['+alt+']('+url+')' for alt,url in found.images)
         body += ''.join('\n\n['+name+']('+url+')' for name,url in found.documents)
         body += ''.join('\n\n'+note for note in found.notes)
+    for target_proof in proofs:
+        target_source=next(m for m in members if m.message_id==target_proof['reply_message_id'])
+        if _resolve_lifecycle_target(pipeline,target_source,target_proof)!=target_proof:
+            from .rules_pending_store import RulesHalt
+            raise RulesHalt('comment target changed after attachment processing; Owner inspection required')
+    if evidence_plan is not None:
+        _prewrite_lifecycle_guard(pipeline,topic,evidence_plan,members,plan_origin,question_answer=True)
     try: comment_id=pipeline.github.add_comment(number,body)
     except Exception: comment_id=None
     _finish_comment_proven(pipeline,authority.chat_id,authority.message_id,number,comment_id)
     if type(comment_id) is not int or comment_id<=0:
         _send_ops(pipeline,authority,topic,'error',active().render('group-replies.md','notice.comment_ambiguous'))
         return Decision('error','rule',case_key=topic,reason='comment_ambiguous')
-    target=pipeline.store.get(authority.chat_id,proof.get('target_source_id',authority.reply_to_id))
+    target=pipeline.store.get(authority.chat_id,proof.get('recurrence_parent_source_id',proof.get('target_source_id',authority.reply_to_id)))
     expected=f'https://github.com/{pipeline.config.gh_repo}/issues/{number}'
     _map_append_proven(pipeline,members,number,expected,target)
     if not _send_ops(pipeline,authority,topic,'other',active().render('group-replies.md','followup.updated')+'\n'+expected):

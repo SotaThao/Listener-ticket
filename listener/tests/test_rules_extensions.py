@@ -12,6 +12,28 @@ from tg_triage.decision_rules import RulesSnapshot
 ROOT = Path(__file__).resolve().parents[1] / 'rules'
 
 
+
+def fixture_analysis_review(body):
+    """Compatibility fixture for literal legacy proposals; never a model quality claim."""
+    if 'reviews' not in body.get('format',{}).get('properties',{}):return None
+    proposals=json.loads(body['messages'][0]['content'].split('Proposals:\n',1)[1])
+    packet=json.loads(body['messages'][1]['content']);texts={}
+    for row in packet['sources']+packet.get('read_only_context',[]):texts[row['message_id']]=row['text']
+    for row in packet.get('DOCUMENT_CONTENTS',[]):
+        if row.get('read_status')=='read':texts[row['message_id']]=texts.get(row['message_id'],'')+'\n'+row['text']
+    reviews=[]
+    for proposal in proposals:
+        fields=[('title',proposal['task']['title']),('work',proposal['task']['work'])]+[(f'acceptance/{i}',v) for i,v in enumerate(proposal['task']['acceptance'])]
+        claims=[]
+        for field,value in fields:
+            match=next(((mid,text) for mid,text in texts.items() if value in text),None)
+            if match:
+                mid,text=match
+                mode='text' if any(r['message_id']==mid and value in r['text'] for r in packet['sources']+packet.get('read_only_context',[])) else 'document'
+                claims.append(dict(field=field,evidence=[dict(source_id=mid,modality=mode,quote=value)]))
+        reviews.append(dict(group_index=proposal['group_index'],verdict='approve' if len(claims)==len(fields) else 'reject',claims=claims))
+    return json.dumps(dict(reviews=reviews))
+
 class ExtensionRulesTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -70,6 +92,8 @@ class ExtensionRulesTests(unittest.TestCase):
             think = False
             def __init__(self, intent): self.intent = intent
             def _ask(self, body, parser, attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 facts = {'intent': {'value': self.intent, 'source_ids': [42]}}
                 if self.intent == 'analyze':
                     facts['task'] = {'title': 'Kiểm tra hiển thị', 'work': 'Phân tích phần bị cắt',
@@ -146,6 +170,8 @@ class ExtensionRulesTests(unittest.TestCase):
             settings = SimpleNamespace(model='test')
             think = False
             def _ask(self, body, parser, attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 self.packet = json.loads(body['messages'][1]['content'])
                 return parser(json.dumps({'groups':[{'message_ids':[42], 'facts':{
                     'intent':{'value':'analyze','source_ids':[42]},
@@ -666,7 +692,7 @@ class ExtensionRulesTests(unittest.TestCase):
         self.assertIsNone(pipeline.process(message(106,text='B',reply_to_id=105)))
         self.assertEqual(2,len(github.calls))
 
-    def test_reused_success_triggers_lifecycle_question(self):
+    def test_model_reused_success_is_not_in_outgoing_contract(self):
         from tg_triage.pipeline import Pipeline
         from tg_triage.store import Store
         from tests.helpers import config, message, FakeGitHub
@@ -677,6 +703,7 @@ class ExtensionRulesTests(unittest.TestCase):
             settings=SimpleNamespace(model='test'); think=False
             def _ask(self,body,parser,attempts):
                 mid=json.loads(body['messages'][1]['content'])['source_ids'][0]
+                assert 'reused_success' not in body['format']['properties']['groups']['items']['properties']['facts']['properties']['lifecycle']['properties']['kind']['enum']
                 return parser(json.dumps({'groups':[{'message_ids':[mid],'facts':{
                     'intent':{'value':'bug','source_ids':[mid]},'object':{'value':'POS','source_ids':[mid]},
                     'observed':{'value':'lỗi lặp lại','source_ids':[mid]},
@@ -690,8 +717,9 @@ class ExtensionRulesTests(unittest.TestCase):
         github=FakeGitHub(); github.lifecycle_snapshot=lambda n:{'number':n,'repo':'sandbox/triage','state':'closed','observed_at':'now','updated_at':'version-1'}
         sent=[]; pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 99)
         result=pipeline.process(message(42,text='POS lỗi lặp lại',reply_to_id=10))
-        self.assertEqual('lifecycle_question_sent',result.reason)
-        self.assertEqual(1,len(sent))
+        self.assertEqual('rules_hold',result.reason)
+        self.assertEqual([],sent)
+        self.assertEqual([],github.calls)
 
     def test_three_successive_episodes_in_recurrence_chain(self):
         from tg_triage.pipeline import Pipeline
@@ -914,6 +942,8 @@ class ExtensionRulesTests(unittest.TestCase):
         class Provider:
             settings=SimpleNamespace(model='test'); think=False
             def _ask(self,body,parser,attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 return parser(json.dumps({'groups':[{'message_ids':[42],'facts':{
                     'intent':{'value':'analyze','source_ids':[42]},
                     'task':{'title':'Kiểm tra hiển thị','work':'Phân tích phần bị cắt','acceptance':['Nêu vị trí bị cắt']}}}]}))
@@ -938,8 +968,8 @@ class ExtensionRulesTests(unittest.TestCase):
                     self.assertEqual([],sent)
                 else:
                     self.assertEqual('semantic_analyze',result.reason)
-                    self.assertIn('cần xác nhận ngữ cảnh',sent[0][2])
-                    self.assertIn('“Phân tích phần bị cắt”',sent[0][2])
+                    self.assertTrue(sent[0][2].startswith('Việc:'))
+                    self.assertIn('Thực hiện: Phân tích phần bị cắt',sent[0][2])
 
     def test_processed_long_document_rechecks_original_digest_on_resume(self):
         from tg_triage.pipeline import Pipeline
@@ -954,6 +984,8 @@ class ExtensionRulesTests(unittest.TestCase):
                 ids=[b['block_id'] for b in part['blocks'] if 'Kiểm tra hiển thị' in b['text']]
                 return {'status':'relevant' if ids else 'irrelevant','block_ids':ids}
             def _ask(self,body,parser,attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 return parser(json.dumps({'groups':[{'message_ids':[42],'facts':{
                     'intent':{'value':'analyze','source_ids':[42]},
                     'task':{'title':'Kiểm tra hiển thị','work':'Phân tích phần bị cắt','acceptance':['Nêu vị trí bị cắt']}}}]}))
@@ -1097,6 +1129,8 @@ class ExtensionRulesTests(unittest.TestCase):
         class Provider:
             settings=SimpleNamespace(model='test'); think=False
             def _ask(self,body,parser,attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 return parser(json.dumps({'groups':[{'message_ids':[42],'facts':{
                     'intent':{'value':'analyze','source_ids':[42]},
                     'task':{'title':'Xóa dữ liệu','work':'Xóa toàn bộ cơ sở dữ liệu','acceptance':['Dữ liệu đã bị xóa']}}}]}))
@@ -1128,6 +1162,8 @@ class ExtensionRulesTests(unittest.TestCase):
         class Provider:
             settings=SimpleNamespace(model='test'); think=False
             def _ask(self,body,parser,attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 return parser(json.dumps({'groups':[{'message_ids':[42],'facts':{
                     'intent':{'value':'analyze','source_ids':[42]},
                     'task':{'title':'Kiểm tra lỗi','work':'Phân tích yêu cầu','acceptance':['Nêu vấn đề']}}}]}))
@@ -1157,6 +1193,8 @@ class ExtensionRulesTests(unittest.TestCase):
         class Provider:
             settings=SimpleNamespace(model='test'); think=False
             def _ask(self,body,parser,attempts):
+                review=fixture_analysis_review(body)
+                if review is not None:return parser(review)
                 return parser(json.dumps({'groups':[{'message_ids':[42],'facts':{
                     'intent':{'value':'analyze','source_ids':[42]},
                     'task':{'title':'Kiểm tra giao diện','work':'Phân tích bảng điều khiển','acceptance':['Hiển thị đầy đủ','Không lỗi bố cục']}}}]}))
@@ -1170,9 +1208,9 @@ class ExtensionRulesTests(unittest.TestCase):
         result=pipeline.process(message(42,text='Phân tích yêu cầu trên',reply_to_id=10))
         self.assertEqual('semantic_analyze',result.reason)
         self.assertEqual(1,len(sent))
-        self.assertIn('cần xác nhận ngữ cảnh',sent[0][2])
-        self.assertIn('“Kiểm tra giao diện”',sent[0][2])
-        self.assertIn('“Không lỗi bố cục”',sent[0][2])
+        self.assertTrue(sent[0][2].startswith('Việc:'))
+        self.assertIn('Kiểm tra giao diện',sent[0][2])
+        self.assertIn('Không lỗi bố cục',sent[0][2])
 
     def test_deferred_append_is_not_checkpointed_as_done(self):
         from unittest.mock import patch
@@ -1337,3 +1375,851 @@ class ExtensionRulesTests(unittest.TestCase):
         self.assertFalse(grounded_recurrence({**evidence,'knownworking_quote':'bịa đặt'},[earlier],[later]))
         self.assertFalse(grounded_recurrence({**evidence,'recurrence_source_ids':[10]},[earlier],[later]))
         self.assertFalse(grounded_recurrence(evidence,[earlier],[]))
+
+    def direct_recurrence_fixture(self, path=':memory:'):
+        from tg_triage.pipeline import Pipeline
+        from tg_triage.store import Store
+        from tests.helpers import config, message, FakeGitHub
+        for name in ('states','facts','readiness','questions','channels','examples'):
+            (self.directory/(name+'.md')).write_text((ROOT/(name+'.md')).read_text(encoding='utf8'),encoding='utf8')
+        snapshot=RulesSnapshot(self.directory,ROOT.parent/'templates'/'github-ticket',extensions=True)
+        owner=self
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False
+            def __init__(self): self.bodies=[]; self.changes={}
+            def _ask(self,body,parser,attempts):
+                self.bodies.append(body)
+                mid=json.loads(body['messages'][1]['content'])['source_ids'][0]
+                lifecycle={'kind':'recurrence','knownworking_source_ids':[mid],'recurrence_source_ids':[mid],
+                    'knownworking_quote':'worked yesterday','recurrence_quote':'failed today','temporal_order_confirmed':True}
+                lifecycle.update(self.changes)
+                schema=body['format']['properties']['groups']['items']['properties']['facts']['properties']['lifecycle']
+                owner.assertIn(lifecycle['kind'],schema['properties']['kind']['enum'])
+                owner.assertTrue(set(schema['required'])<=set(lifecycle))
+                facts={'intent':{'value':'bug','source_ids':[mid]},'object':{'value':'POS','source_ids':[mid]},
+                    'observed':{'value':'failed today','source_ids':[mid]},'lifecycle':lifecycle}
+                payload={'groups':[{'message_ids':[mid],'facts':facts}]}
+                owner.assert_wire_schema(payload,body['format'])
+                return parser(json.dumps(payload))
+        store=Store(path); self.addCleanup(store.close)
+        old=message(10,text='old failure'); store.enqueue(old)
+        with store.connection:
+            store.connection.execute("UPDATE messages SET decision='issue',issue_number=101,issue_url='https://github.com/sandbox/triage/issues/101' WHERE message_id=10")
+        base=config(); settings=replace(base,mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
+            telegram=replace(base.telegram,ops_chat_id=-1009876543210))
+        gh=FakeGitHub(); gh.states={}
+        gh.lifecycle_snapshot=lambda n:{'number':n,'repo':'sandbox/triage','state':gh.states.get(n,'closed'),'observed_at':'now','updated_at':'v1'}
+        gh.verify_created_issue=lambda n,issue:n
+        def create(issue):
+            gh.calls.append(issue); n=201+len(gh.calls)
+            return n,f'https://github.com/sandbox/triage/issues/{n}'
+        gh.create_issue=create
+        sent=[]; provider=Provider()
+        pipeline=Pipeline(settings,store,provider,gh,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (a[1] or 1000)+1)
+        return store,provider,gh,sent,pipeline
+
+    def test_direct_grounded_recurrence_and_latest_episode(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        text='POS worked yesterday; failed today'
+        first=p.process(message(42,text=text,reply_to_id=10))
+        self.assertEqual(('issue',202),(first.decision,first.issue_number))
+        self.assertEqual(1,len(gh.calls)); self.assertIn('/issues/101',gh.calls[0].body)
+        self.assertEqual(101,store.get(message().chat_id,10)['issue_number'])
+        plan=json.loads(store.connection.execute('SELECT plan FROM rules_batch_groups').fetchone()[0])
+        self.assertEqual([42],plan['lifecycle']['knownworking_source_ids'])
+        self.assertIsNone(p.process(message(42,text=text,reply_to_id=10)))
+        self.assertEqual('lifecycle_question_sent',p.process(message(50,text=text,reply_to_id=10)).reason)
+        self.assertEqual(1,len(gh.calls))
+        latest=p.process(message(60,text=text,reply_to_id=42))
+        self.assertEqual('lifecycle_question_sent',latest.reason)
+        latest=p.process(message(62,text='B',reply_to_id=61))
+        self.assertEqual(('issue',203),(latest.decision,latest.issue_number))
+        self.assertIn('/issues/202',gh.calls[1].body)
+        self.assertEqual(2,len(gh.calls))
+        self.assertEqual('lifecycle_answer_unresolved',p.process(message(52,text='B',reply_to_id=51)).reason)
+        self.assertEqual(2,len(gh.calls))
+
+    def test_direct_recurrence_invalid_proof_and_open_append(self):
+        from tests.helpers import message
+        for changes in ({'knownworking_quote':'invented'}, {'temporal_order_confirmed':False},
+                        {'knownworking_source_ids':[999]}, {'kind':'unclear'}):
+            with self.subTest(changes=changes):
+                store,provider,gh,sent,p=self.direct_recurrence_fixture()
+                provider.changes=changes
+                self.assertEqual('pending_review',p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10)).decision)
+                self.assertEqual([],gh.calls)
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        gh.states[101]='open'; comments=[]; gh.add_comment=lambda *a:comments.append(a) or 301
+        self.assertEqual('followup',p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10)).decision)
+        self.assertEqual([],gh.calls); self.assertEqual(1,len(comments))
+
+    def test_direct_recurrence_uncertain_post_blocks_restart_without_replay(self):
+        from tg_triage.rules_pending_store import RulesHalt, check_before_recovery
+        from tests.helpers import message
+        temp=tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        path=str(Path(temp.name)/'state.sqlite')
+        store,provider,gh,sent,p=self.direct_recurrence_fixture(path)
+        def uncertain(issue):
+            gh.calls.append(issue); raise OSError('unknown POST')
+        gh.create_issue=uncertain
+        with self.assertRaises(RulesHalt): p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10))
+        self.assertEqual('reserved',store.connection.execute('SELECT status FROM rules_related_episodes').fetchone()[0])
+        with self.assertRaises(RulesHalt): check_before_recovery(Path(path))
+        self.assertEqual(1,len(gh.calls)); self.assertEqual([],sent)
+
+    def test_direct_completed_checkpoint_recovers_without_replay(self):
+        from tg_triage.rules_pending_store import _recoverable_batch_groups
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10))
+        with store.connection: store.connection.execute("UPDATE rules_batch_groups SET status='RESERVED'")
+        self.assertEqual('DONE',_recoverable_batch_groups(store.connection)[0][2])
+        self.assertEqual(1,len(gh.calls)); self.assertEqual(1,len(sent))
+
+    def test_direct_checkpoint_before_post_and_after_notice(self):
+        from unittest.mock import patch
+        from tg_triage.rules_pending_store import _recoverable_batch_groups
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        with patch('tg_triage.rules_intake._direct_related_episode',side_effect=RuntimeError('crash before reservation')):
+            with self.assertRaises(RuntimeError): p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10))
+        self.assertEqual('PLANNED',_recoverable_batch_groups(store.connection)[0][2])
+        self.assertEqual([],gh.calls)
+        # A real notice can have completed just before the batch checkpoint.
+        from tg_triage.rules_pending_store import RulesPendingStore
+        p.rules_pending=RulesPendingStore(store)
+        original=p.rules_pending.transition_group
+        def crash(batch,ordinal,old,new,**kw):
+            if old=='RESERVED' and new=='DONE': raise RuntimeError('crash after notice')
+            return original(batch,ordinal,old,new,**kw)
+        with patch.object(p.rules_pending,'transition_group',side_effect=crash):
+            from tg_triage.rules_intake import sweep
+            with self.assertRaises(RuntimeError): sweep(p)
+        self.assertEqual('DONE',_recoverable_batch_groups(store.connection)[0][2])
+        self.assertEqual(1,len(gh.calls)); self.assertEqual(1,len(sent))
+
+    def test_direct_verified_create_without_notice_blocks_recovery(self):
+        from tg_triage.rules_pending_store import _recoverable_batch_groups, RulesHalt
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        p.notice_sender=lambda *a:None
+        with self.assertRaises(RulesHalt): p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10))
+        self.assertEqual('verified',store.connection.execute('SELECT status FROM rules_related_episodes').fetchone()[0])
+        with self.assertRaises(RulesHalt): _recoverable_batch_groups(store.connection)
+        self.assertEqual(1,len(gh.calls))
+
+    def test_direct_resume_rechecks_parent_and_source_proof(self):
+        from unittest.mock import patch
+        from tg_triage.rules_intake import sweep
+        from tests.helpers import message
+        for change in ('open','quote','source'):
+            with self.subTest(change=change):
+                store,provider,gh,sent,p=self.direct_recurrence_fixture()
+                with patch('tg_triage.rules_intake._direct_related_episode',side_effect=RuntimeError('crash')):
+                    with self.assertRaises(RuntimeError): p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10))
+                from tg_triage.rules_pending_store import RulesPendingStore
+                p.rules_pending=RulesPendingStore(store)
+                with store.connection:
+                    if change=='source': store.connection.execute("UPDATE messages SET text=text || ' altered' WHERE message_id=42")
+                    if change=='quote':
+                        raw=store.connection.execute('SELECT plan FROM rules_batch_groups').fetchone()[0]
+                        plan=json.loads(raw); plan['lifecycle']['knownworking_quote']='invented'
+                        store.connection.execute('UPDATE rules_batch_groups SET plan=?',(json.dumps(plan),))
+                if change=='open': gh.states[101]='open'
+                sweep(p)
+                self.assertEqual([],gh.calls); self.assertEqual([],sent)
+
+    def test_direct_old_success_on_latest_episode_asks_without_create(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10))
+        # The source that began episode 202 is not a fresh success after it.
+        provider.changes={'knownworking_source_ids':[42]}
+        result=p.process(message(60,text='POS failed today',reply_to_id=42))
+        self.assertEqual('lifecycle_question_sent',result.reason)
+        self.assertEqual(1,len(gh.calls))
+
+    def assert_wire_schema(self,value,schema):
+        """Validate fixture output against the request's real emitted schema."""
+        kind=schema.get('type')
+        types={'object':dict,'array':list,'string':str,'integer':int,'boolean':bool,'number':(int,float)}
+        if kind in types: self.assertIsInstance(value,types[kind])
+        if kind=='integer': self.assertIs(type(value),int)
+        if 'enum' in schema: self.assertIn(value,schema['enum'])
+        if isinstance(value,dict):
+            self.assertTrue(set(schema.get('required',()))<=set(value))
+            props=schema.get('properties',{})
+            if schema.get('additionalProperties') is False: self.assertFalse(set(value)-set(props))
+            for key,item in value.items():
+                if key in props: self.assert_wire_schema(item,props[key])
+        if isinstance(value,list):
+            self.assertGreaterEqual(len(value),schema.get('minItems',0))
+            self.assertLessEqual(len(value),schema.get('maxItems',len(value)))
+            if schema.get('uniqueItems'): self.assertEqual(len(value),len(set(value)))
+            for item in value: self.assert_wire_schema(item,schema.get('items',{}))
+        if isinstance(value,str):
+            self.assertGreaterEqual(len(value),schema.get('minLength',0))
+            self.assertLessEqual(len(value),schema.get('maxLength',len(value)))
+        if type(value) in (int,float):
+            if 'minimum' in schema: self.assertGreaterEqual(value,schema['minimum'])
+            if 'maximum' in schema: self.assertLessEqual(value,schema['maximum'])
+
+    def seed_legacy_episode(self,store):
+        from tests.helpers import message, NOW
+        old=message(42,text='POS worked yesterday; failed today'); store.enqueue(old)
+        with store.connection:
+            store.connection.execute('UPDATE messages SET decision=?,issue_number=?,issue_url=? WHERE message_id=?',('followup',202,'https://github.com/sandbox/triage/issues/202',42))
+            store.connection.execute('INSERT INTO followup_roots(root_key,chat_id,source_message_id,case_key,issue_number) VALUES(?,?,?,?,?)',('root-parent',old.chat_id,10,'case-parent',101))
+            store.connection.execute('INSERT INTO followup_roots(root_key,chat_id,source_message_id,case_key,issue_number) VALUES(?,?,?,?,?)',('episode-202',old.chat_id,42,'case-parent',202))
+            store.connection.execute('INSERT INTO followup_jobs(id,chat_id,message_id,root_key,status) VALUES(?,?,?,?,?)',(1,old.chat_id,42,'root-parent','done'))
+            store.connection.execute('INSERT INTO followup_episodes VALUES(?,?,?,?,?,?,?,?,?)',('episode-202','root-parent',1,old.chat_id,42,202,'sandbox/triage','[42]',NOW.isoformat()))
+            store.connection.execute('INSERT INTO followup_episode_sources VALUES(?,?,?)',(old.chat_id,42,'episode-202'))
+
+    def test_success_report_arrival_does_not_prove_new_event_after_episode(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        self.assertEqual(202,p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10)).issue_number)
+        result=p.process(message(60,text='POS still failed today; it only worked yesterday before the last episode',reply_to_id=42))
+        self.assertEqual('lifecycle_question_sent',result.reason)
+        self.assertEqual(1,len(gh.calls))
+
+    def test_higher_id_backdated_report_cannot_create_successor(self):
+        from datetime import timedelta
+        from tests.helpers import message,NOW
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        self.assertEqual(202,p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10)).issue_number)
+        result=p.process(message(60,text='POS worked yesterday; failed today',reply_to_id=42,received_at=NOW-timedelta(days=1)))
+        self.assertEqual('pending_review',result.decision); self.assertEqual(1,len(gh.calls))
+
+    def test_legacy_episode_requires_fresh_bound_confirmation(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        self.seed_legacy_episode(store)
+        provider.changes={'knownworking_source_ids':[42]}
+        result=p.process(message(60,text='POS failed today',reply_to_id=42))
+        self.assertEqual('lifecycle_question_sent',result.reason); self.assertEqual([],gh.calls)
+        # Exact B is a new direct assertion about success AFTER bound episode202.
+        result=p.process(message(62,text='B',reply_to_id=61))
+        self.assertEqual('issue',result.decision); self.assertEqual(1,len(gh.calls))
+        self.assertIn('/issues/202',gh.calls[0].body)
+
+    def test_backdated_confirmation_and_changed_latest_parent_cannot_create(self):
+        from datetime import timedelta
+        from tests.helpers import message,NOW
+        for change in ('backdated','new_successor'):
+            with self.subTest(change=change):
+                store,provider,gh,sent,p=self.direct_recurrence_fixture()
+                self.assertEqual(202,p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10)).issue_number)
+                self.assertEqual('lifecycle_question_sent',p.process(message(60,text='POS worked yesterday; failed today',reply_to_id=42)).reason)
+                if change=='new_successor':
+                    with store.connection:
+                        store.connection.execute("INSERT INTO rules_related_episodes VALUES(?,?,?,?,?,'done',?,?,?)",(message().chat_id,'sandbox/triage',202,70,70,203,'https://github.com/sandbox/triage/issues/203','notice'))
+                result=p.process(message(62,text='B',reply_to_id=61,received_at=NOW-timedelta(days=1) if change=='backdated' else NOW))
+                self.assertEqual('pending_review',result.decision); self.assertEqual(1,len(gh.calls))
+
+    def test_direct_recurrence_with_separate_reply_success_evidence(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        with store.connection: store.connection.execute("UPDATE messages SET text='POS worked yesterday' WHERE message_id=10")
+        provider.changes={'knownworking_source_ids':[10]}
+        result=p.process(message(42,text='POS failed today',reply_to_id=10))
+        self.assertEqual(('issue',202),(result.decision,result.issue_number))
+        plan=json.loads(store.connection.execute('SELECT plan FROM rules_batch_groups').fetchone()[0])
+        self.assertEqual([10],plan['lifecycle']['knownworking_source_ids'])
+        self.assertTrue(plan['lifecycle_context'])
+        self.assertEqual(101,store.get(message().chat_id,10)['issue_number'])
+
+    def test_resume_revalidates_legacy_episode_time_boundary(self):
+        from unittest.mock import patch
+        from datetime import timedelta
+        from tg_triage.rules_pending_store import RulesPendingStore
+        from tg_triage.rules_intake import sweep
+        from tests.helpers import message,NOW
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        self.seed_legacy_episode(store)
+        provider.changes={'knownworking_source_ids':[42]}
+        with patch('tg_triage.rules_intake._direct_related_episode',side_effect=RuntimeError('crash before boundary check')):
+            with self.assertRaises(RuntimeError): p.process(message(60,text='POS failed today',reply_to_id=42))
+        p.rules_pending=RulesPendingStore(store)
+        with store.connection:
+            store.connection.execute('UPDATE followup_episodes SET created_at=?',((NOW+timedelta(days=1)).isoformat(),))
+        sweep(p)
+        self.assertEqual([],gh.calls); self.assertEqual([],sent)
+        self.assertEqual('lifecycle_chronology_unavailable',store.get(message().chat_id,60)['reason'])
+
+    def recurrence_batch_fixture(self, *, path=':memory:', documents=False):
+        from tests.helpers import message,FakeDownloader,FakeUploader
+        import base64
+        store,_,gh,sent,p=self.direct_recurrence_fixture(path)
+        owner=self
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=True
+            def __init__(self): self.bodies=[]
+            def _ask(self,body,parser,attempts):
+                self.bodies.append(body)
+                ids=json.loads(body['messages'][1]['content'])['source_ids']
+                working,recurring=ids[:2]
+                lifecycle={'kind':'recurrence','knownworking_source_ids':[working],'recurrence_source_ids':[recurring],
+                    'knownworking_quote':'worked yesterday','recurrence_quote':'failed today'}
+                facts={'intent':{'value':'bug','source_ids':[recurring]},'object':{'value':'POS','source_ids':[recurring]},
+                    'observed':{'value':'failed today','source_ids':[recurring]},'lifecycle':lifecycle}
+                payload={'groups':[{'message_ids':ids,'facts':facts}]}
+                owner.assert_wire_schema(payload,body['format'])
+                return parser(json.dumps(payload))
+        png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=')
+        files={42:(png,'old-success.png'),44:(png,'new-failure.png')}
+        members=[message(42,text='POS worked yesterday',reply_to_id=10,has_image=True,image_mime='image/png',image_size=len(png)),
+            message(43,text='POS failed today',reply_to_id=42),
+            message(44,text='',reply_to_id=43,has_image=True,image_mime='image/png',image_size=len(png))]
+        if documents:
+            files[45]=(b'POS failure evidence','failure.txt')
+            members.append(message(45,text='Failure document',reply_to_id=43,has_document=True,document_name='failure.txt',document_mime='text/plain',document_size=20))
+        provider=Provider(); downloader=FakeDownloader(files); uploader=FakeUploader()
+        p.classifier=provider; p.attachments.downloader=downloader; p.attachments.uploader=uploader
+        p.notice_sender=lambda *a:sent.append(a) or max(900+len(sent),(a[1] or 0)+1)
+        return store,provider,gh,sent,p,members,downloader,uploader,png
+
+    def run_recurrence_batch(self,p,members):
+        from tg_triage.rules_intake import _process_batch
+        for member in members: p.store.start_classifying(member)
+        return _process_batch(p,members)
+
+    def test_direct_batch_preserves_recurrence_image_document_and_historical_ownership(self):
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import _recoverable_batch_groups
+        import base64
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+        result=self.run_recurrence_batch(p,members)
+        self.assertEqual(('issue',202),(result.decision,result.issue_number))
+        self.assertEqual(1,len(gh.calls)); self.assertEqual(2,len(uploader.uploads))
+        self.assertEqual([42,44],json.loads(provider.bodies[0]['messages'][1]['content'])['images_order'])
+        self.assertEqual([png,png],[base64.b64decode(value) for value in provider.bodies[0]['messages'][1]['images']])
+        self.assertTrue(all('-42-' not in row['asset'] for row in uploader.uploads))
+        body=gh.calls[0].body
+        self.assertNotIn('worked yesterday',body); self.assertIn('failed today',body)
+        self.assertIn('/43',body); self.assertIn('/44',body); self.assertIn('failure.txt',body)
+        self.assertEqual(101,store.get(message().chat_id,42)['issue_number'])
+        for mid in (43,44,45): self.assertEqual(202,store.get(message().chat_id,mid)['issue_number'])
+        self.assertEqual(43,sent[0][1])
+        with store.connection: store.connection.execute("UPDATE rules_batch_groups SET status='RESERVED'")
+        self.assertEqual('DONE',_recoverable_batch_groups(store.connection)[0][2])
+        self.assertEqual(1,len(gh.calls)); self.assertEqual(2,len(uploader.uploads))
+
+    def test_direct_batch_unknown_upload_release_or_post_never_replays(self):
+        from tg_triage.rules_pending_store import RulesHalt,check_before_recovery
+        from tests.helpers import FakeUploader
+        for failure in ('release','upload','post'):
+            with self.subTest(failure=failure):
+                temp=tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+                path=str(Path(temp.name)/'state.sqlite')
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(path=path,documents=True)
+                if failure=='release': uploader.release_error=OSError('unknown release')
+                if failure=='upload': uploader.error=OSError('unknown upload')
+                if failure=='post':
+                    def unknown(issue): gh.calls.append(issue); raise OSError('unknown POST')
+                    gh.create_issue=unknown
+                with self.assertRaises(RulesHalt): self.run_recurrence_batch(p,members)
+                self.assertEqual('reserved',store.connection.execute('SELECT status FROM rules_related_episodes').fetchone()[0])
+                self.assertEqual(1,store.count_recent_issues())
+                with self.assertRaises(RulesHalt): check_before_recovery(Path(path))
+                self.assertEqual(1 if failure=='post' else 0,len(gh.calls))
+                self.assertEqual(1,len(uploader.releases))
+
+    def test_batch_resume_rejects_changed_document_or_pixel_before_upload(self):
+        from unittest.mock import patch
+        from tg_triage.rules_pending_store import RulesPendingStore
+        from tg_triage.rules_intake import sweep
+        for changed in ('document','pixel'):
+            with self.subTest(changed=changed):
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+                with patch('tg_triage.rules_intake._direct_related_episode',side_effect=RuntimeError('before related reservation')):
+                    with self.assertRaises(RuntimeError): self.run_recurrence_batch(p,members)
+                p.rules_pending=RulesPendingStore(store)
+                if changed=='document': downloader.files[45]=(b'changed document','failure.txt')
+                else: downloader.files[44]=(png+b'changed','new-failure.png')
+                sweep(p)
+                self.assertEqual([],gh.calls); self.assertEqual([],uploader.uploads)
+
+    def test_successor_batch_B_preserves_all_recurrence_assets(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+        self.assertEqual(202,self.run_recurrence_batch(p,members).issue_number)
+        later=[replace(m,message_id=m.message_id+18,reply_to_id=(43 if m.message_id==42 else m.reply_to_id+18)) for m in members]
+        downloader.files.update({mid+18:value for mid,value in list(downloader.files.items())})
+        question=self.run_recurrence_batch(p,later)
+        self.assertEqual('lifecycle_question_sent',question.reason); self.assertEqual(1,len(gh.calls))
+        notice=902
+        result=p.process(message(notice+1,text='B',reply_to_id=notice))
+        self.assertEqual(('issue',203),(result.decision,result.issue_number))
+        self.assertEqual(4,len(uploader.uploads))
+        self.assertEqual(202,store.get(message().chat_id,60)['issue_number'])
+        for mid in (61,62,63): self.assertEqual(203,store.get(message().chat_id,mid)['issue_number'])
+        self.assertIn('/issues/202',gh.calls[1].body); self.assertNotIn('worked yesterday',gh.calls[1].body)
+
+    def test_recurrence_chronology_can_be_grounded_in_read_document_text(self):
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+        downloader.files[42]=(b'POS worked yesterday','success.txt')
+        downloader.files[43]=(b'POS failed today','failure-report.txt')
+        members[0]=replace(members[0],text='Historical confirmation',has_image=False,has_document=True,
+            document_name='success.txt',document_mime='text/plain',document_size=20)
+        members[1]=replace(members[1],text='Current report',has_document=True,
+            document_name='failure-report.txt',document_mime='text/plain',document_size=16)
+        result=self.run_recurrence_batch(p,members)
+        self.assertEqual(202,result.issue_number)
+        self.assertEqual(3,len(uploader.uploads))
+        self.assertTrue(all('-42-' not in row['asset'] for row in uploader.uploads))
+        self.assertIn('failure-report.txt',gh.calls[0].body)
+
+    def test_old_parent_question_binds_latest_and_recovers_before_B(self):
+        from unittest.mock import patch
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesPendingStore,_recoverable_batch_groups
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        text='POS worked yesterday; failed today'
+        self.assertEqual(202,p.process(message(42,text=text,reply_to_id=10)).issue_number)
+        original=p.rules_pending.transition_group
+        def crash(batch,ordinal,old,new,**kw):
+            if old=='RESERVED' and new=='DONE': raise RuntimeError('question sent before checkpoint')
+            return original(batch,ordinal,old,new,**kw)
+        with patch.object(p.rules_pending,'transition_group',side_effect=crash):
+            with self.assertRaises(RuntimeError): p.process(message(50,text=text,reply_to_id=10))
+        q=store.connection.execute('SELECT parent_number FROM rules_lifecycle_questions WHERE source_id=50').fetchone()
+        self.assertEqual(202,q[0]); self.assertEqual('DONE',_recoverable_batch_groups(store.connection)[0][2])
+        p.rules_pending=RulesPendingStore(store)
+        result=p.process(message(52,text='B',reply_to_id=51))
+        self.assertEqual(203,result.issue_number); self.assertIn('/issues/202',gh.calls[1].body)
+
+    def test_image_only_recurrence_requires_explicit_bound_confirmation(self):
+        from tests.helpers import message,FakeDownloader,FakeUploader,PNG
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        provider.supports_vision=True
+        provider.changes={'kind':'unclear','knownworking_source_ids':[],'recurrence_source_ids':[]}
+        p.attachments.downloader=FakeDownloader({42:(PNG,'failure.png')}); uploader=FakeUploader(); p.attachments.uploader=uploader
+        result=p.process(message(42,text='',reply_to_id=10,has_image=True,image_mime='image/png',image_size=len(PNG)))
+        self.assertEqual('lifecycle_question_sent',result.reason); self.assertEqual([],gh.calls)
+        result=p.process(message(44,text='B',reply_to_id=43))
+        self.assertEqual(202,result.issue_number); self.assertEqual(1,len(uploader.uploads)); self.assertIn('/42-',gh.calls[0].body)
+
+    def test_forwarded_recurrence_and_backdated_batch_asset_do_not_write(self):
+        from tests.helpers import message,NOW
+        from datetime import timedelta
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        self.assertEqual('pending_review',p.process(message(42,text='POS worked yesterday; failed today',reply_to_id=10,is_forward=True)).decision)
+        self.assertEqual([],gh.calls)
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture()
+        members[-1]=replace(members[-1],received_at=NOW-timedelta(days=1))
+        self.assertEqual('pending_review',self.run_recurrence_batch(p,members).decision)
+        self.assertEqual([],gh.calls); self.assertEqual([],uploader.uploads)
+
+    def test_related_quota_counts_one_attempt_and_corrupt_receipt_cannot_relax_limit(self):
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+        self.assertEqual(202,self.run_recurrence_batch(p,members).issue_number)
+        self.assertEqual(1,store.count_recent_issues())
+        raw=store.connection.execute('SELECT recurrence_keys,source_keys,plan_hash FROM rules_related_receipts').fetchone()
+        variants=[('recurrence_keys','[]'),('recurrence_keys',json.dumps([[members[0].chat_id,43],[members[0].chat_id,44]])),
+            ('source_keys','[]'),('plan_hash','tampered')]
+        for column,value in variants:
+            with self.subTest(column=column,value=value):
+                with store.connection: store.connection.execute('UPDATE rules_related_receipts SET '+column+'=?',(value,))
+                self.assertEqual(3,store.count_recent_issues())
+                with store.connection: store.connection.execute('UPDATE rules_related_receipts SET recurrence_keys=?,source_keys=?,plan_hash=?',tuple(raw))
+        with store.connection: store.connection.execute('UPDATE messages SET issue_number=999 WHERE message_id=44')
+        self.assertEqual(3,store.count_recent_issues())
+        with store.connection: store.connection.execute('DROP TABLE rules_related_receipts')
+        self.assertEqual(3,store.count_recent_issues())
+
+    def unclear_question_fixture(self,*,path=':memory:',roles='proven'):
+        values=self.recurrence_batch_fixture(path=path,documents=True)
+        store,provider,gh,sent,p,members,downloader,uploader,png=values
+        ask=provider._ask
+        def unclear(body,parser,attempts):
+            def convert(raw):
+                data=json.loads(raw); lifecycle=data['groups'][0]['facts']['lifecycle']; lifecycle['kind']='unclear'
+                if roles=='absent': lifecycle.update(knownworking_source_ids=[],recurrence_source_ids=[])
+                if roles=='ungrounded': lifecycle['knownworking_quote']='invented success'
+                self.assert_wire_schema(data,body['format'])
+                return parser(json.dumps(data))
+            return ask(body,convert,attempts)
+        provider._ask=unclear
+        self.assertEqual('lifecycle_question_sent',self.run_recurrence_batch(p,members).reason)
+        return values
+
+    def restart_question_fixture(self,path,p,provider,gh,downloader,uploader):
+        from tg_triage.pipeline import Pipeline
+        from tg_triage.store import Store
+        p.store.close(); reopened=Store(path); self.addCleanup(reopened.close)
+        return Pipeline(p.config,reopened,provider,gh,rules_snapshot=p.rules_snapshot,
+            notice_sender=p.notice_sender,downloader=downloader,uploader=uploader)
+
+    def test_unclear_B_preserves_proven_historical_roles_through_restart(self):
+        from tests.helpers import message
+        for restart in (False,True):
+            with self.subTest(restart=restart):
+                temp=tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup); path=str(Path(temp.name)/'state.sqlite')
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.unclear_question_fixture(path=path)
+                if restart:
+                    p=self.restart_question_fixture(path,p,provider,gh,downloader,uploader);store=p.store
+                result=p.process(message(902,text='B',reply_to_id=901))
+                self.assertEqual(202,result.issue_number)
+                self.assertEqual(101,store.get(members[0].chat_id,42)['issue_number'])
+                for mid in (43,44,45):self.assertEqual(202,store.get(members[0].chat_id,mid)['issue_number'])
+                self.assertEqual(2,len(uploader.uploads))
+                self.assertTrue(all('-42-' not in row['asset'] and not row['asset'].startswith('42-') for row in uploader.uploads))
+                self.assertNotIn('worked yesterday',gh.calls[0].body)
+
+    def test_unclear_B_cannot_assign_absent_or_ungrounded_group_roles(self):
+        from tests.helpers import message
+        for roles in ('absent','ungrounded'):
+            with self.subTest(roles=roles):
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.unclear_question_fixture(roles=roles)
+                self.assertEqual('pending_review',p.process(message(902,text='B',reply_to_id=901)).decision)
+                self.assertEqual([],gh.calls); self.assertEqual([],uploader.uploads)
+                self.assertEqual(0,store.connection.execute('SELECT count(*) FROM rules_lifecycle_answers').fetchone()[0])
+
+    def test_both_answers_revalidate_source_pixel_document_and_context_before_reservation(self):
+        from tests.helpers import message
+        for answer in ('A','B'):
+            for changed in ('source','pixel','document','context'):
+                with self.subTest(answer=answer,changed=changed):
+                    temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);path=str(Path(temp.name)/'state.sqlite')
+                    store,provider,gh,sent,p,members,downloader,uploader,png=self.unclear_question_fixture(path=path)
+                    p=self.restart_question_fixture(path,p,provider,gh,downloader,uploader);store=p.store
+                    if changed=='document':downloader.files[45]=(b'ALTERED PRIVATE DATA','failure.txt')
+                    if changed=='pixel':downloader.files[44]=(png+b'changed','new-failure.png')
+                    if changed in ('source','context'):
+                        with store.connection:store.connection.execute("UPDATE messages SET text=text||' altered' WHERE message_id=?",(43 if changed=='source' else 10,))
+                    comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                    self.assertEqual('pending_review',p.process(message(902,text=answer,reply_to_id=901)).decision)
+                    self.assertEqual([],gh.calls);self.assertEqual([],comments);self.assertEqual([],uploader.uploads)
+                    self.assertEqual(0,store.connection.execute('SELECT count(*) FROM rules_lifecycle_answers').fetchone()[0])
+
+    def test_A_on_retargeted_question_appends_latest_and_survives_restart(self):
+        from tests.helpers import message
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);path=str(Path(temp.name)/'state.sqlite')
+        store,provider,gh,sent,p=self.direct_recurrence_fixture(path)
+        text='POS worked yesterday; failed today'
+        self.assertEqual(202,p.process(message(42,text=text,reply_to_id=10)).issue_number)
+        self.assertEqual('lifecycle_question_sent',p.process(message(50,text=text,reply_to_id=10)).reason)
+        p=self.restart_question_fixture(path,p,provider,gh,p.attachments.downloader,p.attachments.uploader);store=p.store
+        comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+        result=p.process(message(52,text='A',reply_to_id=51))
+        self.assertEqual('followup',result.decision);self.assertEqual(202,result.issue_number)
+        self.assertEqual([202],[number for number,body in comments])
+        self.assertEqual(101,store.get(message().chat_id,10)['issue_number'])
+        self.assertEqual('done',store.connection.execute('SELECT status FROM rules_lifecycle_answers').fetchone()[0])
+
+    def test_unseen_image_and_unread_document_are_bound_without_claiming_viewed(self):
+        from tests.helpers import message
+        for changed in (None,'image','document'):
+            for answer in ('A','B'):
+                with self.subTest(changed=changed,answer=answer):
+                    store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+                    provider.supports_vision=False
+                    pdf=b'%PDF-1.4\noriginal evidence\n%%EOF';downloader.files[45]=(pdf,'evidence.pdf')
+                    members[-1]=replace(members[-1],document_name='evidence.pdf',document_mime='application/pdf',document_size=len(pdf))
+                    ask=provider._ask
+                    def unclear(body,parser,attempts):
+                        def convert(raw):
+                            data=json.loads(raw);data['groups'][0]['facts']['lifecycle']['kind']='unclear'
+                            self.assert_wire_schema(data,body['format']);return parser(json.dumps(data))
+                        return ask(body,convert,attempts)
+                    provider._ask=unclear
+                    self.assertEqual('lifecycle_question_sent',self.run_recurrence_batch(p,members).reason)
+                    self.assertNotIn('images',provider.bodies[0]['messages'][1])
+                    plan=json.loads(store.connection.execute('SELECT plan FROM rules_batch_groups').fetchone()[0])
+                    self.assertEqual({},plan['lifecycle_pixels'])
+                    self.assertIsNotNone(plan['lifecycle_assets']['image:44'])
+                    self.assertIsNotNone(plan['lifecycle_assets']['document:45'])
+                    self.assertNotEqual('read',plan['document_reads'][0]['read_status'])
+                    if changed=='image':downloader.files[44]=(png+b'altered','new-failure.png')
+                    if changed=='document':downloader.files[45]=(b'%PDF-1.4\nALTERED\n%%EOF','evidence.pdf')
+                    comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                    result=p.process(message(902,text=answer,reply_to_id=901))
+                    if changed:
+                        self.assertEqual('pending_review',result.decision);self.assertEqual([],comments);self.assertEqual([],gh.calls);self.assertEqual([],uploader.uploads)
+                    else:
+                        self.assertEqual('followup' if answer=='A' else 'issue',result.decision)
+                        self.assertEqual(3 if answer=='A' else 2,len(uploader.uploads))
+
+    def test_lifecycle_asset_proof_refuses_missing_tampered_or_unavailable_bytes(self):
+        from tests.helpers import FakeDownloader,FakeUploader,message,PNG
+        from tg_triage.rules_pending_store import RulesHalt
+        for mode in ('missing','tampered','unavailable'):
+            with self.subTest(mode=mode):
+                store,provider,gh,sent,p=self.direct_recurrence_fixture()
+                downloader=FakeDownloader({42:(PNG,'image.png')});uploader=FakeUploader()
+                p.attachments.downloader=downloader;p.attachments.uploader=uploader
+                member=message(42,has_image=True,image_mime='image/png',image_size=len(PNG))
+                proof=p.attachments.capture_proof('test',[member])
+                if mode=='missing':proof={}
+                if mode=='tampered':proof['image:42']['sha256']='altered'
+                if mode=='unavailable':downloader.files={}
+                with self.assertRaises(RulesHalt):p._images('test',[member],live=True,asset_proofs=proof)
+                self.assertEqual([],uploader.uploads);self.assertEqual([],uploader.releases)
+
+    def test_lifecycle_attachment_metadata_caps_missing_and_unsupported_hold_before_question(self):
+        for mode in ('oversize','disabled','missing','unsupported'):
+            with self.subTest(mode=mode):
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+                if mode=='oversize':members[2]=replace(members[2],image_size=p.attachments.settings.max_bytes+1)
+                if mode=='disabled':p.attachments.settings=replace(p.attachments.settings,max_per_case=0)
+                if mode=='missing':downloader.files.pop(44)
+                if mode=='unsupported':members[-1]=replace(members[-1],document_name='evidence.exe',document_mime='application/x-msdownload')
+                result=self.run_recurrence_batch(p,members)
+                self.assertEqual('pending_review',result.decision);self.assertEqual([],gh.calls);self.assertEqual([],uploader.uploads)
+                self.assertEqual(0,store.connection.execute('SELECT count(*) FROM rules_lifecycle_questions').fetchone()[0])
+                if mode=='oversize':self.assertNotIn((members[2].chat_id,44),downloader.calls)
+
+    def test_asset_proof_checks_all_files_before_first_upload_for_A_and_B(self):
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesHalt
+        for answer in ('A','B'):
+            with self.subTest(answer=answer):
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.unclear_question_fixture()
+                original=p.attachments._check_asset_proofs
+                def change_later(images,documents,proof,required):
+                    documents[0][1].write_bytes(b'changed after download before any upload')
+                    return original(images,documents,proof,required)
+                p.attachments._check_asset_proofs=change_later
+                comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                with self.assertRaises(RulesHalt):p.process(message(902,text=answer,reply_to_id=901))
+                self.assertEqual([],uploader.uploads);self.assertEqual([],uploader.releases);self.assertEqual([],comments);self.assertEqual([],gh.calls)
+
+    def test_prepared_cache_and_uploaded_row_cannot_bypass_asset_proof(self):
+        from tests.helpers import message,PNG,FakeDownloader,FakeUploader
+        from tg_triage.rules_pending_store import RulesHalt
+        for cached in ('prepared','uploaded'):
+            with self.subTest(cached=cached):
+                store,provider,gh,sent,p=self.direct_recurrence_fixture()
+                p.attachments.downloader=FakeDownloader({42:(PNG,'image.png')});uploader=FakeUploader();p.attachments.uploader=uploader
+                member=message(42,has_image=True,image_mime='image/png',image_size=len(PNG))
+                prepared=p.attachments.prepare_images('test',[member]);self.addCleanup(prepared.close)
+                proof=p.attachments.capture_proof('test',[member],prepared=prepared)
+                if cached=='prepared':
+                    prepared.accepted[0][1].write_bytes(PNG+b'changed');p._prepared_images=prepared
+                else:
+                    store.connection.commit()
+                    old=store.reserve_attachment_call('test',42,'42-1.png',1000,chat_id=member.chat_id);store.finish_attachment(old,'uploaded')
+                    p.attachments.downloader.files[42]=(PNG+b'changed','image.png')
+                with self.assertRaises(RulesHalt):p._images('test',[member],live=True,asset_proofs=proof)
+                self.assertEqual([],uploader.uploads);self.assertEqual([],uploader.releases)
+                if cached=='uploaded':self.assertEqual('uploaded',store.connection.execute('SELECT status FROM attachments').fetchone()[0])
+
+    def test_bound_assets_preserve_configured_positive_upload_cap_and_legacy_no_proof(self):
+        from tests.helpers import message,PNG,FakeDownloader,FakeUploader
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        p.attachments.downloader=FakeDownloader({mid:(PNG,f'{mid}.png') for mid in (42,43)})
+        uploader=FakeUploader();p.attachments.uploader=uploader;p.attachments.settings=replace(p.attachments.settings,max_per_case=1)
+        members=[message(mid,has_image=True,image_mime='image/png',image_size=len(PNG)) for mid in (42,43)]
+        proof=p.attachments.capture_proof('proof',members)
+        store.connection.commit()
+        result=p._images('proof',members,live=True,asset_proofs=proof)
+        self.assertEqual(1,len(result.images));self.assertEqual(1,len(uploader.uploads));self.assertTrue(result.notes)
+        # Existing callers provide no proof and retain their existing upload behavior.
+        result=p._images('legacy',[members[0]],live=True)
+        self.assertEqual(1,len(result.images));self.assertEqual(2,len(uploader.uploads))
+
+    def test_uncited_roles_require_actual_reply_and_historical_reply_asset_stays_parent(self):
+        from tests.helpers import message
+        for binding in ('historical','unlinked'):
+            with self.subTest(binding=binding):
+                store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+                members.append(message(46,text='Old confirmation image',reply_to_id=42 if binding=='historical' else None,
+                    has_image=True,image_mime='image/png',image_size=len(png)))
+                downloader.files[46]=(png,'older-confirmation.png')
+                ask=provider._ask
+                def unclear(body,parser,attempts):
+                    def convert(raw):
+                        data=json.loads(raw);data['groups'][0]['facts']['lifecycle']['kind']='unclear'
+                        self.assert_wire_schema(data,body['format']);return parser(json.dumps(data))
+                    return ask(body,convert,attempts)
+                provider._ask=unclear
+                self.assertEqual('lifecycle_question_sent',self.run_recurrence_batch(p,members).reason)
+                result=p.process(message(902,text='B',reply_to_id=901))
+                if binding=='historical':
+                    self.assertEqual(202,result.issue_number);self.assertEqual(101,store.get(members[0].chat_id,46)['issue_number'])
+                    self.assertTrue(all(not row['asset'].startswith('46-') for row in uploader.uploads))
+                    self.assertEqual(1,store.count_recent_issues())
+                    self.assertEqual(1,len(gh.calls))
+                else:
+                    self.assertEqual('pending_review',result.decision);self.assertEqual([],gh.calls);self.assertEqual([],uploader.uploads)
+
+    def test_A_does_not_need_a_recurrence_partition_to_append_old_evidence(self):
+        from tests.helpers import message
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(documents=True)
+        ask=provider._ask
+        def unclear(body,parser,attempts):
+            def convert(raw):
+                data=json.loads(raw);data['groups'][0]['facts']['lifecycle'].update(kind='unclear',knownworking_source_ids=[42,43,44,45],recurrence_source_ids=[])
+                self.assert_wire_schema(data,body['format']);return parser(json.dumps(data))
+            return ask(body,convert,attempts)
+        provider._ask=unclear
+        self.assertEqual('lifecycle_question_sent',self.run_recurrence_batch(p,members).reason)
+        comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+        self.assertEqual('followup',p.process(message(902,text='A',reply_to_id=901)).decision)
+        self.assertEqual([101],[number for number,body in comments]);self.assertEqual([],gh.calls)
+
+    def test_full_evidence_is_reloaded_after_upload_for_direct_A_and_B(self):
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesHalt,check_before_recovery
+        for mode in ('direct','A','B'):
+            kinds=['source','context','document','pixel','ownership','plan','membership']
+            if mode!='direct':kinds+=['confirmation','answer_reservation']
+            for kind in kinds:
+                with self.subTest(mode=mode,kind=kind):
+                    temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);path=str(Path(temp.name)/'state.sqlite')
+                    values=(self.recurrence_batch_fixture(path=path,documents=True) if mode=='direct' else self.unclear_question_fixture(path=path))
+                    store,provider,gh,sent,p,members,downloader,uploader,png=values
+                    comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                    upload=uploader.upload
+                    def mutate(tag,file,asset):
+                        result=upload(tag,file,asset)
+                        with store.connection:
+                            if kind in ('source','context'):store.connection.execute("UPDATE messages SET text=text||' changed during upload' WHERE message_id=?",(43 if kind=='source' else 10,))
+                            if kind=='ownership':store.connection.execute('UPDATE messages SET issue_number=999 WHERE message_id=43')
+                            if kind=='membership':store.connection.execute('DELETE FROM rules_sources WHERE message_id=45')
+                            if kind=='confirmation':store.connection.execute("UPDATE messages SET text='not the approved answer' WHERE message_id=902")
+                            if kind=='answer_reservation':store.connection.execute("UPDATE rules_lifecycle_answers SET status='done'")
+                            if kind=='plan':
+                                row=store.connection.execute('SELECT plan FROM rules_batch_groups').fetchone();plan=json.loads(row[0]);plan['present']['object']['value']='changed object'
+                                store.connection.execute('UPDATE rules_batch_groups SET plan=?',(json.dumps(plan),))
+                        if kind=='document':downloader.files[45]=(b'changed document after upload','failure.txt')
+                        if kind=='pixel':downloader.files[44]=(png+b'changed after upload','new-failure.png')
+                        return result
+                    uploader.upload=mutate
+                    with self.assertRaises(RulesHalt):
+                        if mode=='direct':self.run_recurrence_batch(p,members)
+                        else:p.process(message(902,text=mode,reply_to_id=901))
+                    self.assertEqual([],gh.calls);self.assertEqual([],comments)
+                    with self.assertRaises(RulesHalt):check_before_recovery(Path(path))
+                    if mode=='A':self.assertEqual('reserved',store.connection.execute('SELECT status FROM rules_comments').fetchone()[0])
+                    else:self.assertEqual('reserved',store.connection.execute('SELECT status FROM rules_related_episodes').fetchone()[0])
+
+    def test_required_processor_exceptions_missing_files_and_partial_failures_stop_all_posts(self):
+        from unittest.mock import patch
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesHalt
+        for mode in ('direct','A','B'):
+            for failure in ('missing_file','exception','invalid_result','no_uploader','quota'):
+                with self.subTest(mode=mode,failure=failure):
+                    values=(self.recurrence_batch_fixture(documents=True) if mode=='direct' else self.unclear_question_fixture())
+                    store,provider,gh,sent,p,members,downloader,uploader,png=values
+                    comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                    if failure=='no_uploader':p.attachments.uploader=None
+                    if failure=='quota':p.attachments.settings=replace(p.attachments.settings,max_per_hour=0)
+                    if failure=='missing_file':
+                        check=p.attachments._check_asset_proofs
+                        def vanish(images,documents,proof,required):
+                            documents[0][1].unlink();return check(images,documents,proof,required)
+                        target='_check_asset_proofs';replacement=vanish
+                    elif failure in ('exception','invalid_result'):
+                        target='process'
+                        def broken(*args,**kwargs):
+                            if failure=='exception':raise OSError('local storage unavailable')
+                            return None
+                        replacement=broken
+                    else:target='strict_uploads';replacement=True
+                    with patch.object(p.attachments,target,replacement):
+                        with self.assertRaises(RulesHalt):
+                            if mode=='direct':self.run_recurrence_batch(p,members)
+                            else:p.process(message(902,text=mode,reply_to_id=901))
+                    self.assertEqual([],gh.calls);self.assertEqual([],comments);self.assertEqual([],uploader.uploads)
+        # No-proof legacy callers still turn ordinary processor failure into a note.
+        with patch.object(p.attachments,'process',side_effect=OSError('legacy failure')):
+            result=p._images('legacy',[members[0]],live=True)
+        self.assertTrue(result.notes)
+
+    def test_resumed_direct_plan_rechecks_full_evidence_after_a_new_upload_wait(self):
+        from unittest.mock import patch
+        from tg_triage.rules_pending_store import RulesPendingStore,RulesHalt,check_before_recovery
+        from tg_triage.rules_intake import sweep
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);path=str(Path(temp.name)/'state.sqlite')
+        store,provider,gh,sent,p,members,downloader,uploader,png=self.recurrence_batch_fixture(path=path,documents=True)
+        with patch('tg_triage.rules_intake._direct_related_episode',side_effect=RuntimeError('crash before related reservation')):
+            with self.assertRaises(RuntimeError):self.run_recurrence_batch(p,members)
+        p.rules_pending=RulesPendingStore(store);calls=len(provider.bodies)
+        upload=uploader.upload
+        def mutate(tag,file,asset):
+            result=upload(tag,file,asset)
+            with store.connection:store.connection.execute("UPDATE messages SET text=text||' edited while resumed upload waits' WHERE message_id=10")
+            return result
+        uploader.upload=mutate
+        with self.assertRaises(RulesHalt):sweep(p)
+        self.assertEqual([],gh.calls);self.assertEqual(calls,len(provider.bodies))
+        with self.assertRaises(RulesHalt):check_before_recovery(Path(path))
+
+    def test_target_is_rechecked_after_post_upload_proof_download_wait(self):
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesHalt
+        for mode in ('direct','A','B'):
+            with self.subTest(mode=mode):
+                values=self.recurrence_batch_fixture(documents=True) if mode=='direct' else self.unclear_question_fixture()
+                store,provider,gh,sent,p,members,downloader,uploader,png=values
+                uploaded=[False];upload=uploader.upload
+                def record(tag,file,asset):uploaded[0]=True;return upload(tag,file,asset)
+                uploader.upload=record
+                download=p.attachments.downloader
+                def change_after_upload(chat,mid,directory):
+                    result=download(chat,mid,directory)
+                    if uploaded[0]:gh.states[101]='open'
+                    return result
+                p.attachments.downloader=change_after_upload
+                comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                with self.assertRaises(RulesHalt):
+                    if mode=='direct':self.run_recurrence_batch(p,members)
+                    else:p.process(message(902,text=mode,reply_to_id=901))
+                self.assertEqual([],gh.calls);self.assertEqual([],comments)
+
+    def test_bound_topic_must_exist_and_be_OPEN_at_final_POST_gate(self):
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesHalt,check_before_recovery
+        for mode in ('direct','A','B'):
+            for status in ('CLOSED','EXPIRED','ESCALATED','unexpected','missing'):
+                with self.subTest(mode=mode,status=status):
+                    temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);path=str(Path(temp.name)/'state.sqlite')
+                    values=self.recurrence_batch_fixture(path=path,documents=True) if mode=='direct' else self.unclear_question_fixture(path=path)
+                    store,provider,gh,sent,p,members,downloader,uploader,png=values
+                    topic=f'{members[0].chat_id}:{members[0].message_id}'
+                    comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                    upload=uploader.upload
+                    def revoke(tag,file,asset):
+                        result=upload(tag,file,asset)
+                        with store.connection:
+                            if status=='missing':store.connection.execute('DELETE FROM rules_topics WHERE topic_id=?',(topic,))
+                            else:store.connection.execute('UPDATE rules_topics SET status=? WHERE topic_id=?',(status,topic))
+                        return result
+                    uploader.upload=revoke
+                    with self.assertRaises(RulesHalt):
+                        if mode=='direct':self.run_recurrence_batch(p,members)
+                        else:p.process(message(902,text=mode,reply_to_id=901))
+                    self.assertEqual([],gh.calls);self.assertEqual([],comments)
+                    table='rules_comments' if mode=='A' else 'rules_related_episodes'
+                    self.assertEqual('reserved',store.connection.execute('SELECT status FROM '+table).fetchone()[0])
+                    with self.assertRaises(RulesHalt):check_before_recovery(Path(path))
+
+    def test_final_topic_owner_phase_and_group_lane_state_remain_authoritative(self):
+        from tests.helpers import message
+        from tg_triage.rules_pending_store import RulesHalt
+        for mode in ('direct','A','B'):
+            changes=['owner','legacy_review','group_lane']+(['batch_closed'] if mode=='direct' else [])
+            for changed in changes:
+                with self.subTest(mode=mode,changed=changed):
+                    values=self.recurrence_batch_fixture(documents=True) if mode=='direct' else self.unclear_question_fixture()
+                    store,provider,gh,sent,p,members,downloader,uploader,png=values
+                    topic=f'{members[0].chat_id}:{members[0].message_id}'
+                    comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
+                    upload=uploader.upload
+                    def revoke(tag,file,asset):
+                        result=upload(tag,file,asset)
+                        with store.connection:
+                            if changed=='owner':store.connection.execute('UPDATE rules_topics SET source_chat_id=source_chat_id-1 WHERE topic_id=?',(topic,))
+                            if changed=='legacy_review':store.connection.execute("UPDATE rules_topics SET phase='LEGACY_REVIEW' WHERE topic_id=?",(topic,))
+                            if changed=='group_lane':store.connection.execute('UPDATE rules_batch_groups SET status=?',('DONE' if mode=='direct' else 'RESERVED',))
+                            if changed=='batch_closed':store.connection.execute("UPDATE rules_topics SET status='CLOSED' WHERE topic_id LIKE 'batch:%'")
+                        return result
+                    uploader.upload=revoke
+                    with self.assertRaises(RulesHalt):
+                        if mode=='direct':self.run_recurrence_batch(p,members)
+                        else:p.process(message(902,text=mode,reply_to_id=901))
+                    self.assertEqual([],gh.calls);self.assertEqual([],comments)

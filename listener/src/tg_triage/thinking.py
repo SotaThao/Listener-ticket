@@ -245,12 +245,12 @@ def init_store(store):
 
 @contextmanager
 def decision_turn(pipeline, key, root_key, input_id):
-    if not getattr(pipeline.config, 'thinking_enabled', True):
+    if not getattr(pipeline.config, 'thinking_enabled', True) and not getattr(pipeline.config, 'decision_rules_enabled', False):
         yield None
         return
     autonomous = getattr(pipeline.config, 'autonomous_enabled', False)
     existing = CURRENT.get()
-    if autonomous and existing is not None and existing.store is pipeline.store:
+    if (autonomous or getattr(pipeline.config, 'decision_rules_enabled', False)) and existing is not None and existing.store is pipeline.store:
         # Ingress routing and the resulting case/follow-up share one actual-call
         # budget and deadline. A nested phase must never buy another two calls.
         yield existing

@@ -250,7 +250,7 @@ class LegacyReconciliationTests(unittest.TestCase):
         store=Store(self.db); self.addCleanup(store.close)
         RulesPendingStore(store)
         reply=message(43,text='có thêm thông tin',reply_to_id=42); store.enqueue(reply)
-        pipeline=SimpleNamespace(store=store,rules_snapshot=SimpleNamespace(extensions=None),config=SimpleNamespace(telegram=SimpleNamespace(ops_chat_id=999)))
+        pipeline=SimpleNamespace(_prepared_images=None,store=store,rules_snapshot=SimpleNamespace(extensions=None),config=SimpleNamespace(telegram=SimpleNamespace(ops_chat_id=999)))
         result=process(pipeline,reply,None)
         self.assertEqual('legacy_transition_awaiting_release',result.reason)
         self.assertEqual('pending_review',store.get(reply.chat_id,reply.message_id)['decision'])
