@@ -90,7 +90,8 @@ class RulesBootstrapTests(unittest.TestCase):
         self.assertIn('rules must be ACTIVE', err)
 
     def test_active_fixture_fingerprint_and_run_uses_same_snapshot(self):
-        self.config(self.enabled)
+        # The startup ledger check is real; never point it at the host's production ledger.
+        self.config(self.enabled.replace('/var/lib/agentfleet/tg/triage.sqlite3', (self.root / 'absent.sqlite3').as_posix()))
         snapshot = self.snapshot()
         from tg_triage.store import Store
         store = Store(':memory:')
