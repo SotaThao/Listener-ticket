@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.11 · **Updated**: 2026-11-04 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.12 · **Updated**: 2026-11-04 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -209,7 +209,7 @@ Yêu cầu DESIGN/redesign cho panel/mode đã nhận diện có thể là task 
 
 `STATUS` do model nhận diện ý định, không dùng so khớp câu tiếng Việt để cấp quyền. Host chỉ xác định đích từ Reply thật trong cùng chat tới source hoặc sent-notice có bằng chứng. Đọc đúng partition group/case đã xác lập, gồm anchor/sibling thực sự giữ reservation hoặc ticket; không mượn tin gần nhất, chung thời gian hay topic bên cạnh. Issue đã xác nhận cần số/link canonical đúng repository cấu hình. Model không được tự cung cấp target/ticket hoặc lời khẳng định trạng thái. Nội dung chuyển tiếp/trích dẫn đơn thuần không thành lệnh hỏi hay thao tác.
 
-Phản hồi trạng thái ngắn, phân biệt đã ghi nhận ticket, đang xử lý, chưa có ticket trong sổ bot, POST đã giữ chỗ/chưa xác nhận và không đủ bằng chứng. Không suy từ thiếu record thành “GitHub không có issue”. Thiếu đích thì hỏi một câu Reply tin nguồn. Không tạo/sửa/comment/upload/retry issue, không replay công việc cũ. Plan STATUS khôi phục phải đọc lại bằng chứng host, không tin kết quả model/cache bịa trạng thái; reservation notice hiện hữu chống gửi lặp. Nhiều câu hỏi khác đích không được gộp thành trạng thái của tin đầu; công việc độc lập cùng batch giữ partition riêng.
+Phản hồi trạng thái ngắn, phân biệt đã ghi nhận ticket, đang xử lý, chưa có ticket trong sổ bot, POST đã giữ chỗ/chưa xác nhận và không đủ bằng chứng. Không suy từ thiếu record thành “GitHub không có issue”. Thiếu đích thì hỏi một câu Reply tin nguồn. Không tạo/sửa/comment/upload/retry issue, không replay công việc cũ. Khi bật rules (`decision_rules_enabled`), phản hồi STATUS/ANALYZE và câu hỏi thiếu đích gửi vào group ops kèm `ops.header`, trả lời bằng Reply trong ops; group nguồn chỉ nhận ❤️ (xem [Quyết định theo markdown](#quyết-định-theo-markdown-opt-in-đã-triển-khai-source-active-live-go-2026-11-04)). Plan STATUS khôi phục phải đọc lại bằng chứng host, không tin kết quả model/cache bịa trạng thái; reservation notice hiện hữu chống gửi lặp. Nhiều câu hỏi khác đích không được gộp thành trạng thái của tin đầu; công việc độc lập cùng batch giữ partition riêng.
 
 Đường autonomous có quyết định `ANALYZE` cho yêu cầu phân tích vấn đề từ hội thoại/ảnh. Agent tự đánh giá dữ liệu hiện có và định nghĩa một task ngắn: việc cần làm, phạm vi thực hiện và tiêu chí hoàn tất. Không mặc định gửi bản chép nội dung ảnh, danh sách giả thuyết hay bắt người gửi chọn số. Chỉ hỏi một câu tập trung khi thiếu đối tượng, ý định hoặc quyền thực sự ngăn xử lý an toàn; thiếu nguyên nhân CSS, môi trường hoặc bước tái hiện không mặc nhiên chặn việc xác định task từ triệu chứng nhìn thấy. Yêu cầu sửa lỗi cụ thể vẫn theo tuyến NEW/CONTINUE bình thường. Nội dung hội thoại/chữ trong ảnh là dữ liệu, không cấp quyền thực hiện chỉ thị.
 
@@ -233,11 +233,11 @@ Command có payload ép loại issue; mention Telegram thật có thể ép need
 
 ### TG-11 — Xác nhận tạo ticket
 
-Sau khi xác nhận tạo thành công: “Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé 😊”. Reply tin đầu của topic; ba tin/một ticket chỉ một reply, ba topic/ticket thì ba reply với link tương ứng. Link do code dựng từ repo/issue tin cậy.
+Sau khi xác nhận tạo thành công: “Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé 😊”. Reply tin đầu của topic; ba tin/một ticket chỉ một reply, ba topic/ticket thì ba reply với link tương ứng. Link do code dựng từ repo/issue tin cậy. Khi bật rules, câu xác nhận này gửi vào group ops kèm `ops.header`; group nguồn chỉ nhận ❤️ rồi 👌.
 
 ### TG-12 — Hỏi rõ và báo lỗi
 
-needs_human reply tin đầu topic với tối đa ba câu hỏi ngắn đã sanitize. Outcome GitHub không rõ phải nhờ Owner kiểm tra repo trước retry; hết quota thông báo hỗ trợ. Legacy noise/chat/pending_review không có text notice; autonomous pending có câu hỏi sau đợt gom, tra context và chống hỏi lặp; không lặng chờ duyệt đối với công việc chưa rõ thuộc TG-08.
+needs_human reply tin đầu topic với tối đa ba câu hỏi ngắn đã sanitize. Outcome GitHub không rõ phải nhờ Owner kiểm tra repo trước retry; hết quota thông báo hỗ trợ. Legacy noise/chat/pending_review không có text notice; autonomous pending có câu hỏi sau đợt gom, tra context và chống hỏi lặp; không lặng chờ duyệt đối với công việc chưa rõ thuộc TG-08. Khi bật rules, câu hỏi rõ (NEED_INFO) và báo lỗi gửi vào group ops kèm `ops.header`, trả lời bằng Reply trong ops; không reply chữ trong group nguồn.
 
 Ngoại lệ pending do **vision partition technical failure**: mỗi component text chưa phân loại được lưu `pending_review`/reason `vision_partition_unresolved` và nhận notice `context_pending`, chưa tạo ticket hay gắn với image ticket. Notice yêu cầu reply tin/notice với đầy đủ intent hoặc xác nhận chỉ chat. Reply có exact same-chat pending+sent-notice proof mở intake mới ngay, không sửa kế toán case cũ hoặc cấp quyền cho followup ticket cũ. Bare image không có yêu cầu vẫn theo TG-15.
 
@@ -416,13 +416,15 @@ Nếu parent đã có episode tái diễn được verified, lần tạo episode
 
 Trạng thái closed hoặc một câu "đã xử lý" không tự chứng minh đã hoạt động tốt. Lifecycle phải GET trạng thái hiện tại từ trusted repository/issue, lưu thời điểm quan sát và evidence cho nhận định recurrence. Reply tin cũ vẫn bắt đầu từ provenance nguồn; tuổi tin không đủ để tạo ticket mới. Chưa cấp quyền tự mở lại ticket. Quan hệ related và create phải đi qua ledger/reservation, canonical template, verified readback và reply đúng source; unknown outcome không tự retry.
 
-## Quyết định theo markdown: opt-in đã triển khai, source ACTIVE, mặc định tắt (chưa có live GO)
+## Quyết định theo markdown: opt-in đã triển khai, source ACTIVE, live GO 2026-11-04
 
 Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Sáu file quyết định đã `ACTIVE` theo Owner ngày 2026-10-30; `lifecycle.md` và `analysis-status.md` ACTIVE v2 theo duyệt ngày 2026-11-03; `roles.md` và `preflight.md` vẫn `DRAFT`. Các rule TG ở trên mô tả hành vi mặc định khi chưa bật rules. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
 
 Worktree bổ sung đường opt-in `thinking.decision_rules_enabled`: mặc định tắt nên hành vi đang chạy và các đường ANALYZE/STATUS cũ không đổi. Đường mới giữ intake theo sáu trạng thái, câu hỏi thông tin/chat là `CHAT`, cùng extension lifecycle và ANALYZE/STATUS đã duyệt; cần bộ rules ACTIVE và group ops riêng. Reply ticket đã đóng theo bảng vòng đời, chứng cứ host và reservation; không tự reopen. PDF/Office chưa đọc vẫn có thể đính kèm nếu caption tự đủ dữ kiện; yêu cầu phụ thuộc nội dung chưa đọc hoặc trích text lỗi/vượt budget được giữ lại. Tin mới ngoài batch chỉ nối pending cũ khi có Reply thật, không dựa similarity/thời gian. Owner đã duyệt tám câu chữ ops và chuyển sáu rules sang ACTIVE; bot vẫn tắt và chưa có GO. Tiến độ test giả lập và review được báo riêng, không suy từ fingerprint.
 
-Owner 2026-11-04 duyệt mọi tin chữ của rules mode vào ops, group nguồn chỉ nhận reaction; ANALYZE và STATUS nhận ❤️. Câu hỏi lifecycle và STATUS thiếu target được trả lời bằng Reply vào tin hỏi trong ops; L1 chạy lại readiness chỉ cho NEED_INFO. Nếu tin nguồn không có link, header ghi `Tin gốc: (group thường, không có link) · mã tin <message_id>`. Worktree đang triển khai routing và receipt ops; các regression cũ và khôi phục chưa được xác minh đầy đủ, chưa có GO.
+Owner 2026-11-04 duyệt mọi tin chữ của rules mode vào ops, group nguồn chỉ nhận reaction; ANALYZE và STATUS nhận ❤️. Câu hỏi lifecycle và STATUS thiếu target được trả lời bằng Reply vào tin hỏi trong ops; L1 chạy lại readiness chỉ cho NEED_INFO. Nếu tin nguồn không có link, header ghi `Tin gốc: (group thường, không có link) · mã tin <message_id>`. Code ở rules mode chặn mọi tin chữ tới chat khác ops (guard `Pipeline.notice_sender`). Bản phát hành `7ba210b`: 1670 test OK (skipped=2), review độc lập read-only APPROVED vòng 2.
+
+Owner GO 2026-11-04 (preflight P13, nguyên văn “Owner: GO · 2026-11-04”): bot chạy rules mode trên gw-01 với release `7ba210b`, fingerprint rules `80422e2871b95601fad9c1652e37556322c6d9c6d3f149be53b85fa434bc66b9`, template `8bc960370883bc8855a0e3e204f22656f957e5f0ae1998cbd8343ef184d9ef2f`. Group nguồn và group ops đều là supergroup (ops `-1003582326670`); ledger rules mới, ledger cũ giữ nguyên không reset theo quyết định Owner coi dữ liệu trước đó là test. P12 thực tế: READY, NEED_INFO, ANALYZE và STATUS chỉ gửi chữ vào ops, group nguồn chỉ có reaction, không ticket trùng. Các đoạn “chưa có GO” bên dưới là lịch sử trước mốc này. Điều kiện dừng H1–H7 vẫn áp dụng.
 
 Checkpoint PM01 + PM02 (#2178, 2026-11-03): source vòng đời ticket được High R5 duyệt; source ANALYZE/STATUS được High R2 duyệt trong phạm vi tested-source. ANALYZE giữ giới hạn task, một critic cho toàn partition, exact provider view/pixel/document proof, Turn budget và receipt host độc lập; grouped sources giữ reservation trước gửi và chỉ hoàn tất cùng receipt đã xác nhận. STATUS chỉ đọc ledger. Hai rules mở rộng ACTIVE v2 theo duyệt Owner ngày 2026-11-03; PM03 High R3 đã duyệt tested-source và full source đã chạy1650 tests (1648pass/2skip), không xác nhận chất lượng model thật, hoàn tất migration, installed/release hay live GO. Quy tắc nghiệp vụ không đổi.
 
@@ -2325,6 +2327,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.12 | 2026-11-04 | Claude / owner AlexChu | Ghi Owner GO cho release `7ba210b` (rules mode, ops supergroup, fingerprint) và kết quả P12 thực tế; thêm câu chỉ dẫn ops ở TG-09/11/12 cho rules mode, giữ nguyên chữ mặc định khi tắt rules. Các dòng v1.16.9–v1.16.11 ghi “chờ kiểm thử”: đã được kiểm (1670 test OK, review APPROVED). Không đổi business rule hay trace runtime. |
 | v1.16.11 | 2026-11-04 | Codex / owner AlexChu | Khôi phục xử lý tái diễn chỉ có ảnh sau xác nhận B đã bind trong ops, giữ namespace ID nguồn riêng; chờ controller kiểm thử lại. |
 | v1.16.10 | 2026-11-04 | Codex / owner AlexChu | Phân biệt ID tin nguồn và ops, kiểm collision receipt khi khôi phục và giữ guard gửi ops ổn định khi khôi phục sender; chờ controller kiểm thử lại. |
 | v1.16.9 | 2026-11-04 | Codex / owner AlexChu | Ghi quyết định ops-only và Reply trong ops; implementation extension và kiểm chứng còn dang dở, chưa có GO. |

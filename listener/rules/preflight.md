@@ -1,4 +1,4 @@
-<!-- rule-file: preflight · version 2 · status DRAFT · audience: người + agent -->
+<!-- rule-file: preflight · version 3 · status DRAFT · audience: người + agent -->
 # Cổng bật tính năng — điều kiện trước khi bot chạy
 
 File cho **người và Agent**. Áp mỗi lần bật, cài bản mới hoặc đổi config máy chạy của bot có quyết định theo `rules/` (bước 0–6 của [tài liệu luồng](../../Docs/01-product/telegram-triage-noissue_business-flow_261028_v1.0.0.md)). Quyền ký và miễn theo [`roles.md`](roles.md) · A26, A27.
@@ -66,10 +66,28 @@ P13 PASS — Owner: GO · <ngày>
 Kết luận: GO|NO_GO
 ```
 
-## Hiện trạng (2026-10-29)
+## Hiện trạng (2026-11-04)
 
-`NO_GO`:
+`GO`:
 
-- P1 `FAIL`: mọi file `rules/` còn `DRAFT`; câu chữ 6 khối template `cần thêm` (`channels.md` · `blocks`) chưa duyệt.
-- P3, P8, P12 `UNCHECKED`: bot chưa có code nạp `rules/`, chưa có group xử lý.
-- P6 `FAIL`: lỗi HIGH giới hạn ảnh tính chung cả đợt vision chưa sửa.
+```
+Phiếu bật · release main 7ba210b · ngày 2026-11-04
+Fingerprint rules: 80422e2871b95601fad9c1652e37556322c6d9c6d3f149be53b85fa434bc66b9
+Fingerprint template: 8bc960370883bc8855a0e3e204f22656f957e5f0ae1998cbd8343ef184d9ef2f
+P1  PASS — sáu file quyết định ACTIVE theo Owner 2026-10-30; lifecycle/analysis-status ACTIVE 2026-11-03 — ký: OWNER, AlexChu
+P2  PASS — test_rules_markdown trong full suite — ký: DEV
+P3  PASS — check-config thoát 0, fingerprint như trên — ký: DEV
+P4  PASS — 1670 test OK (skipped=2) trên commit 7ba210b — ký: DEV
+P5  PASS — policy checker 33/61 và 18 policy test — ký: DEV
+P6  PASS — Owner ký 2026-11-03 — ký: OWNER, AlexChu
+P7  PASS — fake-tool smoke core + extension — ký: DEV
+P8  PASS — corpus 24/24 đúng kết quả (model cấu hình) — ký: DEV
+P9  PASS — check-config bản cài: ops -1003582326670 (supergroup), repo PersonalProjectJob/telegram-agent — ký: OPERATOR
+P10 PASS — cài lại bản trước a81355f bằng script deploy thành công — ký: OPERATOR
+P11 PASS — deploy 7ba210b, restart, fingerprint trong log khớp P3 — ký: OPERATOR
+P12 PASS — tin thật READY/NEED_INFO/ANALYZE/STATUS: chữ chỉ vào ops, nguồn chỉ reaction — ký: OPERATOR
+P13 PASS — Owner: GO · 2026-11-04
+Kết luận: GO
+```
+
+Lịch sử: phiếu 2026-10-29 là `NO_GO` (P1 rules còn DRAFT, P3/P8/P12 chưa có code nạp rules và group xử lý, P6 lỗi HIGH giới hạn ảnh vision); các mục này đã được giải quyết trước phiếu trên. Mỗi lần cài bản mới hoặc đổi config máy chạy phải lập phiếu mới.

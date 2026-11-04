@@ -7,7 +7,7 @@ Owner quy trình/data/state: **AlexChu**. Executor (Codex, Gemini/Antigravity, C
 1. **Xác định vai của mình** trong [`rules/roles.md`](rules/roles.md) · bảng `actors`. Chưa được Owner giao vai trong phiên ⇒ bạn là `AGENT`, kể cả khi là model mạnh.
 2. **Tra quyền** của việc sắp làm ở bảng `actions` (A01–A27): `ALLOW` làm; `ASK_OWNER` chỉ làm khi có **đồng ý của Owner trong phiên** đúng định nghĩa trong `roles.md` (nêu đúng việc, gửi trong cuộc trò chuyện hiện tại, trích nguyên văn vào báo cáo); `DENY` hoặc không có trong bảng ⇒ không làm.
 3. Gặp điều kiện ở bảng `stop_and_ask` (S1–S7) ⇒ dừng, báo Owner kèm bằng chứng.
-4. **Bật bot, cài bản mới, đổi config máy chạy**: chỉ khi phiếu trong [`rules/preflight.md`](rules/preflight.md) là `GO` (P1–P13 đã ký). Đang chạy mà gặp H1–H7 ⇒ dừng bot theo bảng `halt`. Hiện trạng: `NO_GO`.
+4. **Bật bot, cài bản mới, đổi config máy chạy**: chỉ khi phiếu trong [`rules/preflight.md`](rules/preflight.md) là `GO` (P1–P13 đã ký). Đang chạy mà gặp H1–H7 ⇒ dừng bot theo bảng `halt`. Hiện trạng: `GO` từ 2026-11-04 cho release `7ba210b` (rules mode); bản cài hoặc config mới cần phiếu mới.
 
 ## Nguyên tắc nền (Owner, 2026-10-29)
 
@@ -38,7 +38,7 @@ Tài liệu Fleet cũ là lịch sử. Riêng §12.11 của [assistant-definitio
   - Quyết định: bảng I1–I3 (intent, command thắng model) và R1–R13 (đọc từ trên xuống, dòng đầu khớp thắng) trong [`rules/readiness.md`](rules/readiness.md).
   - Hỏi gì khi thiếu: [`rules/questions.md`](rules/questions.md). Bot nói ở đâu: [`rules/channels.md`](rules/channels.md) — **group gốc chỉ có reaction**, mọi tin chữ của bot ở group xử lý chung.
   - Ca mẫu đối chiếu X1–X24: [`rules/examples.md`](rules/examples.md). Trả lời "ca X xử lý thế nào" phải nêu mã luật đã khớp (vd `I2+R9`).
-  - Sáu file quyết định đã ACTIVE theo Owner; cấu hình mặc định vẫn tắt và chưa có GO. Khi flag tắt, bot theo hành vi cũ; chỉ khi opt-in được phép mới dùng rules và group xử lý.
+  - Sáu file quyết định đã ACTIVE theo Owner; cấu hình mẫu vẫn mặc định tắt. Bot trên gw-01 chạy rules mode theo GO 2026-11-04. Khi flag tắt, bot theo hành vi cũ; khi bật mới dùng rules và group xử lý.
 - Gom/tách theo ngữ nghĩa và Reply thật; không gộp vì cùng sender, thời gian hay từ khóa. Ảnh, caption, reply phân tích chung một gói (TG-05, TG-06, TG-15).
 - Ticket đã có: open thì bổ sung; closed thì theo bảng **Vòng đời ticket** và **Ticket đã đóng**. Không tự reopen/đóng, không tạo trùng.
 - Repo, URL, nhãn, permission do config/code quyết định; model hoặc agent không tự chọn (TG-17, TG-31).
