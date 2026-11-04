@@ -3,6 +3,8 @@
 **Version**: v1.0.2 · **Cập nhật**: 2026-10-30 18:13 Asia/Saigon · **Owner**: AlexChu · **Người cập nhật**: Codex
 **Kết luận**: Lõi đã triển khai và kiểm thử offline; sáu rules ACTIVE, tám mẫu tin được Owner duyệt. Chưa đủ bằng chứng chạy thật: **NO_GO**. Không bật/restart bot trong phiên.
 
+> **Cập nhật 2026-11-04:** kết luận NO_GO ở trên và bảng §5 là trạng thái ngày 30/10. P1–P13 đã PASS trên máy chạy và Owner ký **GO** ngày 04/11 cho release `7ba210b`; phiếu hiện hành nằm ở [`listener/rules/preflight.md`](../../listener/rules/preflight.md). Mục còn mở từ audit này: hướng dẫn cài từ đầu cho máy mới.
+
 > Bản này cập nhật audit v1.0.0 về bộ cài. Goal ưu tiên hiện tại là **Agent tự lắng nghe thông tin trong group Telegram và log ticket đúng nghiệp vụ**. Installer cho người không biết code là nhánh sau; không dùng điểm DX của bản cũ để kết luận chất lượng lõi hôm nay. Giữ tên file để các liên kết hiện hữu tiếp tục hoạt động.
 
 ## 1. Phạm vi, nguồn chính và bằng chứng
@@ -156,6 +158,7 @@ Các link tương đối trên branch tài liệu có thể còn nội dung cũ;
 
 | Version | Ngày / giờ Asia/Saigon | Người cập nhật | Nội dung |
 |---|---|---|---|
+| v1.0.3 | 2026-11-04 | Claude / owner AlexChu | Thêm ghi chú trạng thái: P1–P13 PASS và Owner GO 04/11 cho release `7ba210b`; phiếu hiện hành ở `listener/rules/preflight.md`. Bảng §5 giữ làm lịch sử 30/10. |
 | v1.0.2 | 2026-10-30 18:20 | Codex | Owner yêu cầu commit/push main; ghi commit mã 095ca3f, tạo Task setup #2488 cùng năm Dev Task Todo, giữ 20h estimate và NO_GO. |
 | v1.0.1 | 2026-10-30 18:13 | Codex | Đổi trọng tâm về goal nghe group → ticket; phân loại đáp ứng/dư/bug/giới hạn/setup; sửa B4/B5/B7, D8/D9; ghi ACTIVE/approval, bằng chứng 1.393 tests, NO_GO và estimate 20h. |
 | v1.0.0 | 2026-10-30, giờ chưa ghi | Claude | Audit DX bộ cài trước implementation, base b2d051b. Tám trục và điểm tổng 3/10 là lịch sử, chưa đo lại bằng installer thật. |

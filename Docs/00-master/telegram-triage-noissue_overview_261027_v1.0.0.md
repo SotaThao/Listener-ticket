@@ -1,6 +1,6 @@
 # Telegram triage → GitHub ticket — Overview và bàn giao
 
-**Version**: v1.0.3 · **Updated**: 2026-11-03 09:27 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Author**: Claude; cập nhật liên kết quản lý: Codex · **Baseline code lịch sử**: `d8accc8`
+**Version**: v1.0.4 · **Updated**: 2026-11-04 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Author**: Claude; cập nhật liên kết quản lý: Codex · **Baseline code lịch sử**: `d8accc8`
 
 **Status**: Tài liệu bàn giao. Không thay thế nguồn nghiệp vụ. Mọi quy tắc ở đây trỏ về TG-ID trong [Business DOCS](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md); quy tắc chi tiết dạng MUST/MUST NOT nằm ở [Rulebook](../01-product/telegram-triage-noissue_rulebook_261027_v1.0.0.md).
 
@@ -234,6 +234,7 @@ Tài liệu kiểm soát hiện hành: [Báo cáo tổng thể](../04-tasks/list
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.0.4 | 2026-11-04 | Claude / owner AlexChu | Trạng thái hiện hành: Owner GO 2026-11-04, bot chạy rules mode (release `7ba210b`); mọi tin chữ vào group ops. Xem Báo cáo tổng thể §1.1 và phiếu `listener/rules/preflight.md`. Ghi chú "giữ NO_GO" ở v1.0.2 là lịch sử. |
 | v1.0.3 | 2026-11-03 09:27 | Codex / owner AlexChu | Đồng bộ liên kết plan ba task chức năng trước đóng gói theo chỉ định Owner |
 | v1.0.2 | 2026-11-03 09:12 | Codex / owner AlexChu | Liên kết báo cáo và bảng output/acceptance cho PM; ghi baseline cũ là lịch sử, giữ NO_GO |
 | v1.0.1 | 2026-10-28 | Claude / owner AlexChu | Thêm link thư mục template log ticket. Sửa G-01: tin trong group đã được đổi "Bạn" → "Anh/Chị" khi gửi; chỉ body issue còn "Bạn". |

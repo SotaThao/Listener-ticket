@@ -1,18 +1,32 @@
 # Listener-ticket — Báo cáo tiến độ và kế hoạch triển khai
 
-**Ngày báo cáo:** 03/11/2026, cập nhật 17:05 (Asia/Saigon)
+**Ngày báo cáo:** 03/11/2026, cập nhật 04/11/2026 (Asia/Saigon)
 
-**Phiên bản:** v1.0.10
+**Phiên bản:** v1.0.11
 
 **Owner:** AlexChu
 
-**Trạng thái:** Hoàn thiện lõi và kiểm chứng offline; chưa đủ điều kiện vận hành thật (NO_GO).
+**Trạng thái:** **Đang vận hành thật theo rules mode từ 04/11/2026** — Owner ký GO (preflight P13) cho release `7ba210b`. Mục 1.1 tóm tắt đợt 04/11; các mục từ 2 trở đi là báo cáo đợt 03/11, giữ làm lịch sử.
 
 **Phạm vi đợt này:** Hoàn thiện ba luồng chức năng để chạy và kiểm thử từ source trước khi đóng gói: schema/lifecycle, ANALYZE/STATUS và SQLite/legacy.
 
 ## 1. Trạng thái tổng thể
 
-**Cả ba task đã qua review High trong phạm vi source đã kiểm; full regression cuối đạt.** Bản mới nằm trên worktree nhánh `bugfix/2178_rules-functional-completion`, tiếp tục từ baseline `e2833ec`; code ba task đã commit và push lên `main` tại `c749d31` theo yêu cầu Owner. Bot chưa chạy thật và vẫn NO_GO.
+**Cả ba task đã qua review High trong phạm vi source đã kiểm; full regression cuối đạt.** Bản mới nằm trên worktree nhánh `bugfix/2178_rules-functional-completion`, tiếp tục từ baseline `e2833ec`; code ba task đã commit và push lên `main` tại `c749d31` theo yêu cầu Owner. Tại thời điểm 03/11 bot chưa chạy thật (NO_GO); xem mục 1.1 cho trạng thái hiện tại.
+
+### 1.1. Cập nhật 04/11/2026 — từ kiểm offline tới vận hành thật
+
+| Bước | Kết quả |
+|---|---|
+| Preflight trên máy chạy (P9–P11) | Kiểm config, thử quay lại bản cũ, cài bản mới và đọc lại log sau restart: đạt |
+| Bật rules mode lần đầu | Tạo ticket đúng, nhưng phát hiện bot trả lời phân tích (ANALYZE) bằng chữ trong group nguồn — vi phạm quy tắc "group nguồn chỉ có reaction" (điều kiện dừng H7). Bot được dừng ngay |
+| Sửa lỗi | Mọi tin chữ ở rules mode chuyển vào group ops (ANALYZE, STATUS, câu hỏi lifecycle, thông báo tái diễn); trả lời bằng Reply trong ops; thêm chốt chặn trong code từ chối gửi chữ ra ngoài group ops. Owner duyệt 4 quyết định và điều chỉnh rule L1 |
+| Kiểm chứng | 1.670 test đạt (2 skip); reviewer độc lập chỉ đọc: vòng 1 yêu cầu sửa 3 lỗi (2 HIGH, 1 MED), vòng 2 **APPROVED** |
+| Vận hành | Group nguồn và group ops được nâng cấp lên supergroup; dùng sổ theo dõi mới vì dữ liệu cũ là dữ liệu test (theo quyết định Owner) |
+| Kiểm thật P12 | READY tạo ticket và báo link vào ops; NEED_INFO hỏi trong ops; ANALYZE và STATUS trả lời trong ops; group nguồn chỉ nhận reaction; không ticket trùng |
+| GO | Owner ký "Owner: GO · 2026-11-04" |
+
+Việc còn lại ngoài đợt này: hướng dẫn cài từ đầu cho máy mới (chưa có); mỗi lần cài bản mới hoặc đổi máy cần lập phiếu preflight mới. Không chạy hai bot cùng lúc trên cùng các group vì sẽ tạo ticket trùng.
 
 ## 2. Tiến độ thực tế khi áp dụng Agent
 
@@ -75,10 +89,11 @@ CI, đóng gói/review bản cài và setup vận hành được để ngoài pl
 
 | Phụ thuộc / rủi ro | Ảnh hưởng | Cách xử lý |
 |---|---|---|
-| Rules mở rộng còn DRAFT | Rules mode chưa khởi động được với bộ rules hiện tại | Chuẩn bị rules, ví dụ và kết quả kiểm để Owner duyệt riêng |
+| Rules mở rộng còn DRAFT | ~~Rules mode chưa khởi động được~~ — **đã xử lý 03–04/11**: lifecycle/analysis-status ACTIVE, rules mode chạy thật | Owner duyệt từng thay đổi rule |
 | Test giả bỏ qua contract thực tế | Test xanh nhưng tích hợp model vẫn sai | Kiểm schema và provider boundary thực tế; tách kiểm transport khỏi đánh giá chất lượng model |
 | Dữ liệu lịch sử có tác động bên ngoài chưa rõ | Nguy cơ ticket/comment/attachment trùng nếu replay | Giữ reservation, kiểm trên bản sao, đối soát trước khi cho chuyển tiếp |
-| Chưa có môi trường kiểm Telegram/model/GitHub thật | Chưa kiểm được toàn bộ luồng thật | Ghi rõ phần đã chạy từ source và phần còn thiếu; không dùng kết quả giả lập thay cho kiểm model thật |
+| Chưa có môi trường kiểm Telegram/model/GitHub thật | ~~Chưa kiểm được toàn bộ luồng thật~~ — **đã kiểm thật 04/11** (P12: READY, NEED_INFO, ANALYZE, STATUS) | Theo dõi điều kiện dừng H1–H7 khi vận hành |
+| Thiếu hướng dẫn cài từ đầu cho máy mới | Khó chuyển bot sang máy khác | Viết runbook cài mới; không chạy song song hai bot trên cùng group |
 | Công cụ harness-verify hiện chỉ hỗ trợ Node | Không có verdict harness hợp lệ cho repository Python | Ghi đúng giới hạn, dùng output Python checks riêng; không tạo package.json giả để vượt gate |
 
 ## 7. Điều kiện hoàn thành đợt này
@@ -89,7 +104,7 @@ CI, đóng gói/review bản cài và setup vận hành được để ngoài pl
 
 ## 8. Tra cứu lưu trữ, hoạt động và chỉnh thủ công
 
-Các đường dẫn dưới đây tính từ root repository trên nhánh triển khai `bugfix/2178_rules-functional-completion`; main vẫn ở `e2833ec`. Cả ba task đã qua source review và kiểm tổng; chưa có PM ký Accepted. Không có thao tác đổi config hoặc dữ liệu live khi viết tài liệu.
+Các đường dẫn dưới đây tính từ root repository; nhánh triển khai `bugfix/2178_rules-functional-completion` đã được gộp vào `main` (hiện đã bao gồm cả bản sửa 04/11). Cả ba task đã qua source review và kiểm tổng; chưa có PM ký Accepted. Không có thao tác đổi config hoặc dữ liệu live khi viết tài liệu.
 
 ### 8.1. Schema và lifecycle
 
