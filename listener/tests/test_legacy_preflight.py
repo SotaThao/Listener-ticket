@@ -311,7 +311,7 @@ class LegacyPreflightTests(unittest.TestCase):
         if direct:self.assertEqual('issue',result.decision)
         else:
             self.assertEqual('lifecycle_question_sent',result.reason)
-            self.assertEqual('issue' if choice=='B' else 'followup',pipeline.process(message(44,text=choice,reply_to_id=43)).decision)
+            self.assertEqual('issue' if choice=='B' else 'followup',fixtures.ops_reply(pipeline,message(44,text=choice,reply_to_id=43)).decision)
         store.close();return self.db
 
     def test_r2_genuine_A_B_answers_reject_invalid_choice_missing_message_and_reply(self):
@@ -466,10 +466,13 @@ class LegacyPreflightTests(unittest.TestCase):
                     github.add_comment=lambda *args:301
                     text='POS worked yesterday; failed today'
                     self.assertEqual(202,pipeline.process(message(42,text=text,reply_to_id=10)).issue_number)
+                    if reply==43:
+                        with store.connection:
+                            store.connection.execute("INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at,notice_message_id) VALUES(?,42,'LIFECYCLE_EPISODE','sent','now',43)",(message().chat_id,))
                     self.assertEqual('lifecycle_question_sent',pipeline.process(message(50,text=text,reply_to_id=reply)).reason)
                     question=store.connection.execute('SELECT parent_number FROM rules_lifecycle_questions').fetchone()
                     self.assertEqual(202,question[0])
-                    result=pipeline.process(message(52,text=choice,reply_to_id=51))
+                    result=fixtures.ops_reply(pipeline,message(52,text=choice,reply_to_id=51))
                     self.assertEqual('followup' if choice=='A' else 'issue',result.decision)
                     store.close();before=self.db.read_bytes()
                     check_before_recovery(self.db);self.assertEqual('CLEAR',inspect(self.db)['recovery_gate'])

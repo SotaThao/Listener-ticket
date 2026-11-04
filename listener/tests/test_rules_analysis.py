@@ -141,7 +141,7 @@ class RulesAnalysisTests(unittest.TestCase):
         p,http,sent=self.pipeline([generated(),verdict()])
         result=p.process(message(42,text=TEXT))
         self.assertEqual('semantic_analyze',result.reason);self.assertEqual(2,len(http.calls));self.assertEqual(1,len(sent))
-        self.assertTrue(sent[0][2].startswith('Việc:'));self.assertNotIn('Trích nguồn',sent[0][2])
+        self.assertIn('\nViệc:',sent[0][2]);self.assertNotIn('Trích nguồn',sent[0][2])
         self.assertEqual(1,self.store.connection.execute('SELECT count(*) FROM rules_analysis_reviews').fetchone()[0])
 
     def test_receipt_and_plan_tamper_do_not_validate(self):
@@ -260,7 +260,7 @@ class RulesAnalysisTests(unittest.TestCase):
         self.assertEqual('PLANNED',self.store.connection.execute('SELECT status FROM rules_batch_groups').fetchone()[0])
         sweep(p);sweep(p)
         self.assertEqual(1,len(sent));self.assertEqual(2,len(http.calls))
-        self.assertTrue(sent[0][2].startswith('Việc:'))
+        self.assertIn('\nViệc:',sent[0][2])
 
     def test_missing_or_copied_review_receipt_does_not_regenerate(self):
         from tg_triage.rules_intake import sweep
@@ -291,7 +291,7 @@ class RulesAnalysisTests(unittest.TestCase):
         with self.assertRaises(RulesHalt):p.process(message(42,text=TEXT))
         with self.assertRaises(RulesHalt):_recoverable_batch_groups(self.store.connection)
         self.assertEqual(2,len(http.calls));self.assertEqual([],sent)
-        self.assertEqual('failed',self.store.connection.execute('SELECT status FROM group_notices').fetchone()[0])
+        self.assertEqual('ambiguous',self.store.connection.execute('SELECT status FROM rules_notices').fetchone()[0])
 
     def test_notice_send_before_group_checkpoint_recovers_done_without_resend(self):
         from tg_triage.rules_pending_store import RulesPendingStore
@@ -511,10 +511,10 @@ class RulesAnalysisTests(unittest.TestCase):
         p,http,sent,sources,_,doc=self.mixed_fixture(reverse=True)
         def send(chat,mid,body):
             self.assertFalse(self.store.connection.in_transaction)
-            self.assertEqual(42,mid)
+            self.assertEqual((-1009876543210,None),(chat,mid))
             self.assertEqual(['pending_review']*3,[r[0] for r in self.store.connection.execute('SELECT decision FROM messages ORDER BY message_id')])
             self.assertEqual(3,self.store.connection.execute('SELECT count(*) FROM rules_analysis_review_members').fetchone()[0])
-            self.assertEqual('reserved',self.store.connection.execute('SELECT status FROM group_notices').fetchone()[0])
+            self.assertEqual('reserved',self.store.connection.execute('SELECT status FROM rules_notices').fetchone()[0])
             sent.append((chat,mid,body));return 901
         p.notice_sender=send
         _process_batch(p,sources)
@@ -550,7 +550,7 @@ class RulesAnalysisTests(unittest.TestCase):
         with self.assertRaises(RulesHalt):_process_batch(p,sources)
         self.assertEqual(1,len(sent));self.assertEqual(2,len(http.calls))
         self.assertEqual(['pending_review']*3,[r[0] for r in self.store.connection.execute('SELECT decision FROM messages ORDER BY message_id')])
-        self.assertEqual('reserved',self.store.connection.execute('SELECT status FROM group_notices').fetchone()[0])
+        self.assertEqual('reserved',self.store.connection.execute('SELECT status FROM rules_notices').fetchone()[0])
         self.assertEqual('RESERVED',self.store.connection.execute('SELECT status FROM rules_batch_groups').fetchone()[0])
         with self.assertRaises(RulesHalt):_recoverable_batch_groups(self.store.connection)
         with self.store.connection:self.store.connection.execute('DROP TRIGGER fail_second_analysis')
@@ -586,7 +586,7 @@ class RulesAnalysisTests(unittest.TestCase):
             return transition(*args,**kwargs)
         with patch('tg_triage.rules_analysis.finish_members'),patch.object(p.rules_pending,'transition_group',side_effect=crash):
             with self.assertRaises(RuntimeError):_process_batch(p,sources)
-        self.assertEqual('sent',self.store.connection.execute('SELECT status FROM group_notices').fetchone()[0])
+        self.assertEqual('sent',self.store.connection.execute('SELECT status FROM rules_notices').fetchone()[0])
         self.assertEqual(['pending_review']*3,[r[0] for r in self.store.connection.execute('SELECT decision FROM messages ORDER BY message_id')])
         p.rules_pending=RulesPendingStore(self.store);sweep(p)
         self.assertEqual(['chat']*3,[r[0] for r in self.store.connection.execute('SELECT decision FROM messages ORDER BY message_id')])
@@ -626,7 +626,7 @@ class RulesAnalysisTests(unittest.TestCase):
         self.store=Store(path);self.addCleanup(self.store.close)
         restarted,empty_http,delivered=self.pipeline([],downloader=downloader)
         sweep(restarted);sweep(restarted)
-        self.assertEqual(1,len(delivered));self.assertEqual(42,delivered[0][1]);self.assertEqual([],empty_http.calls)
+        self.assertEqual(1,len(delivered));self.assertEqual((-1009876543210,None),delivered[0][:2]);self.assertEqual([],empty_http.calls)
         self.assertEqual(2,len(http.calls));self.assertEqual([],sent)
         self.assertEqual(['chat']*3,[r[0] for r in self.store.connection.execute('SELECT decision FROM messages ORDER BY message_id')])
         self.store=previous

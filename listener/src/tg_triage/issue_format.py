@@ -352,7 +352,7 @@ def _original_text(item, limit) -> str:
 
 def format_issue(message: IncomingMessage, classification: Classification | None,
                  tier: str, needs_human: bool, model: str = "qwen3.5:9b", *,
-                 case_messages=None, key_message_ids=None, images=(), documents=(), notes=(),
+                 case_messages=None, key_message_ids=None, key_message_keys=None, images=(), documents=(), notes=(),
                  clarify=None, text=None, max_quoted=None, details=None) -> Issue:
     """Render one issue. `message` is the case's (or topic group's) first message.
 
@@ -360,7 +360,8 @@ def format_issue(message: IncomingMessage, classification: Classification | None
     for trusted tickets, including typed needs-human tickets (12.15).
 
     All `case_messages` are quoted in time order; `key_message_ids` (Assistant
-    definition 12.2) only marks the messages the model called key. `images` ((alt, url) pairs) and `notes` are written by code
+    definition 12.2) only marks the messages the model called key. Cross-chat
+    callers can use `key_message_keys` as (chat_id, message_id) pairs. `images` ((alt, url) pairs) and `notes` are written by code
     (12.8), never taken from the model, so they do not pass through `sanitize`. `documents` ((file name,
     url) pairs, 12.14) are listed as plain links, never embedded; the sender's file name is cleaned by
     `document_label` here, so no caller can pass a raw name into the body.
@@ -402,6 +403,9 @@ def format_issue(message: IncomingMessage, classification: Classification | None
     present = {item.message_id for item in case_messages}
     key_ids = {value for value in (key_message_ids or ())
                if type(value) is int and value in present}
+    present_keys = {(item.chat_id,item.message_id) for item in case_messages}
+    key_keys = {tuple(value) for value in (key_message_keys or ())
+                if isinstance(value,(tuple,list)) and len(value)==2 and tuple(value) in present_keys}
     shown = case_messages[:MAX_QUOTED_MESSAGES if max_quoted is None else max(1, max_quoted)]
     hidden = len(case_messages) - len(shown)
     limit = TOTAL_QUOTE_BUDGET // len(shown)
@@ -411,7 +415,7 @@ def format_issue(message: IncomingMessage, classification: Classification | None
     for item in shown:
         link = telegram_link(item)
         link_text = f" · [{active().render('_common.md', 'original.open_link')}]({link})" if link else ""
-        mark = " · " + active().render('_common.md', 'original.key_mark') if item.message_id in key_ids else ""
+        mark = " · " + active().render('_common.md', 'original.key_mark') if item.message_id in key_ids or (item.chat_id,item.message_id) in key_keys else ""
         blocks.append(f"**{_sender(item)} · {_time(item)}**{link_text}{mark}\n"
                       f"{_original_text(item, limit)}")
     if hidden:

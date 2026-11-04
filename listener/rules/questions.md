@@ -1,5 +1,7 @@
-<!-- rule-file: questions · version 3 · status ACTIVE · audience: code -->
+<!-- rule-file: questions · version 4 · status ACTIVE · audience: code -->
 # Hỏi khi thiếu (trạng thái `NEED_INFO`)
+
+Owner 2026-11-04: Đồng ý cả 4 + Duyệt, chạy tiếp (L1 chỉ cho NEED_INFO).
 
 Code chọn câu hỏi theo trường thiếu; **câu chữ** lấy từ khối template ghi ở cột "Khối template" (danh mục khối: `channels.md` · `blocks`). Model không viết câu hỏi. Câu hỏi **chỉ gửi ở group xử lý**, không bao giờ ở group gốc (`channels.md`).
 
@@ -40,11 +42,11 @@ Tin ở group xử lý chỉ được nối về chủ đề theo bảng này. �
 
 | # | Kênh | Là Reply vào | Pending | Kết quả |
 |---|---|---|---|---|
-| L1 | `ops` | Tin hỏi của bot đã gửi thành công cho chủ đề đó | `OPEN` | `LINK` |
+| L1 | `ops` | Tin hỏi NEED_INFO của bot đã gửi thành công cho chủ đề đó | `OPEN` | `LINK` |
 | L2 | `ops` | Tin hỏi của bot đã gửi thành công cho chủ đề đó | `EXPIRED` `CLOSED` | `IGNORE` |
 | L3 | `ops` | Tin khác của bot (link ticket, báo lỗi) hoặc tin của người | * | `IGNORE` |
 | L4 | `ops` | Không Reply tin nào | * | `IGNORE` |
 
-- `LINK`: tin trả lời (chữ và ảnh) được gộp vào chủ đề, `reply_target` = `bot_question`, chạy lại `readiness.md` từ R1.
+- `LINK`: tin trả lời NEED_INFO (chữ và ảnh) được gộp vào chủ đề, `reply_target` = `bot_question`, chạy lại `readiness.md` từ R1. Reply câu hỏi vòng đời theo `lifecycle.md`, Reply câu hỏi thiếu target STATUS theo `analysis-status.md`; không chạy lại readiness.
 - `IGNORE`: không xử lý, không tạo chủ đề mới, không trả lời.
 - Group xử lý **không** phải group nguồn: tin mới ở đây không bao giờ thành ticket mới.

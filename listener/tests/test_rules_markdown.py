@@ -201,7 +201,7 @@ class RulesMarkdown(unittest.TestCase):
         results = {one(r["Kết quả"]) for r in self.decision}
         self.assertLessEqual(results, self.states)
         outputs = {one(r["Trạng thái"]) for r in records(self.tables["channels"]["outputs"])}
-        self.assertEqual(outputs, self.states, "channels.outputs phải có đúng mỗi trạng thái một dòng")
+        self.assertEqual(outputs, self.states | {"ANALYZE", "STATUS", "LIFECYCLE_QUESTION", "RELATED"}, "channels.outputs phải có đúng mỗi trạng thái một dòng")
 
     # K4
     def test_field_references(self):

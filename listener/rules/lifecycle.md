@@ -1,5 +1,8 @@
-<!-- rule-file: lifecycle · version 2 · status ACTIVE · audience: code -->
+<!-- rule-file: lifecycle · version 3 · status ACTIVE · audience: code -->
 # Vòng đời ticket
+
+Owner 2026-11-04: Đồng ý cả 4 + Duyệt, chạy tiếp (L1 chỉ cho NEED_INFO).
+Câu hỏi vòng đời gửi vào group ops và được trả lời bằng Reply vào tin hỏi trong ops.
 
 Owner AlexChu duyệt ACTIVE ngày 2026-11-03: “Duyệt lifecycle.md và analysis-status.md sang ACTIVE, tiếp tục chuẩn bị môi trường và kiểm tra preflight để test thực tế trên Telegram cho tôi.”
 Phê duyệt hai file nguồn không thay phiếu preflight, cài đặt hay GO vận hành.

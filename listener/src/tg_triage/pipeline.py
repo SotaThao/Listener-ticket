@@ -218,6 +218,32 @@ def _legacy_analysis(value, messages):
 
 
 class Pipeline:
+    @property
+    def notice_sender(self):
+        return self._notice_sender
+
+    @notice_sender.setter
+    def notice_sender(self, sender):
+        if sender is None or not self.config.decision_rules_enabled:
+            self._notice_sender = sender
+            return
+        if getattr(sender, '_rules_sender_owner', None) is self:
+            self._notice_sender = sender
+            return
+        if isinstance(getattr(sender, '_rules_sender_owner', None), Pipeline):
+            sender = sender._rules_sender_raw
+
+        def guarded(chat_id, message_id, text):
+            if chat_id != self.config.telegram.ops_chat_id:
+                from .rules_pending_store import RulesHalt
+                LOG.error('H7: rules text send refused for non-ops chat_id=%s', chat_id)
+                raise RulesHalt('H7: rules text send to non-ops chat refused')
+            return sender(chat_id, message_id, text)
+
+        guarded._rules_sender_owner = self
+        guarded._rules_sender_raw = sender
+        self._notice_sender = guarded
+
     def __init__(self, config, store, classifier, github=None, *, timer=time.monotonic,
                  uploader=None, downloader=None, reactor=None, notice_sender=None, notice_editor=None,
                  rules_snapshot=None):

@@ -18,6 +18,37 @@ from tests.helpers import config, FakeGitHub, JPG
 
 
 class RulesIntakeFactsTests(RulesBootstrapTests):
+    def test_rules_sender_refuses_non_ops_but_legacy_sender_is_unchanged(self):
+        store = Store(':memory:'); self.addCleanup(store.close)
+        sent = []
+        sender = lambda *args: sent.append(args) or 77
+        settings = replace(config(), decision_rules_enabled=True,
+                           telegram=replace(config().telegram, ops_chat_id=-1009876543210))
+        pipeline = Pipeline(settings, store, object(), rules_snapshot=self.snapshot(), notice_sender=sender)
+        with self.assertLogs('tg_triage.pipeline', level='ERROR'), self.assertRaises(RulesHalt):
+            pipeline.notice_sender(-123, 42, 'text')
+        self.assertEqual(sent, [])
+        self.assertEqual(pipeline.notice_sender(-1009876543210, None, 'text'), 77)
+        legacy = Pipeline(replace(settings, decision_rules_enabled=False), store, object(), notice_sender=sender)
+        self.assertIs(legacy.notice_sender, sender)
+        legacy.notice_sender(-123, 42, 'legacy')
+        self.assertEqual(sent[-1], (-123, 42, 'legacy'))
+
+    def test_basic_group_question_has_fallback_header(self):
+        class Provider:
+            settings = SimpleNamespace(model='test'); think = False
+            def _ask(self, body, parse, attempts):
+                return parse('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},"object":{"value":"nút này","source_ids":[42]}}}]}')
+        store = Store(':memory:'); self.addCleanup(store.close)
+        settings = replace(config(), mode='live', autonomous_enabled=True, decision_rules_enabled=True,
+                           telegram=replace(config().telegram, ops_chat_id=-1009876543210))
+        sent = []
+        pipeline = Pipeline(settings, store, Provider(), rules_snapshot=self.snapshot(),
+                            notice_sender=lambda *args: sent.append(args) or 77)
+        pipeline.process(message(42, text='nút này lỗi', chat_id=-12345))
+        self.assertEqual(sent[0][:2], (-1009876543210, None))
+        self.assertIn('Tin gốc: (group thường, không có link) · mã tin 42', sent[0][2])
+
     def test_model_independent_table_rows_precede_extraction_failure(self):
         snapshot=self.snapshot()
         for source, expected in ((message(text='/question test',reply_to_id=5),'CHAT'),

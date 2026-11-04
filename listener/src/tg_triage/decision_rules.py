@@ -265,7 +265,7 @@ class RulesSnapshot:
                             break
                     else: t['readiness']['intent_resolve'][-1].fail('intent resolution is not exhaustive')
         outputs = unique(t['channels']['outputs'], 'Trạng thái')
-        if set(outputs) != set(states): t['channels']['outputs'][0].fail('outputs must cover each state once')
+        if set(outputs) != set(states) | {'ANALYZE', 'STATUS', 'LIFECYCLE_QUESTION', 'RELATED'}: t['channels']['outputs'][0].fail('outputs must cover each state once')
         blocks = unique(t['channels']['blocks'], 'Khối template')
         used = set()
         order = set()

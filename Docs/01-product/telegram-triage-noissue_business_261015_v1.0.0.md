@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.8 · **Updated**: 2026-11-03 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.11 · **Updated**: 2026-11-04 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -421,6 +421,8 @@ Trạng thái closed hoặc một câu "đã xử lý" không tự chứng minh 
 Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Sáu file quyết định đã `ACTIVE` theo Owner ngày 2026-10-30; `lifecycle.md` và `analysis-status.md` ACTIVE v2 theo duyệt ngày 2026-11-03; `roles.md` và `preflight.md` vẫn `DRAFT`. Các rule TG ở trên mô tả hành vi mặc định khi chưa bật rules. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
 
 Worktree bổ sung đường opt-in `thinking.decision_rules_enabled`: mặc định tắt nên hành vi đang chạy và các đường ANALYZE/STATUS cũ không đổi. Đường mới giữ intake theo sáu trạng thái, câu hỏi thông tin/chat là `CHAT`, cùng extension lifecycle và ANALYZE/STATUS đã duyệt; cần bộ rules ACTIVE và group ops riêng. Reply ticket đã đóng theo bảng vòng đời, chứng cứ host và reservation; không tự reopen. PDF/Office chưa đọc vẫn có thể đính kèm nếu caption tự đủ dữ kiện; yêu cầu phụ thuộc nội dung chưa đọc hoặc trích text lỗi/vượt budget được giữ lại. Tin mới ngoài batch chỉ nối pending cũ khi có Reply thật, không dựa similarity/thời gian. Owner đã duyệt tám câu chữ ops và chuyển sáu rules sang ACTIVE; bot vẫn tắt và chưa có GO. Tiến độ test giả lập và review được báo riêng, không suy từ fingerprint.
+
+Owner 2026-11-04 duyệt mọi tin chữ của rules mode vào ops, group nguồn chỉ nhận reaction; ANALYZE và STATUS nhận ❤️. Câu hỏi lifecycle và STATUS thiếu target được trả lời bằng Reply vào tin hỏi trong ops; L1 chạy lại readiness chỉ cho NEED_INFO. Nếu tin nguồn không có link, header ghi `Tin gốc: (group thường, không có link) · mã tin <message_id>`. Worktree đang triển khai routing và receipt ops; các regression cũ và khôi phục chưa được xác minh đầy đủ, chưa có GO.
 
 Checkpoint PM01 + PM02 (#2178, 2026-11-03): source vòng đời ticket được High R5 duyệt; source ANALYZE/STATUS được High R2 duyệt trong phạm vi tested-source. ANALYZE giữ giới hạn task, một critic cho toàn partition, exact provider view/pixel/document proof, Turn budget và receipt host độc lập; grouped sources giữ reservation trước gửi và chỉ hoàn tất cùng receipt đã xác nhận. STATUS chỉ đọc ledger. Hai rules mở rộng ACTIVE v2 theo duyệt Owner ngày 2026-11-03; PM03 High R3 đã duyệt tested-source và full source đã chạy1650 tests (1648pass/2skip), không xác nhận chất lượng model thật, hoàn tất migration, installed/release hay live GO. Quy tắc nghiệp vụ không đổi.
 
@@ -2230,7 +2232,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "860dae897cbf50e110d9761e29272e1e0d7ee2a2b65c681f7ed7637d4f9362a3",
     "listener/src/tg_triage/config.py": "72c18a4a67b80186e01c27164da2f8e8661794936d28685ae4341d9280b4764b",
-    "listener/src/tg_triage/decision_rules.py": "3cc7559f4d6a3120e9d6328bb40ea1dea99a5c1ff99ecffcc740434415df3ead",
+    "listener/src/tg_triage/decision_rules.py": "6aa004a2bbadc3fc229c4ff9c13e83103748c37f9325a88a96a49b624d6cd250",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "163595000162d5fa1c162538d997c449d2913934e03f104fb79603e778b0cd1f",
     "listener/src/tg_triage/followup_model.py": "898ae428bc0e5101550665853ed66dbfa0a8324fcc2ba4df18f4ab33d513d934",
@@ -2240,7 +2242,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/group_notices.py": "94c2a95d6757d7fa4e42779b76dcddb32346b37f3de8ceab83c43d569871598d",
     "listener/src/tg_triage/ingress_diagnostics.py": "f61db228b7b23e4357c47ec38b3fc915cfa0e9ec2a1eec26071abd897bb4f82a",
     "listener/src/tg_triage/ingress_model.py": "489f3005ecd639f30cef3cb2acb3edc732b08f63921384eab408ed687fb59c96",
-    "listener/src/tg_triage/issue_format.py": "62c8d064de5b93bf6236c1b59a06770f3e393a470b681702d79b0538e59a587f",
+    "listener/src/tg_triage/issue_format.py": "1e5ae3e360e5088b8ad802d871bee1c4415118de70e95fbb77e4e4a0de1dc957",
     "listener/src/tg_triage/legacy_preflight.py": "49225f7053005e8232120c0da61191eec493dc6589fb2cdc0831b26aecd38880",
     "listener/src/tg_triage/legacy_reconciliation.py": "c26c46020bd218f4d5bf0df9e2111cf0094e7ab2f5ada1195680896b2d7baa50",
     "listener/src/tg_triage/lifecycle.py": "0c06d3a4360364b28a1be851bc7ff88080293486c3a7d6d8e276286eede84155",
@@ -2248,7 +2250,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/models.py": "4f5eccde0c4b989e7ae8fac637a3a1ee29c38b523c6b289c32a592b6dd672f79",
     "listener/src/tg_triage/offline_snapshot.py": "07589cfcb814048842bce602aeb5d1bd5e48705bd8ad1bafa0c79fb653b2909e",
     "listener/src/tg_triage/pacing.py": "6d104e30d9b51883dfb27d56ad107089e93a42e88c085ae72e03c0f06af0793e",
-    "listener/src/tg_triage/pipeline.py": "eb82d00a7c0fa16d16efd4ef728331cf75716ce761447c16ed78707b6cc668d0",
+    "listener/src/tg_triage/pipeline.py": "46d604735d4dc54ef2dec58bd2822a9363a6b3316e09a478e80b3ee86a4a5219",
     "listener/src/tg_triage/provider.py": "e99a0779abaf25d9da65de154217a5a036361abe223a5ab812de903df22cc59c",
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
     "listener/src/tg_triage/receipt.py": "ff455fdfb9424cc3e802641607dfe3c872ddc65490b2705bb804ca92f282d51a",
@@ -2256,8 +2258,8 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_analysis.py": "8d1ed397042fa99bf8fc50f4841a5256c1596cfa3a15888ea4228538e2f42d7e",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "242f8e3a9afb094d4a95ce61415d54bd3569f4b03ec1dba0f24510552470d87e",
-    "listener/src/tg_triage/rules_intake.py": "c297dfbe9ec55d67f1d71f9a9b370399115f0fcef7839968cd3348cdfae34180",
-    "listener/src/tg_triage/rules_pending_store.py": "93c0a23dba5ef22888ac7c3dcea1993d611ae8d84268f0710d58dc3d6a85cf2c",
+    "listener/src/tg_triage/rules_intake.py": "cd6797de584d134e7ee99a7420cea598359664a1a44313ff1228fad1bd90281f",
+    "listener/src/tg_triage/rules_pending_store.py": "b7e415d0ee9e64f2c8c2c4d899bad17008d5f112aaffa611e5706274f4dfa8cb",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
     "listener/src/tg_triage/telegram_io.py": "207c9908128f2b099695ea0ad4b7d5d38a2db6df7cdaf53bdbca40146207577b",
@@ -2305,9 +2307,15 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "27a2cedc3e282c1c4a70149312b9dcd72b012f70edbaf10b93686fc29496f3cc",
+  "runtime_fingerprint": "472393937d943ee85cf930a0621a427298e9d0d3ef4b5ef1850689f6ddf07f6c",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
-  "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates."
+  "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
+  "changed_rule_hashes": {
+    "listener/rules/channels.md": "cc0ab71c1794a98608ac127dbebfcb06d4c807f2e0099fca117e9c532b5ae07a",
+    "listener/rules/questions.md": "256657532038433240c3065beaa9079f05719ae4cbfcce08dc971c64aefebbc2",
+    "listener/rules/lifecycle.md": "6a20e1a60247ed43909cb1374825f50f094b5db7be0f65d57ce428ae7706a154",
+    "listener/rules/analysis-status.md": "7ed57f1a5cbba92ada10934a857b20874209b3a7cf453cfe824acb47cad75485"
+  }
 }
 ```
 
@@ -2317,6 +2325,9 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.11 | 2026-11-04 | Codex / owner AlexChu | Khôi phục xử lý tái diễn chỉ có ảnh sau xác nhận B đã bind trong ops, giữ namespace ID nguồn riêng; chờ controller kiểm thử lại. |
+| v1.16.10 | 2026-11-04 | Codex / owner AlexChu | Phân biệt ID tin nguồn và ops, kiểm collision receipt khi khôi phục và giữ guard gửi ops ổn định khi khôi phục sender; chờ controller kiểm thử lại. |
+| v1.16.9 | 2026-11-04 | Codex / owner AlexChu | Ghi quyết định ops-only và Reply trong ops; implementation extension và kiểm chứng còn dang dở, chưa có GO. |
 | v1.16.8 | 2026-11-03 18:33 | Codex / owner AlexChu | Đồng bộ reviewed extractor v2: thu gọn ví dụ trường tùy chọn, cân đối hướng dẫn trích và phân biệt câu hỏi thông tin với yêu cầu làm việc; giữ rules/nguồn/schema/8KB/2call40s. Model corpus giả 24/24 đạt kết quả; không suy thành chất lượng dữ kiện thô 100%, installed hoặc live GO. |
 | v1.16.7 | 2026-11-03 | Codex / owner AlexChu | Ghi nguyên văn duyệt ACTIVE v2 hai extension lifecycle/analysis-status; giữ bảng semantics và roles/preflight DRAFT, chưa cấp live GO. |
 | v1.16.6 | 2026-11-03 15:23 | Codex / owner AlexChu | Ghi trạng thái triển khai PM03 và hướng dẫn inventory/reconciliation offline; source review/full integrated còn chờ, không đổi business rule, DRAFT/GO hay phạm vi converter. |

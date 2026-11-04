@@ -80,7 +80,7 @@ def _recoverable_batch_groups(connection):
                 episode=connection.execute('SELECT status,issue_number,issue_url,notice_body,repo,parent_number FROM rules_related_episodes WHERE chat_id=? AND source_id=? AND answer_id=?',
                     (*notice_key,anchor.message_id)).fetchone()
                 answer=connection.execute('SELECT status,choice,answer_id FROM rules_lifecycle_answers WHERE chat_id=? AND source_id=?',authority).fetchone()
-                notice=connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',notice_key).fetchone()
+                notice=connection.execute("SELECT kind,status,notice_id,ops_chat_id FROM rules_notices WHERE topic_id=? AND kind='other'",(topic,)).fetchone()
                 question_notice=connection.execute('SELECT 1 FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',authority).fetchone()
                 if episode is None and answer is None and notice is None and question_notice is None:
                     recover.append((batch_id,ordinal,'PLANNED')); continue
@@ -101,13 +101,12 @@ def _recoverable_batch_groups(connection):
                         if (row['decision']!=expected_decision or row['issue_number']!=target_number or row['issue_url']!=target_url
                                 or row['reason']!='lifecycle_related_episode' or not historical and not row['github_called_at']): raise ValueError()
                     current=connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
+                    from .rules_intake import _ops_notice_identity
                     if (episode[0]=='done' and episode[5]==plan['targets'][0]['number']
                             and episode[2]==f'https://github.com/{episode[4]}/issues/{episode[1]}'
                             and answer and tuple(answer)==('done','recurrence',anchor.message_id)
-                            and current and current[0]=='CLOSED' and notice and notice[0]=='LIFECYCLE_EPISODE'
-                            and notice[1]=='sent' and type(notice[2]) is int and notice[2]>anchor.message_id
-                            and connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(anchor.chat_id,notice[2])).fetchone()[0]==1
-                            and not connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(anchor.chat_id,notice[2])).fetchone()):
+                            and current and current[0]=='CLOSED' and notice and notice[0]=='other'
+                            and notice[1]=='sent' and _ops_notice_identity(connection,notice[3],notice[2])):
                         recover.append((batch_id,ordinal,'DONE')); continue
                     raise ValueError()
                 if answer is not None: raise ValueError()
@@ -118,7 +117,8 @@ def _recoverable_batch_groups(connection):
                 if question_key not in keys: raise ValueError()
                 batch=connection.execute('SELECT fingerprint FROM rules_batches WHERE batch_id=?',(batch_id,)).fetchone()
                 q=connection.execute('SELECT parent_number,repo,plan_id,question,fingerprint,evidence_answer,recurrence_answer,batch_id,ordinal FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',question_key).fetchone()
-                notice=connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',question_key).fetchone()
+                notices=connection.execute("SELECT kind,status,notice_id,ops_chat_id FROM rules_notices WHERE topic_id=? AND kind='question'",(topic,)).fetchall()
+                notice=notices[0] if len(notices)==1 else None
                 if q is None and notice is None:
                     recover.append((batch_id,ordinal,'PLANNED')); continue
                 current=connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
@@ -148,22 +148,22 @@ def _recoverable_batch_groups(connection):
                     from .rules_intake import _stored_recurrence_lineage
                     chain=_stored_recurrence_lineage(connection,target['chat_id'],q[1],root[0])
                     root_ok=any(edge=={'number':q[0],'source_id':target.get('recurrence_parent_source_id')} for edge in chain)
+                from .rules_intake import _ops_notice_identity
                 if (q and notice and batch and current and current[0]=='OPEN' and source and evidence_ok and
                         q[0]==target['number'] and q[3]==plan.get('lifecycle_question') and q[4]==batch[0] and
                         q[5]==plan.get('lifecycle_evidence_answer') and q[6]==plan.get('lifecycle_recurrence_answer') and
                         q[7]==batch_id and q[8]==ordinal and
                         root_ok and
                         q[2]==readonly_plan_id(batch_id,ordinal,batch[0],plan) and
-                        notice[0]=='LIFECYCLE_QUESTION' and notice[1]=='sent' and type(notice[2]) is int and notice[2]>question_key[1] and
-                        not connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(question_key[0],notice[2])).fetchone() and
-                        connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(question_key[0],notice[2])).fetchone()[0]==1):
+                        notice[0]=='question' and notice[1]=='sent' and _ops_notice_identity(connection,notice[3],notice[2])):
                     recover.append((batch_id,ordinal,'DONE')); continue
                 raise ValueError()
             if state in ('ANALYZE','STATUS'):
                 if len(keys)!=1 and (state=='STATUS' or not plan.get('analysis_review')): raise ValueError()
                 reason='semantic_analyze' if state=='ANALYZE' else 'semantic_status'
                 finished=all(connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='chat' AND reason=?",(*key,reason)).fetchone() for key in keys)
-                notice=connection.execute("SELECT status,notice_message_id,kind FROM group_notices WHERE chat_id=? AND message_id=?",keys[0]).fetchone()
+                notices=connection.execute("SELECT status,notice_id,kind,ops_chat_id FROM rules_notices WHERE topic_id=? AND kind IN ('other','question')",(topic,)).fetchall()
+                notice=notices[0] if len(notices)==1 else None
                 proof=connection.execute("SELECT kind,plan_id,body_hash,body FROM rules_readonly_notices WHERE chat_id=? AND message_id=?",keys[0]).fetchone()
                 batch=connection.execute('SELECT fingerprint FROM rules_batches WHERE batch_id=?',(batch_id,)).fetchone()
                 expected=readonly_plan_id(batch_id,ordinal,batch[0],plan) if batch else None
@@ -180,13 +180,13 @@ def _recoverable_batch_groups(connection):
                     from .rules_analysis import source_bindings_valid,member_states_valid
                     content_ok=content_ok and receipt is not None and source_bindings_valid(connection,receipt) and member_states_valid(connection,plan,topic)
                     finished=content_ok
-                from .ticket_status import sent_notice_identity
-                if finished and notice and proof and proof[0]==state and proof[1]==expected and content_ok and notice[2]==state and notice[0]=='sent' and type(notice[1]) is int and notice[1]>0 and sent_notice_identity(connection,keys[0][0],notice[1]):
+                from .rules_intake import _ops_notice_identity
+                if finished and notice and proof and proof[0]==state and proof[1]==expected and content_ok and notice[0]=='sent' and _ops_notice_identity(connection,notice[3],notice[1]):
                     current=connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(topic,)).fetchone()
                     if not current or current[0] not in ('OPEN','CLOSED'): raise ValueError()
                     recover.append((batch_id,ordinal,'DONE')); continue
                 # No reservation proves no notice was sent by this path.
-                if notice is None and proof is None:
+                if not notices and proof is None:
                     recover.append((batch_id,ordinal,'PLANNED')); continue
                 raise ValueError()
             if state == 'READY':
@@ -439,7 +439,9 @@ class RulesPendingStore:
                                 from .rules_analysis import finish_members
                                 from .models import Decision
                                 finish_members(store,plan,Decision('chat','rule',case_key=topic,reason='semantic_analyze'))
-                            store.connection.execute("UPDATE rules_topics SET status='CLOSED' WHERE topic_id=? AND status='OPEN'",(topic,))
+                            question=store.connection.execute("SELECT 1 FROM rules_notices WHERE topic_id=? AND kind='question' AND status='sent'",(topic,)).fetchone()
+                            if plan.get('state')!='STATUS' or not question:
+                                store.connection.execute("UPDATE rules_topics SET status='CLOSED' WHERE topic_id=? AND status='OPEN'",(topic,))
                     store.connection.execute("UPDATE rules_batch_groups SET status=? WHERE batch_id=? AND ordinal=? AND status='RESERVED'",(status,batch_id,ordinal))
             # Internal claims have no external effect of their own.  Reconcile
             # only after proving that every actual write reservation is resolved.
@@ -646,7 +648,7 @@ class RulesPendingStore:
                 self.store.connection.execute("UPDATE rules_topics SET status='EXPIRED' WHERE topic_id=? AND status='OPEN'", (topic,))
             return len(expired)
 
-    def reserve_notice(self, topic_id, ops_chat_id, kind, fields=(), *, max_asks_per_field=1):
+    def reserve_notice(self, topic_id, ops_chat_id, kind, fields=(), *, max_asks_per_field=1, once=False):
         if kind not in ('question','escalation','other','error'): raise ValueError('invalid notice kind')
         if type(max_asks_per_field) is not int or max_asks_per_field <= 0: raise ValueError('invalid ask limit')
         fields = tuple(fields)
@@ -654,6 +656,7 @@ class RulesPendingStore:
         with self.store._lock, self.store.connection:
             row = self.store.connection.execute('SELECT * FROM rules_topics WHERE topic_id=?', (topic_id,)).fetchone()
             if row is None or row['status'] != 'OPEN': return None
+            if once and self.store.connection.execute('SELECT 1 FROM rules_notices WHERE topic_id=? AND kind=?',(topic_id,kind)).fetchone(): return None
             asked = json.loads(row['asked'])
             if kind == 'question' and ((not fields and row['fallback_asked']) or any(asked.get(f,0) >= max_asks_per_field for f in fields)): return None
             if kind == 'escalation' and self.store.connection.execute("SELECT 1 FROM rules_notices WHERE topic_id=? AND kind='escalation'", (topic_id,)).fetchone(): return None
@@ -668,6 +671,16 @@ class RulesPendingStore:
     def finish_notice(self, topic_id, sequence, notice_id):
         status = 'sent' if type(notice_id) is int and notice_id > 0 else 'ambiguous'
         with self.store._lock, self.store.connection:
+            row=self.store.connection.execute('SELECT ops_chat_id FROM rules_notices WHERE topic_id=? AND sequence=? AND status=?',(topic_id,sequence,'reserved')).fetchone()
+            if row is None: return False
+            if status=='sent':
+                chat=row[0]
+                collision=(self.store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(chat,notice_id)).fetchone()
+                    or self.store.connection.execute('SELECT 1 FROM rules_notices WHERE ops_chat_id=? AND notice_id=?',(chat,notice_id)).fetchone()
+                    or self.store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND notice_message_id=?',(chat,notice_id)).fetchone())
+                if not collision and self.store.connection.execute("SELECT 1 FROM sqlite_master WHERE name='autonomous_confirmations'").fetchone():
+                    collision=self.store.connection.execute('SELECT 1 FROM autonomous_confirmations WHERE chat_id=? AND notice_message_id=?',(chat,notice_id)).fetchone()
+                if collision: status='ambiguous'
             return self.store.connection.execute('UPDATE rules_notices SET status=?,notice_id=? WHERE topic_id=? AND sequence=? AND status=?', (status,notice_id if status == 'sent' else None,topic_id,sequence,'reserved')).rowcount == 1
 
     def bind_reply(self, ops_chat_id, reply_to, message_id, expiry_days):
@@ -884,11 +897,17 @@ def _lifecycle_relation_blockers(connection,tables):
                         (chat,target_source)).fetchone()
                     if (not original or original[0]!=origin
                             or original[1]!=f'https://github.com/{repo}/issues/{origin}'):raise ValueError()
-                    notice=connection.execute("SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?",(chat,source)).fetchone()
+                    notice=connection.execute("SELECT kind,status,notice_id,ops_chat_id FROM rules_notices WHERE topic_id=? AND kind='question' AND status='sent'",(topic,)).fetchone()
                     from .ticket_status import sent_notice_identity
-                    if (not notice or notice[0]!='LIFECYCLE_QUESTION' or notice[1]!='sent'
-                            or not sent_notice_identity(connection,chat,notice[2])):raise ValueError()
-                    questions[(chat,source)]=(evidence,recurrence,notice[2])
+                    if notice:
+                        from .rules_intake import _ops_notice_identity
+                        if not _ops_notice_identity(connection,notice[3],notice[2]):raise ValueError()
+                        notice_chat=notice[3]
+                    else:
+                        notice=connection.execute("SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?",(chat,source)).fetchone()
+                        if not notice or notice[0]!='LIFECYCLE_QUESTION' or notice[1]!='sent' or not sent_notice_identity(connection,chat,notice[2]):raise ValueError()
+                        notice_chat=chat
+                    questions[(chat,source)]=(evidence,recurrence,notice[2],notice_chat)
                 except (ValueError,TypeError,KeyError,sqlite3.Error):blockers.append('LIFECYCLE_QUESTION_MISMATCH')
         except sqlite3.Error:blockers.append('BINDING_SCHEMA_UNKNOWN')
     if 'rules_lifecycle_answers' in tables:
@@ -898,10 +917,11 @@ def _lifecycle_relation_blockers(connection,tables):
             for chat,source,answer,choice in rows[:1000]:
                 try:
                     if choice not in ('evidence','recurrence'):raise ValueError()
-                    message=connection.execute('''SELECT reply_to_id,is_forward,
-                        CASE WHEN length(text)<=2000 THEN text END FROM messages WHERE chat_id=? AND message_id=?''',(chat,answer)).fetchone()
-                    if not message:raise ValueError()
                     question=questions.get((chat,source))
+                    answer_chat=question[3] if question else chat
+                    message=connection.execute('''SELECT reply_to_id,is_forward,
+                        CASE WHEN length(text)<=2000 THEN text END FROM messages WHERE chat_id=? AND message_id=?''',(answer_chat,answer)).fetchone()
+                    if not message:raise ValueError()
                     if question:
                         expected=question[0] if choice=='evidence' else question[1]
                         if message[0]!=question[2] or message[1] or not isinstance(message[2],str) or message[2].strip()!=expected:raise ValueError()

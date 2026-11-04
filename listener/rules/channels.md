@@ -1,7 +1,10 @@
-<!-- rule-file: channels · version 3 · status ACTIVE · audience: code -->
+<!-- rule-file: channels · version 4 · status ACTIVE · audience: code -->
 # Bot nói gì, ở đâu
 
 Owner chốt 2026-10-29: **group gốc chỉ có reaction**; mọi tin chữ của bot (câu hỏi, link ticket, báo lỗi, hết quota) gửi vào **một group xử lý chung** cho mọi group nguồn, để group gốc không bị loãng.
+
+Owner 2026-11-04: Đồng ý cả 4 + Duyệt, chạy tiếp (L1 chỉ cho NEED_INFO).
+Không trạng thái nào được gửi tin chữ vào group nguồn.
 
 ## Bảng: channels
 
@@ -22,12 +25,18 @@ Mỗi trạng thái đúng một dòng. Ô `Không` = bot không làm gì ở k�
 | `MEDIA_ONLY` | Không | Không | — |
 | `CHAT` | Không | Không | — |
 | `HOLD` | Không | Hết quota: báo hỗ trợ (TG-12). `ESCALATED`: báo Owner | `ops.header` `notice.rate_limited` `notice.hold_escalated` |
+| `ANALYZE` | ❤️ | Nội dung phân tích | `ops.header` |
+| `STATUS` | ❤️ | Trạng thái hoặc câu hỏi thiếu target | `ops.header` |
+| `LIFECYCLE_QUESTION` | Không | Câu hỏi xác nhận vòng đời | `ops.header` |
+| `RELATED` | Không | Thông báo episode và link ticket mới | `ops.header` `followup.recurrence` |
 
 Lỗi ghi GitHub (`ambiguous`, TG-24/TG-26) vẫn theo Business DOCS, gửi ở group xử lý với khối `notice.error`.
 
 ## Bảng: ops_message_fields
 
 Mọi tin ở group xử lý mở đầu bằng khối `ops.header`, **bắt buộc** đủ các trường dưới đây để người trả lời biết đang nói về chủ đề nào:
+
+Nếu không có link Telegram, dòng tin gốc là `Tin gốc: (group thường, không có link) · mã tin <message_id>`.
 
 | Trường | Nguồn |
 |---|---|
@@ -52,3 +61,4 @@ Danh mục mọi khối template rules dùng. `có` = đã có trong file templa
 | `ask.work` | `group-replies.md` | `có` |
 | `ask.problem` | `group-replies.md` | `có` |
 | `notice.hold_escalated` | `group-replies.md` | `có` |
+| `followup.recurrence` | `group-replies.md` | `có` |

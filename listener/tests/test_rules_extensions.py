@@ -12,6 +12,12 @@ from tg_triage.decision_rules import RulesSnapshot
 ROOT = Path(__file__).resolve().parents[1] / 'rules'
 
 
+def ops_reply(pipeline, incoming):
+    """Deliver a real ops question reply through the same binding as ingress."""
+    incoming=replace(incoming,chat_id=pipeline.config.telegram.ops_chat_id)
+    pipeline.rules_pending.accept_ops_message(incoming,pipeline.rules_snapshot.limits['pending_expiry_days'])
+    return pipeline.process(incoming)
+
 
 def fixture_analysis_review(body):
     """Compatibility fixture for literal legacy proposals; never a model quality claim."""
@@ -120,7 +126,9 @@ class ExtensionRulesTests(unittest.TestCase):
                 self.assertEqual(result.reason, 'semantic_' + intent)
                 self.assertEqual(len(sent), 1)
                 self.assertIn('Việc:' if intent == 'analyze' else 'reply', sent[0][2])
-                self.assertEqual(store.connection.execute('SELECT status FROM group_notices').fetchone()[0], 'sent')
+                notice=store.connection.execute('SELECT ops_chat_id,status FROM rules_notices').fetchone()
+                self.assertEqual(tuple(notice),(-1009876543210,'sent'))
+                self.assertEqual(sent[0][0],-1009876543210)
 
     def test_status_reply_and_batch_read_each_exact_target_without_github(self):
         from tg_triage.pipeline import Pipeline
@@ -332,16 +340,16 @@ class ExtensionRulesTests(unittest.TestCase):
         github=FakeGitHub(); github.lifecycle_snapshot=lambda number:{'number':number,'repo':'sandbox/triage','state':'closed','observed_at':'now','updated_at':'version-1'}
         comments=[]; github.add_comment=lambda number,body:comments.append((number,body)) or 201
         sent=[]; provider=Provider()
-        pipeline=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *args:sent.append(args) or (98+len(sent)))
+        pipeline=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *args:sent.append(args) or (99 if len(sent)==1 else 200+len(sent)))
         result=pipeline.process(message(42,text='lỗi',reply_to_id=10))
         self.assertEqual('lifecycle_question_sent',result.reason)
         self.assertIn('reply A hoặc B',sent[0][2]); self.assertEqual([],comments)
         answer=message(100,text='A',reply_to_id=99)
-        result=pipeline.process(answer)
+        result=ops_reply(pipeline,answer)
         self.assertEqual('followup',result.decision)
         self.assertEqual(101,comments[0][0]); self.assertEqual(1,len(comments))
         self.assertEqual('done',store.connection.execute('SELECT status FROM rules_lifecycle_answers').fetchone()[0])
-        self.assertIsNone(pipeline.process(answer)); self.assertEqual(1,len(comments)); self.assertEqual(1,provider.calls)
+        self.assertIsNone(ops_reply(pipeline,answer)); self.assertEqual(1,len(comments)); self.assertEqual(1,provider.calls)
 
     def test_confirmed_answer_never_completes_after_mapping_or_notice_failure(self):
         from unittest.mock import patch
@@ -374,7 +382,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     with store.connection:
                         store.connection.execute("CREATE TRIGGER ignore_mapping BEFORE UPDATE OF issue_number ON messages WHEN NEW.message_id=42 BEGIN SELECT RAISE(IGNORE); END")
                 with patch('tg_triage.rules_intake._send_ops',return_value=False if failure=='notice' else True):
-                    with self.assertRaises(RulesHalt): pipeline.process(message(100,text='A',reply_to_id=99))
+                    with self.assertRaises(RulesHalt): ops_reply(pipeline,message(100,text='A',reply_to_id=99))
                 self.assertEqual(1,len(comments))
                 self.assertNotEqual('done',store.connection.execute('SELECT status FROM rules_lifecycle_answers').fetchone()[0])
                 store.close()
@@ -404,7 +412,7 @@ class ExtensionRulesTests(unittest.TestCase):
             telegram=replace(base.telegram,ops_chat_id=-1009876543210))
         github=FakeGitHub(); github.lifecycle_snapshot=lambda n:{'number':n,'repo':'sandbox/triage','state':'closed','observed_at':'now','updated_at':'version-1'}
         comments=[]; github.add_comment=lambda n,body:comments.append((n,body)) or 201
-        sent=[]; pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (98+len(sent)))
+        sent=[]; pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (99 if len(sent)==1 else 200+len(sent)))
         real=pipeline.rules_pending.transition_group
         def crash(batch,ordinal,old,new,**kwargs):
             if new=='DONE': raise RuntimeError('crash after sent question')
@@ -412,15 +420,15 @@ class ExtensionRulesTests(unittest.TestCase):
         with patch.object(pipeline.rules_pending,'transition_group',side_effect=crash):
             with self.assertRaises(RuntimeError): pipeline.process(message(42,text='lỗi',reply_to_id=10))
         from tg_triage.rules_pending_store import RulesHalt, _recoverable_batch_groups
-        store.enqueue(message(99,text='conflicting local source'))
+        store.enqueue(message(99,text='conflicting local source',chat_id=settings.telegram.ops_chat_id))
         with self.assertRaises(RulesHalt): _recoverable_batch_groups(store.connection)
         with store.connection:
-            store.connection.execute('DELETE FROM messages WHERE chat_id=? AND message_id=99',(old.chat_id,))
+            store.connection.execute('DELETE FROM messages WHERE chat_id=? AND message_id=99',(settings.telegram.ops_chat_id,))
         store.close(); check_before_recovery(db)
         store=Store(db); self.addCleanup(store.close)
-        pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (98+len(sent)))
+        pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (99 if len(sent)==1 else 200+len(sent)))
         self.assertEqual('DONE',store.connection.execute('SELECT status FROM rules_batch_groups').fetchone()[0])
-        self.assertEqual('followup',pipeline.process(message(100,text='A',reply_to_id=99)).decision)
+        self.assertEqual('followup',ops_reply(pipeline,message(100,text='A',reply_to_id=99)).decision)
         self.assertEqual(1,len(comments)); self.assertEqual(2,len(sent))
 
     def test_unresolved_lifecycle_replies_never_enter_generic_routing(self):
@@ -450,7 +458,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     telegram=replace(base.telegram,ops_chat_id=-1009876543210))
                 github=FakeGitHub(); github.lifecycle_snapshot=lambda number:{'number':number,'repo':'sandbox/triage','state':'closed','observed_at':'now','updated_at':'version-1'}
                 comments=[]; github.add_comment=lambda number,body:comments.append((number,body)) or 201
-                provider=Provider(); pipeline=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *args:99)
+                sent=[]; provider=Provider(); pipeline=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *args:sent.append(args) or (99 if len(sent)==1 else 200+len(sent)))
                 if scenario=='unavailable': pipeline.notice_sender=None
                 question=pipeline.process(message(42,text='lỗi',reply_to_id=10))
                 self.assertEqual('lifecycle_question_unavailable' if scenario=='unavailable' else 'lifecycle_question_sent',question.reason)
@@ -460,44 +468,49 @@ class ExtensionRulesTests(unittest.TestCase):
                     result=pipeline.process(message(43,text='tạo ticket mới',reply_to_id=42))
                 elif scenario in ('extra_context','attested_context'):
                     pipeline.process(message(43,text='Bổ sung bằng chứng cùng lỗi: thêm thông tin' if scenario=='attested_context' else 'lỗi đăng nhập khác',reply_to_id=42))
-                    result=pipeline.process(message(100,text='A',reply_to_id=99))
+                    result=ops_reply(pipeline,message(100,text='A',reply_to_id=99))
                 elif scenario=='closed_notice':
-                    self.assertEqual('followup',pipeline.process(message(100,text='A',reply_to_id=99)).decision)
-                    result=pipeline.process(message(101,text='tạo ticket mới',reply_to_id=99))
+                    self.assertEqual('followup',ops_reply(pipeline,message(100,text='A',reply_to_id=99)).decision)
+                    result=ops_reply(pipeline,message(101,text='tạo ticket mới',reply_to_id=99))
                 elif scenario=='expired_notice':
                     with store.connection:
                         store.connection.execute("UPDATE rules_topics SET status='EXPIRED' WHERE topic_id=?",(f'{old.chat_id}:42',))
-                    result=pipeline.process(message(100,text='tạo ticket mới',reply_to_id=99))
+                    result=ops_reply(pipeline,message(100,text='tạo ticket mới',reply_to_id=99))
                 elif scenario=='recurrence_descendant':
                     pipeline.config=replace(pipeline.config,max_issues_per_hour=0)
-                    self.assertEqual('lifecycle_recurrence_answer_pending',pipeline.process(message(100,text='B',reply_to_id=99)).reason)
-                    result=pipeline.process(message(101,text='tạo ticket mới',reply_to_id=100))
+                    self.assertEqual('lifecycle_recurrence_answer_pending',ops_reply(pipeline,message(100,text='B',reply_to_id=99)).reason)
+                    result=ops_reply(pipeline,message(101,text='tạo ticket mới',reply_to_id=100))
                 elif scenario=='changed_mapping':
                     with store.connection:
                         store.connection.execute("UPDATE rules_lifecycle_questions SET evidence_answer='B',recurrence_answer='A'")
-                    result=pipeline.process(message(100,text='A',reply_to_id=99))
+                    result=ops_reply(pipeline,message(100,text='A',reply_to_id=99))
                 elif scenario=='changed_source':
                     with store.connection:
                         store.connection.execute("UPDATE messages SET text='changed source' WHERE chat_id=? AND message_id=42",(old.chat_id,))
-                    result=pipeline.process(message(100,text='B',reply_to_id=99))
+                    result=ops_reply(pipeline,message(100,text='B',reply_to_id=99))
                 elif scenario=='changed_version':
                     github.lifecycle_snapshot=lambda n:{'number':n,'repo':'sandbox/triage','state':'closed','observed_at':'later','updated_at':'version-2'}
-                    result=pipeline.process(message(100,text='B',reply_to_id=99))
+                    result=ops_reply(pipeline,message(100,text='B',reply_to_id=99))
                 elif scenario=='question_collision':
-                    store.enqueue(message(99,text='conflicting local source'))
-                    result=pipeline.process(message(100,text='A',reply_to_id=99))
+                    store.enqueue(message(99,text='conflicting local source',chat_id=settings.telegram.ops_chat_id))
+                    result=ops_reply(pipeline,message(100,text='A',reply_to_id=99))
                 elif scenario in ('old_answer_a','old_answer_b'):
-                    result=pipeline.process(message(43,text='A' if scenario=='old_answer_a' else 'B',reply_to_id=99))
+                    result=ops_reply(pipeline,message(43,text='A' if scenario=='old_answer_a' else 'B',reply_to_id=99))
                 else:
-                    sources=[message(100,text='A',reply_to_id=99),message(101,text='/question')]
+                    sources=[message(100,text='A',reply_to_id=42),message(101,text='/question')]
                     for source in sources: store.enqueue(source); store.start_classifying(source)
                     result=_process_batch(pipeline,sources)
                 if scenario=='batch':
-                    self.assertEqual(1,len(comments)); self.assertEqual([],github.calls); self.assertEqual(1,provider.calls)
+                    self.assertEqual([],comments); self.assertEqual([],github.calls); self.assertEqual(1,provider.calls)
+                    self.assertEqual('pending_review',store.get(sources[0].chat_id,100)['decision'])
                     self.assertNotEqual('pending_review',store.get(sources[1].chat_id,101)['decision'])
                     continue
                 if scenario=='closed_notice':
-                    self.assertEqual('pending_review',result.decision); self.assertEqual(1,len(comments)); self.assertEqual(1,provider.calls)
+                    self.assertEqual('chat',result.decision); self.assertEqual('unbound_ops_reply',result.reason); self.assertEqual(1,len(comments)); self.assertEqual(1,provider.calls)
+                    continue
+                if scenario in ('expired_notice','recurrence_descendant'):
+                    self.assertEqual('chat',result.decision); self.assertEqual('unbound_ops_reply',result.reason)
+                    self.assertEqual([],comments); self.assertEqual([],github.calls); self.assertEqual(1,provider.calls)
                     continue
                 if scenario=='attested_context':
                     self.assertEqual('followup',result.decision); self.assertEqual(1,len(comments)); self.assertIn('thêm thông tin',comments[0][1])
@@ -529,33 +542,36 @@ class ExtensionRulesTests(unittest.TestCase):
         github=FakeGitHub(); github.lifecycle_snapshot=lambda number:{'number':number,'repo':'sandbox/triage','state':'closed' if number==101 else 'open','observed_at':'now','updated_at':'version-1'}
         github.verify_created_issue=lambda number,issue:number
         comments=[]; github.add_comment=lambda number,body:comments.append((number,body)) or 201
-        sent=[]
+        sent=[]; notice_ids=[]
         def sender(*args):
             sent.append(args)
-            return 99 if len(sent)==1 else 200 if len(sent)==2 else 300+len(sent)
+            notice_id=99 if len(sent)==1 else 200 if len(sent)==2 else 300+10*len(sent)
+            notice_ids.append(notice_id)
+            return notice_id
         pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=sender)
         self.assertEqual('lifecycle_question_sent',pipeline.process(message(42,text='POS kẹt giấy',reply_to_id=10)).reason)
-        result=pipeline.process(message(100,text='B',reply_to_id=99))
+        result=ops_reply(pipeline,message(100,text='B',reply_to_id=99))
         self.assertEqual('issue',result.decision); self.assertEqual(42,result.issue_number)
         self.assertEqual(1,len(github.calls)); self.assertIn('/issues/101',github.calls[0].body)
         self.assertEqual(101,store.get(old.chat_id,10)['issue_number'])
         self.assertEqual(42,store.get(old.chat_id,42)['issue_number'])
         self.assertEqual('done',store.connection.execute('SELECT status FROM rules_related_episodes').fetchone()[0])
-        self.assertEqual('followup',pipeline.process(message(201,text='thêm lỗi',reply_to_id=200)).decision)
+        self.assertEqual('followup',pipeline.process(message(201,text='thêm lỗi',reply_to_id=42)).decision)
         self.assertEqual(42,comments[0][0])
-        self.assertEqual('pending_review',pipeline.process(message(202,text='B',reply_to_id=99)).decision)
+        ignored=ops_reply(pipeline,message(202,text='B',reply_to_id=99))
+        self.assertEqual(('chat','unbound_ops_reply'),(ignored.decision,ignored.reason))
         self.assertEqual(1,len(github.calls))
         self.assertEqual('lifecycle_question_sent',pipeline.process(message(203,text='lỗi',reply_to_id=10)).reason)
-        next_notice=300+len(sent)
-        self.assertEqual('lifecycle_recurrence_answer_pending',pipeline.process(message(next_notice+1,text='B',reply_to_id=next_notice)).reason)
+        next_notice=notice_ids[-1]
+        self.assertEqual('lifecycle_recurrence_answer_pending',ops_reply(pipeline,message(next_notice+1,text='B',reply_to_id=next_notice)).reason)
         self.assertEqual(1,len(github.calls))
         other_chat=-1009876500001
         other_parent=message(10,text='lỗi cũ',chat_id=other_chat); store.enqueue(other_parent)
         with store.connection:
             store.connection.execute("UPDATE messages SET decision='issue',issue_number=101,issue_url='https://github.com/sandbox/triage/issues/101' WHERE chat_id=? AND message_id=10",(other_chat,))
         self.assertEqual('lifecycle_question_sent',pipeline.process(message(42,text='POS kẹt giấy',chat_id=other_chat,reply_to_id=10)).reason)
-        other_notice=300+len(sent)
-        self.assertEqual('lifecycle_recurrence_answer_pending',pipeline.process(message(other_notice+1,text='B',chat_id=other_chat,reply_to_id=other_notice)).reason)
+        other_notice=notice_ids[-1]
+        self.assertEqual('lifecycle_recurrence_answer_pending',ops_reply(pipeline,message(other_notice+1,text='B',reply_to_id=other_notice)).reason)
         self.assertEqual(1,len(github.calls))
 
     def test_uncertain_related_issue_never_replays_on_restart(self):
@@ -589,12 +605,12 @@ class ExtensionRulesTests(unittest.TestCase):
                     return 99 if len(calls)==1 else 101
                 pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=sender)
                 pipeline.process(message(42,text='POS kẹt giấy',reply_to_id=10))
-                if failure=='collision': store.enqueue(message(101,text='conflicting local source'))
+                if failure=='collision': store.enqueue(message(101,text='conflicting local source',chat_id=settings.telegram.ops_chat_id))
                 if failure=='mapping':
                     with store.connection:
                         store.connection.execute("""CREATE TRIGGER ignore_episode_mapping BEFORE UPDATE OF issue_number ON messages
                             WHEN NEW.message_id=42 AND NEW.reason='lifecycle_related_episode' BEGIN SELECT RAISE(IGNORE); END""")
-                with self.assertRaises(RulesHalt): pipeline.process(message(100,text='B',reply_to_id=99))
+                with self.assertRaises(RulesHalt): ops_reply(pipeline,message(100,text='B',reply_to_id=99))
                 self.assertEqual(1,len(github.calls)); store.close()
                 with self.assertRaises(RulesHalt): check_before_recovery(db)
                 self.assertEqual(1,len(github.calls))
@@ -626,23 +642,23 @@ class ExtensionRulesTests(unittest.TestCase):
         github.verify_created_issue=lambda n,issue:n
         sent=[]; pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (97+2*len(sent)))
         pipeline.process(message(42,text='POS kẹt giấy',reply_to_id=10))
-        self.assertEqual('issue',pipeline.process(message(100,text='B',reply_to_id=99)).decision)
+        self.assertEqual('issue',ops_reply(pipeline,message(100,text='B',reply_to_id=99)).decision)
         real=pipeline.rules_pending.transition_group
         def crash(batch,ordinal,old,new,**kwargs):
             if new=='DONE': raise RuntimeError('crash after sent question')
             return real(batch,ordinal,old,new,**kwargs)
         with patch.object(pipeline.rules_pending,'transition_group',side_effect=crash):
-            with self.assertRaises(RuntimeError): pipeline.process(message(102,text='POS kẹt giấy',reply_to_id=101))
+            with self.assertRaises(RuntimeError): pipeline.process(message(102,text='POS kẹt giấy',reply_to_id=42))
         from tg_triage.rules_pending_store import RulesHalt, _recoverable_batch_groups
         with store.connection:
-            store.connection.execute("INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at,notice_message_id) VALUES(?,777,'issue','sent','now',101)",(old.chat_id,))
+            store.connection.execute("INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at,notice_message_id) VALUES(?,777,'issue','sent','now',103)",(settings.telegram.ops_chat_id,))
         with self.assertRaises(RulesHalt): _recoverable_batch_groups(store.connection)
         with store.connection:
-            store.connection.execute('DELETE FROM group_notices WHERE chat_id=? AND message_id=777',(old.chat_id,))
-        store.enqueue(message(101,text='conflicting local source'))
+            store.connection.execute('DELETE FROM group_notices WHERE chat_id=? AND message_id=777',(settings.telegram.ops_chat_id,))
+        store.enqueue(message(103,text='conflicting local source',chat_id=settings.telegram.ops_chat_id))
         with self.assertRaises(RulesHalt): _recoverable_batch_groups(store.connection)
         with store.connection:
-            store.connection.execute('DELETE FROM messages WHERE chat_id=? AND message_id=101',(old.chat_id,))
+            store.connection.execute('DELETE FROM messages WHERE chat_id=? AND message_id=103',(settings.telegram.ops_chat_id,))
         store.close(); check_before_recovery(db)
         store=Store(db); self.addCleanup(store.close)
         Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (97+2*len(sent)))
@@ -683,18 +699,18 @@ class ExtensionRulesTests(unittest.TestCase):
         github.create_issue=create
         notices=iter((99,101,501,105,107)); pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:next(notices))
         self.assertEqual('lifecycle_question_sent',pipeline.process(message(42,text='POS kẹt giấy',reply_to_id=10)).reason)
-        self.assertEqual(42,pipeline.process(message(100,text='B',reply_to_id=99)).issue_number)
-        self.assertEqual('followup',pipeline.process(message(102,text='POS kẹt giấy',reply_to_id=101)).decision)
+        self.assertEqual(42,ops_reply(pipeline,message(100,text='B',reply_to_id=99)).issue_number)
+        self.assertEqual('followup',pipeline.process(message(102,text='POS kẹt giấy',reply_to_id=42)).decision)
         self.assertEqual(42,comments[0][0]); self.assertEqual(1,len(github.calls))
         states[42]='closed'
-        self.assertEqual('lifecycle_question_sent',pipeline.process(message(104,text='POS kẹt giấy',reply_to_id=101)).reason)
-        result=pipeline.process(message(106,text='B',reply_to_id=105))
+        self.assertEqual('lifecycle_question_sent',pipeline.process(message(104,text='POS kẹt giấy',reply_to_id=42)).reason)
+        result=ops_reply(pipeline,message(106,text='B',reply_to_id=105))
         self.assertEqual(('issue',43),(result.decision,result.issue_number))
         self.assertEqual(2,len(github.calls)); self.assertIn('/issues/42',github.calls[1].body)
         self.assertEqual(42,store.get(old.chat_id,42)['issue_number'])
         self.assertEqual(42,store.get(old.chat_id,102)['issue_number'])
         self.assertEqual(43,store.get(old.chat_id,104)['issue_number']); self.assertIn(42,snapshots)
-        self.assertIsNone(pipeline.process(message(106,text='B',reply_to_id=105)))
+        self.assertIsNone(ops_reply(pipeline,message(106,text='B',reply_to_id=105)))
         self.assertEqual(2,len(github.calls))
 
     def test_model_reused_success_is_not_in_outgoing_contract(self):
@@ -759,15 +775,15 @@ class ExtensionRulesTests(unittest.TestCase):
         pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:next(notices))
         # Ep 1: Parent 101 -> Issue 42
         self.assertEqual('lifecycle_question_sent',pipeline.process(message(42,text='POS kẹt giấy',reply_to_id=10)).reason)
-        self.assertEqual(42,pipeline.process(message(100,text='B',reply_to_id=99)).issue_number)
+        self.assertEqual(42,ops_reply(pipeline,message(100,text='B',reply_to_id=99)).issue_number)
         states[42]='closed'
         # Ep 2: Issue 42 -> Issue 43
-        self.assertEqual('lifecycle_question_sent',pipeline.process(message(104,text='POS kẹt giấy',reply_to_id=101)).reason)
-        self.assertEqual(43,pipeline.process(message(106,text='B',reply_to_id=105)).issue_number)
+        self.assertEqual('lifecycle_question_sent',pipeline.process(message(104,text='POS kẹt giấy',reply_to_id=42)).reason)
+        self.assertEqual(43,ops_reply(pipeline,message(106,text='B',reply_to_id=105)).issue_number)
         states[43]='closed'
         # Ep 3: Issue 43 -> Issue 44
-        self.assertEqual('lifecycle_question_sent',pipeline.process(message(108,text='POS kẹt giấy',reply_to_id=107)).reason)
-        result3=pipeline.process(message(110,text='B',reply_to_id=109))
+        self.assertEqual('lifecycle_question_sent',pipeline.process(message(108,text='POS kẹt giấy',reply_to_id=104)).reason)
+        result3=ops_reply(pipeline,message(110,text='B',reply_to_id=109))
         self.assertEqual(('issue',44),(result3.decision,result3.issue_number))
         self.assertEqual(3,len(github.calls))
         self.assertIn('/issues/42',github.calls[1].body)
@@ -802,7 +818,7 @@ class ExtensionRulesTests(unittest.TestCase):
                 sent=[]; pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *args:sent.append(args) or (97+2*len(sent)))
                 text='bảng điều khiển đổi bố cục' if kind=='task' else 'phản hồi quá chậm' if kind=='feedback' else 'lỗi'
                 pipeline.process(message(42,text=text,reply_to_id=10))
-                result=pipeline.process(message(100,text='B',reply_to_id=99))
+                result=ops_reply(pipeline,message(100,text='B',reply_to_id=99))
                 if kind=='insufficient':
                     self.assertEqual('lifecycle_recurrence_answer_pending',result.reason); self.assertEqual([],github.calls)
                 else:
@@ -864,6 +880,7 @@ class ExtensionRulesTests(unittest.TestCase):
         with patch.object(pipeline.rules_pending,'transition_group',side_effect=crash):
             with self.assertRaises(RuntimeError): _process_batch(pipeline,[source])
         self.assertEqual(len(sent),1)
+        original_body=store.connection.execute('SELECT body FROM rules_readonly_notices').fetchone()[0]
         from tg_triage.rules_pending_store import RulesHalt, _recoverable_batch_groups
         with store.connection:
             store.connection.execute("UPDATE rules_readonly_notices SET kind='ANALYZE'")
@@ -871,9 +888,8 @@ class ExtensionRulesTests(unittest.TestCase):
         with store.connection:
             store.connection.execute("UPDATE rules_readonly_notices SET kind='STATUS', body='wrong content'")
         with self.assertRaises(RulesHalt): _recoverable_batch_groups(store.connection)
-        from tg_triage.ticket_status import render
         with store.connection:
-            store.connection.execute('UPDATE rules_readonly_notices SET body=?',(render({'state':'missing_target'}),))
+            store.connection.execute('UPDATE rules_readonly_notices SET body=?',(original_body,))
         store.close(); check_before_recovery(db)
         store=Store(db); self.addCleanup(store.close)
         RulesPendingStore(store)
@@ -897,7 +913,10 @@ class ExtensionRulesTests(unittest.TestCase):
         base=config(); settings=replace(base,mode='live',autonomous_enabled=True,decision_rules_enabled=True,
             telegram=replace(base.telegram,ops_chat_id=-1009876543210))
         sent=[]; pipeline=Pipeline(settings,store,Provider(),rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 99)
-        source=message(42,text='trạng thái?'); topic=f'{source.chat_id}:42'
+        target=message(10,text='original'); store.enqueue(target)
+        with store.connection:
+            store.connection.execute("UPDATE messages SET decision='issue',issue_number=101,issue_url='https://github.com/sandbox/triage/issues/101' WHERE chat_id=? AND message_id=10",(target.chat_id,))
+        source=message(42,text='trạng thái?',reply_to_id=10); topic=f'{source.chat_id}:42'
         real=pipeline.rules_pending.close
         def crash(value,status):
             if value==topic: raise RuntimeError('crash before close')
@@ -973,7 +992,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     self.assertEqual([],sent)
                 else:
                     self.assertEqual('semantic_analyze',result.reason)
-                    self.assertTrue(sent[0][2].startswith('Việc:'))
+                    self.assertIn('\nViệc:',sent[0][2])
                     self.assertIn('Thực hiện: Phân tích phần bị cắt',sent[0][2])
 
     def test_processed_long_document_rechecks_original_digest_on_resume(self):
@@ -1079,7 +1098,8 @@ class ExtensionRulesTests(unittest.TestCase):
         sweep(pipeline); sweep(pipeline)
         self.assertEqual(1,len(sent))
         self.assertEqual('semantic_status',store.get(source.chat_id,42)['reason'])
-        self.assertEqual('CLOSED',store.connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(f'{source.chat_id}:42',)).fetchone()[0])
+        self.assertEqual('OPEN',store.connection.execute('SELECT status FROM rules_topics WHERE topic_id=?',(f'{source.chat_id}:42',)).fetchone()[0])
+        self.assertEqual('question',store.connection.execute('SELECT kind FROM rules_notices').fetchone()[0])
 
     def test_unimplemented_recurrence_and_its_reply_never_create_replacement(self):
         from tg_triage.pipeline import Pipeline
@@ -1179,7 +1199,7 @@ class ExtensionRulesTests(unittest.TestCase):
         sent=[]; pipeline=Pipeline(settings,store,Provider(),rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 99)
         result=pipeline.process(message(42,text='Phân tích:\n'+task_text))
         self.assertEqual('semantic_analyze',result.reason)
-        self.assertEqual(task_text,sent[0][2])
+        self.assertTrue(sent[0][2].endswith('\n'+task_text))
         from tg_triage.analysis_task import explicit_task
         task={'title':'Kiểm tra lỗi','work':'Phân tích yêu cầu','acceptance':['Nêu vấn đề']}
         self.assertTrue(explicit_task(task,('Phân tích:\n'+task_text).replace('\n','\r\n'),False))
@@ -1213,7 +1233,7 @@ class ExtensionRulesTests(unittest.TestCase):
         result=pipeline.process(message(42,text='Phân tích yêu cầu trên',reply_to_id=10))
         self.assertEqual('semantic_analyze',result.reason)
         self.assertEqual(1,len(sent))
-        self.assertTrue(sent[0][2].startswith('Việc:'))
+        self.assertIn('\nViệc:',sent[0][2])
         self.assertIn('Kiểm tra giao diện',sent[0][2])
         self.assertIn('Không lỗi bố cục',sent[0][2])
 
@@ -1266,7 +1286,7 @@ class ExtensionRulesTests(unittest.TestCase):
         with self.assertRaises(RulesHalt): pipeline.process(message(42,text='trạng thái?'))
         with self.assertRaises(RulesHalt): pipeline.process(message(42,text='trạng thái?'))
         self.assertEqual(len(calls),1)
-        self.assertEqual(store.connection.execute('SELECT status FROM group_notices').fetchone()[0],'failed')
+        self.assertEqual(store.connection.execute('SELECT status FROM rules_notices').fetchone()[0],'ambiguous')
 
     def test_notice_finish_without_persistence_never_completes_checkpoint(self):
         from unittest.mock import patch
@@ -1285,10 +1305,10 @@ class ExtensionRulesTests(unittest.TestCase):
         base=config(); settings=replace(base,mode='live',autonomous_enabled=True,decision_rules_enabled=True,
             telegram=replace(base.telegram,ops_chat_id=-1009876543210))
         sent=[]; pipeline=Pipeline(settings,store,Provider(),rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or 99)
-        with patch.object(store,'finish_group_notice',return_value=None):
+        with patch.object(pipeline.rules_pending,'finish_notice',return_value=None):
             with self.assertRaises(RulesHalt): pipeline.process(message(42,text='trạng thái?'))
         self.assertEqual(1,len(sent))
-        self.assertEqual('reserved',store.connection.execute('SELECT status FROM group_notices').fetchone()[0])
+        self.assertEqual('reserved',store.connection.execute('SELECT status FROM rules_notices').fetchone()[0])
         self.assertNotEqual('DONE',store.connection.execute('SELECT status FROM rules_batch_groups').fetchone()[0])
 
     def test_notice_verification_read_failure_raises_rules_halt(self):
@@ -1419,8 +1439,17 @@ class ExtensionRulesTests(unittest.TestCase):
             gh.calls.append(issue); n=201+len(gh.calls)
             return n,f'https://github.com/sandbox/triage/issues/{n}'
         gh.create_issue=create
-        sent=[]; provider=Provider()
-        pipeline=Pipeline(settings,store,provider,gh,rules_snapshot=snapshot,notice_sender=lambda *a:sent.append(a) or (a[1] or 1000)+1)
+        sent=[]; returned=[]; provider=Provider()
+        def sender(*args):
+            import re
+            sent.append(args)
+            match=re.search(r'Tin gốc: .*?/(\d+)(?:\s|$)',args[2])
+            self.assertIsNotNone(match)
+            candidate=int(match.group(1))+1
+            if candidate in returned: candidate=10000+len(returned)
+            returned.append(candidate)
+            return candidate
+        pipeline=Pipeline(settings,store,provider,gh,rules_snapshot=snapshot,notice_sender=sender)
         return store,provider,gh,sent,pipeline
 
     def test_direct_grounded_recurrence_and_latest_episode(self):
@@ -1438,11 +1467,11 @@ class ExtensionRulesTests(unittest.TestCase):
         self.assertEqual(1,len(gh.calls))
         latest=p.process(message(60,text=text,reply_to_id=42))
         self.assertEqual('lifecycle_question_sent',latest.reason)
-        latest=p.process(message(62,text='B',reply_to_id=61))
+        latest=ops_reply(p,message(62,text='B',reply_to_id=61))
         self.assertEqual(('issue',203),(latest.decision,latest.issue_number))
         self.assertIn('/issues/202',gh.calls[1].body)
         self.assertEqual(2,len(gh.calls))
-        self.assertEqual('lifecycle_answer_unresolved',p.process(message(52,text='B',reply_to_id=51)).reason)
+        self.assertEqual('lifecycle_answer_unresolved',ops_reply(p,message(52,text='B',reply_to_id=51)).reason)
         self.assertEqual(2,len(gh.calls))
 
     def test_direct_recurrence_invalid_proof_and_open_append(self):
@@ -1605,7 +1634,7 @@ class ExtensionRulesTests(unittest.TestCase):
         result=p.process(message(60,text='POS failed today',reply_to_id=42))
         self.assertEqual('lifecycle_question_sent',result.reason); self.assertEqual([],gh.calls)
         # Exact B is a new direct assertion about success AFTER bound episode202.
-        result=p.process(message(62,text='B',reply_to_id=61))
+        result=ops_reply(p,message(62,text='B',reply_to_id=61))
         self.assertEqual('issue',result.decision); self.assertEqual(1,len(gh.calls))
         self.assertIn('/issues/202',gh.calls[0].body)
 
@@ -1620,7 +1649,7 @@ class ExtensionRulesTests(unittest.TestCase):
                 if change=='new_successor':
                     with store.connection:
                         store.connection.execute("INSERT INTO rules_related_episodes VALUES(?,?,?,?,?,'done',?,?,?)",(message().chat_id,'sandbox/triage',202,70,70,203,'https://github.com/sandbox/triage/issues/203','notice'))
-                result=p.process(message(62,text='B',reply_to_id=61,received_at=NOW-timedelta(days=1) if change=='backdated' else NOW))
+                result=ops_reply(p,message(62,text='B',reply_to_id=61,received_at=NOW-timedelta(days=1) if change=='backdated' else NOW))
                 self.assertEqual('pending_review',result.decision); self.assertEqual(1,len(gh.calls))
 
     def test_direct_recurrence_with_separate_reply_success_evidence(self):
@@ -1682,7 +1711,7 @@ class ExtensionRulesTests(unittest.TestCase):
             members.append(message(45,text='Failure document',reply_to_id=43,has_document=True,document_name='failure.txt',document_mime='text/plain',document_size=20))
         provider=Provider(); downloader=FakeDownloader(files); uploader=FakeUploader()
         p.classifier=provider; p.attachments.downloader=downloader; p.attachments.uploader=uploader
-        p.notice_sender=lambda *a:sent.append(a) or max(900+len(sent),(a[1] or 0)+1)
+        p.notice_sender=lambda *a:sent.append(a) or (901 if len(sent)==1 else 10000+10*len(sent))
         return store,provider,gh,sent,p,members,downloader,uploader,png
 
     def run_recurrence_batch(self,p,members):
@@ -1706,7 +1735,7 @@ class ExtensionRulesTests(unittest.TestCase):
         self.assertIn('/43',body); self.assertIn('/44',body); self.assertIn('failure.txt',body)
         self.assertEqual(101,store.get(message().chat_id,42)['issue_number'])
         for mid in (43,44,45): self.assertEqual(202,store.get(message().chat_id,mid)['issue_number'])
-        self.assertEqual(43,sent[0][1])
+        self.assertEqual((-1009876543210,None),sent[0][:2])
         with store.connection: store.connection.execute("UPDATE rules_batch_groups SET status='RESERVED'")
         self.assertEqual('DONE',_recoverable_batch_groups(store.connection)[0][2])
         self.assertEqual(1,len(gh.calls)); self.assertEqual(2,len(uploader.uploads))
@@ -1754,8 +1783,8 @@ class ExtensionRulesTests(unittest.TestCase):
         downloader.files.update({mid+18:value for mid,value in list(downloader.files.items())})
         question=self.run_recurrence_batch(p,later)
         self.assertEqual('lifecycle_question_sent',question.reason); self.assertEqual(1,len(gh.calls))
-        notice=902
-        result=p.process(message(notice+1,text='B',reply_to_id=notice))
+        notice=store.connection.execute("SELECT notice_id FROM rules_notices WHERE kind='question' AND status='sent'").fetchone()[0]
+        result=ops_reply(p,message(notice+1,text='B',reply_to_id=notice))
         self.assertEqual(('issue',203),(result.decision,result.issue_number))
         self.assertEqual(4,len(uploader.uploads))
         self.assertEqual(202,store.get(message().chat_id,60)['issue_number'])
@@ -1792,7 +1821,7 @@ class ExtensionRulesTests(unittest.TestCase):
         q=store.connection.execute('SELECT parent_number FROM rules_lifecycle_questions WHERE source_id=50').fetchone()
         self.assertEqual(202,q[0]); self.assertEqual('DONE',_recoverable_batch_groups(store.connection)[0][2])
         p.rules_pending=RulesPendingStore(store)
-        result=p.process(message(52,text='B',reply_to_id=51))
+        result=ops_reply(p,message(52,text='B',reply_to_id=51))
         self.assertEqual(203,result.issue_number); self.assertIn('/issues/202',gh.calls[1].body)
 
     def test_image_only_recurrence_requires_explicit_bound_confirmation(self):
@@ -1803,8 +1832,21 @@ class ExtensionRulesTests(unittest.TestCase):
         p.attachments.downloader=FakeDownloader({42:(PNG,'failure.png')}); uploader=FakeUploader(); p.attachments.uploader=uploader
         result=p.process(message(42,text='',reply_to_id=10,has_image=True,image_mime='image/png',image_size=len(PNG)))
         self.assertEqual('lifecycle_question_sent',result.reason); self.assertEqual([],gh.calls)
-        result=p.process(message(44,text='B',reply_to_id=43))
+        result=ops_reply(p,message(44,text='B',reply_to_id=43))
         self.assertEqual(202,result.issue_number); self.assertEqual(1,len(uploader.uploads)); self.assertIn('/42-',gh.calls[0].body)
+
+    def test_image_only_recurrence_accepts_ops_b_with_same_source_id(self):
+        from tests.helpers import message,FakeDownloader,FakeUploader,PNG
+        store,provider,gh,sent,p=self.direct_recurrence_fixture()
+        provider.supports_vision=True
+        provider.changes={'kind':'unclear','knownworking_source_ids':[],'recurrence_source_ids':[]}
+        p.attachments.downloader=FakeDownloader({42:(PNG,'failure.png')}); uploader=FakeUploader(); p.attachments.uploader=uploader
+        p.notice_sender=lambda *args:sent.append(args) or (30 if len(sent)==1 else 100)
+        self.assertEqual('lifecycle_question_sent',p.process(message(42,text='',reply_to_id=10,has_image=True,image_mime='image/png',image_size=len(PNG))).reason)
+        self.assertEqual([],gh.calls); self.assertEqual([],uploader.uploads)
+        result=ops_reply(p,message(42,text='B',reply_to_id=30))
+        self.assertEqual(202,result.issue_number); self.assertEqual(1,len(gh.calls)); self.assertEqual(1,len(uploader.uploads))
+        self.assertIn('/42-',gh.calls[0].body)
 
     def test_forwarded_recurrence_and_backdated_batch_asset_do_not_write(self):
         from tests.helpers import message,NOW
@@ -1865,7 +1907,7 @@ class ExtensionRulesTests(unittest.TestCase):
                 store,provider,gh,sent,p,members,downloader,uploader,png=self.unclear_question_fixture(path=path)
                 if restart:
                     p=self.restart_question_fixture(path,p,provider,gh,downloader,uploader);store=p.store
-                result=p.process(message(902,text='B',reply_to_id=901))
+                result=ops_reply(p,message(902,text='B',reply_to_id=901))
                 self.assertEqual(202,result.issue_number)
                 self.assertEqual(101,store.get(members[0].chat_id,42)['issue_number'])
                 for mid in (43,44,45):self.assertEqual(202,store.get(members[0].chat_id,mid)['issue_number'])
@@ -1878,7 +1920,7 @@ class ExtensionRulesTests(unittest.TestCase):
         for roles in ('absent','ungrounded'):
             with self.subTest(roles=roles):
                 store,provider,gh,sent,p,members,downloader,uploader,png=self.unclear_question_fixture(roles=roles)
-                self.assertEqual('pending_review',p.process(message(902,text='B',reply_to_id=901)).decision)
+                self.assertEqual('pending_review',ops_reply(p,message(902,text='B',reply_to_id=901)).decision)
                 self.assertEqual([],gh.calls); self.assertEqual([],uploader.uploads)
                 self.assertEqual(0,store.connection.execute('SELECT count(*) FROM rules_lifecycle_answers').fetchone()[0])
 
@@ -1895,7 +1937,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     if changed in ('source','context'):
                         with store.connection:store.connection.execute("UPDATE messages SET text=text||' altered' WHERE message_id=?",(43 if changed=='source' else 10,))
                     comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
-                    self.assertEqual('pending_review',p.process(message(902,text=answer,reply_to_id=901)).decision)
+                    self.assertEqual('pending_review',ops_reply(p,message(902,text=answer,reply_to_id=901)).decision)
                     self.assertEqual([],gh.calls);self.assertEqual([],comments);self.assertEqual([],uploader.uploads)
                     self.assertEqual(0,store.connection.execute('SELECT count(*) FROM rules_lifecycle_answers').fetchone()[0])
 
@@ -1908,7 +1950,7 @@ class ExtensionRulesTests(unittest.TestCase):
         self.assertEqual('lifecycle_question_sent',p.process(message(50,text=text,reply_to_id=10)).reason)
         p=self.restart_question_fixture(path,p,provider,gh,p.attachments.downloader,p.attachments.uploader);store=p.store
         comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
-        result=p.process(message(52,text='A',reply_to_id=51))
+        result=ops_reply(p,message(52,text='A',reply_to_id=51))
         self.assertEqual('followup',result.decision);self.assertEqual(202,result.issue_number)
         self.assertEqual([202],[number for number,body in comments])
         self.assertEqual(101,store.get(message().chat_id,10)['issue_number'])
@@ -1940,7 +1982,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     if changed=='image':downloader.files[44]=(png+b'altered','new-failure.png')
                     if changed=='document':downloader.files[45]=(b'%PDF-1.4\nALTERED\n%%EOF','evidence.pdf')
                     comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
-                    result=p.process(message(902,text=answer,reply_to_id=901))
+                    result=ops_reply(p,message(902,text=answer,reply_to_id=901))
                     if changed:
                         self.assertEqual('pending_review',result.decision);self.assertEqual([],comments);self.assertEqual([],gh.calls);self.assertEqual([],uploader.uploads)
                     else:
@@ -1988,7 +2030,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     return original(images,documents,proof,required)
                 p.attachments._check_asset_proofs=change_later
                 comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
-                with self.assertRaises(RulesHalt):p.process(message(902,text=answer,reply_to_id=901))
+                with self.assertRaises(RulesHalt):ops_reply(p,message(902,text=answer,reply_to_id=901))
                 self.assertEqual([],uploader.uploads);self.assertEqual([],uploader.releases);self.assertEqual([],comments);self.assertEqual([],gh.calls)
 
     def test_prepared_cache_and_uploaded_row_cannot_bypass_asset_proof(self):
@@ -2041,7 +2083,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     return ask(body,convert,attempts)
                 provider._ask=unclear
                 self.assertEqual('lifecycle_question_sent',self.run_recurrence_batch(p,members).reason)
-                result=p.process(message(902,text='B',reply_to_id=901))
+                result=ops_reply(p,message(902,text='B',reply_to_id=901))
                 if binding=='historical':
                     self.assertEqual(202,result.issue_number);self.assertEqual(101,store.get(members[0].chat_id,46)['issue_number'])
                     self.assertTrue(all(not row['asset'].startswith('46-') for row in uploader.uploads))
@@ -2062,7 +2104,7 @@ class ExtensionRulesTests(unittest.TestCase):
         provider._ask=unclear
         self.assertEqual('lifecycle_question_sent',self.run_recurrence_batch(p,members).reason)
         comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
-        self.assertEqual('followup',p.process(message(902,text='A',reply_to_id=901)).decision)
+        self.assertEqual('followup',ops_reply(p,message(902,text='A',reply_to_id=901)).decision)
         self.assertEqual([101],[number for number,body in comments]);self.assertEqual([],gh.calls)
 
     def test_full_evidence_is_reloaded_after_upload_for_direct_A_and_B(self):
@@ -2095,7 +2137,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     uploader.upload=mutate
                     with self.assertRaises(RulesHalt):
                         if mode=='direct':self.run_recurrence_batch(p,members)
-                        else:p.process(message(902,text=mode,reply_to_id=901))
+                        else:ops_reply(p,message(902,text=mode,reply_to_id=901))
                     self.assertEqual([],gh.calls);self.assertEqual([],comments)
                     with self.assertRaises(RulesHalt):check_before_recovery(Path(path))
                     if mode=='A':self.assertEqual('reserved',store.connection.execute('SELECT status FROM rules_comments').fetchone()[0])
@@ -2128,7 +2170,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     with patch.object(p.attachments,target,replacement):
                         with self.assertRaises(RulesHalt):
                             if mode=='direct':self.run_recurrence_batch(p,members)
-                            else:p.process(message(902,text=mode,reply_to_id=901))
+                            else:ops_reply(p,message(902,text=mode,reply_to_id=901))
                     self.assertEqual([],gh.calls);self.assertEqual([],comments);self.assertEqual([],uploader.uploads)
         # No-proof legacy callers still turn ordinary processor failure into a note.
         with patch.object(p.attachments,'process',side_effect=OSError('legacy failure')):
@@ -2173,7 +2215,7 @@ class ExtensionRulesTests(unittest.TestCase):
                 comments=[];gh.add_comment=lambda *args:comments.append(args) or 301
                 with self.assertRaises(RulesHalt):
                     if mode=='direct':self.run_recurrence_batch(p,members)
-                    else:p.process(message(902,text=mode,reply_to_id=901))
+                    else:ops_reply(p,message(902,text=mode,reply_to_id=901))
                 self.assertEqual([],gh.calls);self.assertEqual([],comments)
 
     def test_bound_topic_must_exist_and_be_OPEN_at_final_POST_gate(self):
@@ -2197,7 +2239,7 @@ class ExtensionRulesTests(unittest.TestCase):
                     uploader.upload=revoke
                     with self.assertRaises(RulesHalt):
                         if mode=='direct':self.run_recurrence_batch(p,members)
-                        else:p.process(message(902,text=mode,reply_to_id=901))
+                        else:ops_reply(p,message(902,text=mode,reply_to_id=901))
                     self.assertEqual([],gh.calls);self.assertEqual([],comments)
                     table='rules_comments' if mode=='A' else 'rules_related_episodes'
                     self.assertEqual('reserved',store.connection.execute('SELECT status FROM '+table).fetchone()[0])
@@ -2226,5 +2268,5 @@ class ExtensionRulesTests(unittest.TestCase):
                     uploader.upload=revoke
                     with self.assertRaises(RulesHalt):
                         if mode=='direct':self.run_recurrence_batch(p,members)
-                        else:p.process(message(902,text=mode,reply_to_id=901))
+                        else:ops_reply(p,message(902,text=mode,reply_to_id=901))
                     self.assertEqual([],gh.calls);self.assertEqual([],comments)

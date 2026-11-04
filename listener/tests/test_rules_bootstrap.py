@@ -69,7 +69,7 @@ class RulesBootstrapTests(unittest.TestCase):
         self.assertEqual(snapshot.extensions.route('status'),'STATUS')
         self.assertEqual(len(snapshot.fingerprint),64)
         for name in EXTENSION_FILES:
-            self.assertIn('version 2 · status ACTIVE',(ROOT/'rules'/f'{name}.md').read_text(encoding='utf8').splitlines()[0])
+            self.assertIn('version 3 · status ACTIVE',(ROOT/'rules'/f'{name}.md').read_text(encoding='utf8').splitlines()[0])
 
     def test_check_config_disabled_does_not_load_rules(self):
         self.config(self.text)

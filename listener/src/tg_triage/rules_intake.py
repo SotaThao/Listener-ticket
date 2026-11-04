@@ -208,14 +208,28 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         return None
 
 
+def _status_source_reply(pipeline, message):
+    if message.reply_to_id is None:
+        return False
+    with pipeline.store._lock:
+        return bool(pipeline.store.connection.execute('''SELECT 1 FROM rules_readonly_notices p
+            JOIN rules_sources s ON s.chat_id=p.chat_id AND s.message_id=p.message_id
+            JOIN rules_topics t ON t.topic_id=s.topic_id
+            JOIN rules_notices n ON n.topic_id=t.topic_id
+            WHERE p.chat_id=? AND p.message_id=? AND p.kind='STATUS' AND t.status='OPEN'
+            AND n.kind='question' AND n.status='sent' LIMIT 1''',(message.chat_id,message.reply_to_id)).fetchone())
+
+
 def process(pipeline, message, start):
     """Partial integration; startup remains blocked until all paths are complete."""
     from .pacing import RELEASED_SOURCES
     if message.chat_id == pipeline.config.telegram.ops_chat_id:
         return _process_ops_reply(pipeline,message)
-    answer=_lifecycle_answer(pipeline,message)
-    if answer is not None:
-        return answer
+    if _status_source_reply(pipeline,message):
+        from .models import Decision
+        result=Decision('pending_review','rule',reason='status_reply_requires_ops')
+        pipeline.store.finish(message,result)
+        return result
     guarded=_hold_lifecycle_reply(pipeline,message)
     if guarded is not None:
         return guarded
@@ -302,6 +316,8 @@ def _process_single_with_images(pipeline, message):
                for name,field in decision.present.items()}
     pending.record_decision(topic,replace(decision,present=present))
     if decision.state in ('ANALYZE', 'STATUS'):
+        from .pipeline import Plan
+        pipeline._acknowledge(Plan(topic,[message],message,'rule','pending_review'))
         result = _read_only_result(pipeline, message, topic, decision)
         if result.decision=='pending_review':
             pipeline.store.finish(message,result)
@@ -332,6 +348,18 @@ def _process_single_with_images(pipeline, message):
     return result
 
 
+def _ops_notice_identity(connection, chat_id, notice_id):
+    if type(notice_id) is not int or notice_id <= 0:
+        return False
+    if connection.execute("SELECT count(*) FROM rules_notices WHERE ops_chat_id=? AND notice_id=? AND status='sent'", (chat_id, notice_id)).fetchone()[0] != 1:
+        return False
+    if connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND notice_message_id=?',(chat_id,notice_id)).fetchone():
+        return False
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE name='autonomous_confirmations'").fetchone() and connection.execute('SELECT 1 FROM autonomous_confirmations WHERE chat_id=? AND notice_message_id=?',(chat_id,notice_id)).fetchone():
+        return False
+    return not connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?', (chat_id, notice_id)).fetchone()
+
+
 def _read_only_result(pipeline, source, topic, decision, *, plan_id=None, evidence_plan=None, evidence_origin=None):
     """Render validated analysis or re-read host status; no issue write authority."""
     import hashlib
@@ -342,12 +370,17 @@ def _read_only_result(pipeline, source, topic, decision, *, plan_id=None, eviden
                 else analysis_task.render_excerpts(decision.task))
         reason = 'semantic_analyze'
     elif decision.state == 'STATUS':
-        body = ticket_status.render(ticket_status.resolve(pipeline.store, [source], pipeline.config.gh_repo))
+        status_snapshot = ticket_status.resolve(pipeline.store, [source], pipeline.config.gh_repo)
+        body = ('Anh/Chị reply tin này với mã tin gốc cần kiểm tra trạng thái nhé.'
+                if status_snapshot['state']=='missing_target' else ticket_status.render(status_snapshot))
         reason = 'semantic_status'
     else:
         raise ValueError('unsupported read-only result')
     result = Decision('chat', 'rule', case_key=topic, reason=reason)
+    notice_kind = 'question' if decision.state == 'STATUS' and status_snapshot['state']=='missing_target' else 'other'
     if pipeline.config.mode != 'dry-run' and pipeline.notice_sender is None:
+        import logging
+        logging.getLogger(__name__).warning('Ops read-only notice unavailable topic=%s', topic)
         return Decision('pending_review','rule',case_key=topic,reason='readonly_notice_unavailable')
     if pipeline.config.mode != 'dry-run' and plan_id is None:
         return Decision('pending_review','rule',case_key=topic,reason='readonly_plan_missing')
@@ -369,15 +402,17 @@ def _read_only_result(pipeline, source, topic, decision, *, plan_id=None, eviden
                 from .rules_analysis import metadata_valid
                 if not metadata_valid(pipeline,evidence_plan,evidence_origin):
                     raise RulesHalt('analysis evidence changed before notice reservation')
-            existing=store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(source.chat_id,source.message_id)).fetchone()
+            existing=(store.connection.execute('SELECT 1 FROM rules_readonly_notices WHERE chat_id=? AND message_id=?',(source.chat_id,source.message_id)).fetchone()
+                      or store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(source.chat_id,source.message_id)).fetchone())
             if existing:
                 return Decision('pending_review','rule',case_key=topic,reason='readonly_notice_conflict')
-            store.connection.execute('INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at) VALUES(?,?,?,?,?)',
-                (source.chat_id,source.message_id,decision.state,'reserved',store.clock().isoformat()))
+            sequence=store.connection.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM rules_notices WHERE topic_id=?',(topic,)).fetchone()[0]
+            store.connection.execute("INSERT INTO rules_notices VALUES(?,?,?,?,'reserved',NULL)",
+                (topic,sequence,pipeline.config.telegram.ops_chat_id,notice_kind))
             store.connection.execute('INSERT INTO rules_readonly_notices VALUES(?,?,?,?,?,?)',
                 (source.chat_id,source.message_id,decision.state,plan_id,hashlib.sha256(body.encode('utf-8')).hexdigest(),body))
         try:
-            sent=pipeline.notice_sender(source.chat_id,source.message_id,body)
+            sent=pipeline.notice_sender(pipeline.config.telegram.ops_chat_id,None,_ops_text(source,topic,body))
         except Exception:
             sent=None
         status='sent' if type(sent) is int and sent>0 else 'failed'
@@ -387,29 +422,32 @@ def _read_only_result(pipeline, source, topic, decision, *, plan_id=None, eviden
                 with store._lock,store.connection:
                     proof=store.connection.execute('SELECT kind,plan_id,body_hash,body FROM rules_readonly_notices WHERE chat_id=? AND message_id=?',
                         (source.chat_id,source.message_id)).fetchone()
-                    changed=store.connection.execute("UPDATE group_notices SET status='sent',finished_at=?,notice_message_id=? WHERE chat_id=? AND message_id=? AND kind='ANALYZE' AND status='reserved'",
-                        (store.clock().isoformat(),sent,source.chat_id,source.message_id))
+                    changed=store.connection.execute("UPDATE rules_notices SET status='sent',notice_id=? WHERE topic_id=? AND sequence=? AND status='reserved'",
+                        (sent,topic,sequence))
                     valid=(changed.rowcount==1 and proof is not None and tuple(proof)==('ANALYZE',plan_id,hashlib.sha256(body.encode('utf-8')).hexdigest(),body)
                         and metadata_valid(pipeline,evidence_plan,evidence_origin)
-                        and ticket_status.sent_notice_identity(store.connection,source.chat_id,sent))
+                        and _ops_notice_identity(store.connection,pipeline.config.telegram.ops_chat_id,sent))
                     if valid:finish_members(store,evidence_plan,result)
                 if not valid:raise RulesHalt('analysis confirmation proof changed; sent receipt retained')
             else:
-                store.finish_group_notice(source.chat_id,source.message_id,status,sent if status=='sent' else None)
+                if not pipeline.rules_pending.finish_notice(topic,sequence,sent):
+                    raise RulesHalt('read-only notice receipt changed')
         except Exception as error:
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required') from error
         if status!='sent':
+            import logging
+            logging.getLogger(__name__).warning('Ops read-only notice outcome unresolved topic=%s', topic)
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required')
         try:
             with store._lock:
-                notice=store.connection.execute('''SELECT n.kind,n.status,n.notice_message_id,
-                    p.kind,p.plan_id,p.body_hash,p.body FROM group_notices n JOIN rules_readonly_notices p
-                    ON p.chat_id=n.chat_id AND p.message_id=n.message_id
-                    WHERE n.chat_id=? AND n.message_id=?''',(source.chat_id,source.message_id)).fetchone()
+                notice=store.connection.execute('''SELECT n.kind,n.status,n.notice_id,
+                    p.kind,p.plan_id,p.body_hash,p.body FROM rules_notices n JOIN rules_readonly_notices p
+                    ON p.chat_id=? AND p.message_id=?
+                    WHERE n.topic_id=? AND n.sequence=?''',(source.chat_id,source.message_id,topic,sequence)).fetchone()
         except Exception as error:
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required') from error
-        expected=(decision.state,'sent',sent,decision.state,plan_id,hashlib.sha256(body.encode('utf-8')).hexdigest(),body)
-        if notice is None or tuple(notice)!=expected or not ticket_status.sent_notice_identity(store.connection,source.chat_id,sent):
+        expected=(notice_kind,'sent',sent,decision.state,plan_id,hashlib.sha256(body.encode('utf-8')).hexdigest(),body)
+        if notice is None or tuple(notice)!=expected or not _ops_notice_identity(store.connection,pipeline.config.telegram.ops_chat_id,sent):
             raise RulesHalt('read-only notice outcome unresolved; Owner inspection required')
     return result
 
@@ -422,36 +460,41 @@ def _send_lifecycle_question(pipeline, source, topic, target, question, plan_id,
     if pipeline.config.mode=='dry-run':
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_question_dry_run')
     if pipeline.notice_sender is None:
+        import logging
+        logging.getLogger(__name__).warning('Ops lifecycle question unavailable topic=%s', topic)
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_question_unavailable')
     if _resolve_lifecycle_target(pipeline,source,target)!=target or target['state']!='closed':
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_lookup_failed')
     store=pipeline.store
     store.finish(source,result)
     with store._lock,store.connection:
-        if store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(source.chat_id,source.message_id)).fetchone():
+        if store.connection.execute('SELECT 1 FROM rules_lifecycle_questions WHERE chat_id=? AND source_id=?',(source.chat_id,source.message_id)).fetchone():
             return Decision('pending_review','rule',case_key=topic,reason='lifecycle_notice_conflict')
-        store.connection.execute('INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at) VALUES(?,?,?,?,?)',
-            (source.chat_id,source.message_id,'LIFECYCLE_QUESTION','reserved',store.clock().isoformat()))
+        sequence=store.connection.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM rules_notices WHERE topic_id=?',(topic,)).fetchone()[0]
+        store.connection.execute("INSERT INTO rules_notices VALUES(?,?,?,'question','reserved',NULL)",
+            (topic,sequence,pipeline.config.telegram.ops_chat_id))
         choices=pipeline.rules_snapshot.extensions.clarification
         store.connection.execute('INSERT INTO rules_lifecycle_questions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
             (source.chat_id,source.message_id,topic,target['number'],pipeline.config.gh_repo,plan_id,question,
              pipeline.rules_snapshot.fingerprint,choices['evidence_answer'],choices['recurrence_answer'],batch_id,ordinal))
         store.connection.execute("UPDATE rules_topics SET phase='WAITING' WHERE topic_id=? AND status='OPEN'",(topic,))
     try:
-        sent=pipeline.notice_sender(source.chat_id,source.message_id,question)
+        sent=pipeline.notice_sender(pipeline.config.telegram.ops_chat_id,None,_ops_text(source,topic,question))
     except Exception:
         sent=None
     try:
-        store.finish_group_notice(source.chat_id,source.message_id,'sent' if type(sent) is int and sent>0 else 'failed',sent if type(sent) is int and sent>0 else None)
+        if not pipeline.rules_pending.finish_notice(topic,sequence,sent):
+            raise RulesHalt('lifecycle question receipt changed')
         with store._lock:
-            row=store.connection.execute('''SELECT n.kind,n.status,n.notice_message_id,q.topic_id,q.parent_number,q.repo,q.plan_id,q.question,q.fingerprint,q.evidence_answer,q.recurrence_answer,q.batch_id,q.ordinal
-                FROM group_notices n JOIN rules_lifecycle_questions q ON q.chat_id=n.chat_id AND q.source_id=n.message_id
-                WHERE n.chat_id=? AND n.message_id=?''',(source.chat_id,source.message_id)).fetchone()
-            collisions=store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(source.chat_id,sent)).fetchone()[0]
-            local_collision=store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(source.chat_id,sent)).fetchone()
-        if (type(sent) is not int or sent<=max(pair[1] for pair in pipeline.rules_pending.sources(topic).values()) or row is None or tuple(row)!=
-                ('LIFECYCLE_QUESTION','sent',sent,topic,target['number'],pipeline.config.gh_repo,plan_id,question,
-                 pipeline.rules_snapshot.fingerprint,choices['evidence_answer'],choices['recurrence_answer'],batch_id,ordinal) or collisions!=1 or local_collision):
+            row=store.connection.execute('''SELECT n.kind,n.status,n.notice_id,q.topic_id,q.parent_number,q.repo,q.plan_id,q.question,q.fingerprint,q.evidence_answer,q.recurrence_answer,q.batch_id,q.ordinal
+                FROM rules_notices n JOIN rules_lifecycle_questions q ON q.topic_id=n.topic_id
+                WHERE n.topic_id=? AND n.sequence=? AND q.chat_id=? AND q.source_id=?''',(topic,sequence,source.chat_id,source.message_id)).fetchone()
+        if (row is None or tuple(row)!=
+                ('question','sent',sent,topic,target['number'],pipeline.config.gh_repo,plan_id,question,
+                 pipeline.rules_snapshot.fingerprint,choices['evidence_answer'],choices['recurrence_answer'],batch_id,ordinal)
+                or not _ops_notice_identity(store.connection,pipeline.config.telegram.ops_chat_id,sent)):
+            import logging
+            logging.getLogger(__name__).warning('Ops lifecycle question outcome unresolved topic=%s',topic)
             raise RulesHalt('lifecycle question outcome unresolved; Owner inspection required')
     except RulesHalt:
         raise
@@ -471,8 +514,8 @@ def _lifecycle_answer(pipeline,message):
 
 
 def _lifecycle_answer_inner(pipeline,message):
-    """Process only an exact reply to a sent lifecycle question in the same chat."""
-    if message.reply_to_id is None or not pipeline.rules_snapshot.extensions:
+    """Process only a bound ops reply to a sent lifecycle question."""
+    if message.chat_id != pipeline.config.telegram.ops_chat_id or message.reply_to_id is None or not pipeline.rules_snapshot.extensions:
         return None
     from .models import Decision
     from .rules_pending_store import RulesHalt
@@ -480,12 +523,13 @@ def _lifecycle_answer_inner(pipeline,message):
     from types import SimpleNamespace
     store=pipeline.store
     with store._lock:
-        matches=store.connection.execute('''SELECT q.* FROM rules_lifecycle_questions q JOIN group_notices n
-            ON n.chat_id=q.chat_id AND n.message_id=q.source_id
+        matches=store.connection.execute('''SELECT q.* FROM rules_lifecycle_questions q JOIN rules_notices n
+            ON n.topic_id=q.topic_id
             JOIN rules_topics t ON t.topic_id=q.topic_id AND t.status='OPEN'
-            WHERE n.chat_id=? AND n.notice_message_id=? AND n.kind='LIFECYCLE_QUESTION' AND n.status='sent' ''',
-            (message.chat_id,message.reply_to_id)).fetchall()
-        count=store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(message.chat_id,message.reply_to_id)).fetchone()[0]
+            JOIN rules_ops_replies r ON r.topic_id=q.topic_id AND r.chat_id=? AND r.message_id=?
+            WHERE n.ops_chat_id=? AND n.notice_id=? AND n.kind='question' AND n.status='sent' ''',
+            (message.chat_id,message.message_id,message.chat_id,message.reply_to_id)).fetchall()
+        count=store.connection.execute("SELECT count(*) FROM rules_notices WHERE ops_chat_id=? AND notice_id=? AND status='sent'",(message.chat_id,message.reply_to_id)).fetchone()[0]
         local_collision=store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(message.chat_id,message.reply_to_id)).fetchone()
     if not matches: return None
     if len(matches)!=1 or count!=1 or local_collision:
@@ -498,13 +542,13 @@ def _lifecycle_answer_inner(pipeline,message):
     if (message.is_forward or message.has_attachment or q['repo']!=pipeline.config.gh_repo
             or q['fingerprint']!=pipeline.rules_snapshot.fingerprint
             or q['evidence_answer']!=choices['evidence_answer'] or q['recurrence_answer']!=choices['recurrence_answer']
-            or q['question']!=choices['question'] or message.reply_to_id<=q['source_id']
+            or q['question']!=choices['question']
             or message.message_id<=message.reply_to_id
             or message.text.strip() not in (choices['evidence_answer'],choices['recurrence_answer'])):
         pipeline.rules_pending.add_source(q['topic_id'],message.chat_id,message.message_id)
         store.finish(message,waiting)
         return waiting
-    source_row=store.get(message.chat_id,q['source_id'])
+    source_row=store.get(q['chat_id'],q['source_id'])
     if source_row is None:
         store.finish(message,waiting); return waiting
     source=_to_message(source_row)
@@ -520,8 +564,8 @@ def _lifecycle_answer_inner(pipeline,message):
         plan=json.loads(planned['plan']) if planned else None
         if (not planned or planned['status']!='DONE' or planned['fingerprint']!=q['fingerprint']
                 or readonly_plan_id(q['batch_id'],q['ordinal'],q['fingerprint'],plan)!=q['plan_id']
-                or plan.get('state') not in ('LIFECYCLE_QUESTION','RELATED') or [message.chat_id,q['source_id']] not in plan.get('source_keys',())
-                or any(key[0]!=message.chat_id for key in plan.get('source_keys',()))
+                or plan.get('state') not in ('LIFECYCLE_QUESTION','RELATED') or [q['chat_id'],q['source_id']] not in plan.get('source_keys',())
+                or any(key[0]!=q['chat_id'] for key in plan.get('source_keys',()))
                 or (plan.get('lifecycle_sources') or {}).get(str(source.message_id),plan.get('lifecycle_source_evidence'))!=_source_evidence_id(source)
                 or plan.get('lifecycle_question')!=q['question'] or plan.get('lifecycle_evidence_answer')!=q['evidence_answer']
                 or plan.get('lifecycle_recurrence_answer')!=q['recurrence_answer']):
@@ -550,48 +594,45 @@ def _lifecycle_answer_inner(pipeline,message):
             store.finish(message,waiting)
             return waiting
         inserted=store.connection.execute("INSERT OR IGNORE INTO rules_lifecycle_answers VALUES(?,?,?,?,'reserved')",
-            (message.chat_id,q['source_id'],message.message_id,choice)).rowcount
-        if inserted:
-            ref=store.connection.execute('SELECT COALESCE(MAX(ref),0)+1 FROM rules_sources WHERE topic_id=?',(q['topic_id'],)).fetchone()[0]
-            store.connection.execute('INSERT INTO rules_sources VALUES(?,?,?,?)',(q['topic_id'],ref,message.chat_id,message.message_id))
+            (q['chat_id'],q['source_id'],message.message_id,choice)).rowcount
     if not inserted:
         store.finish(message,waiting); return waiting
     with store._lock:
         bound=store.connection.execute('''SELECT m.* FROM rules_sources s JOIN messages m
             ON m.chat_id=s.chat_id AND m.message_id=s.message_id WHERE s.topic_id=? ORDER BY s.ref''',(q['topic_id'],)).fetchall()
         member_count=store.connection.execute('SELECT count(*) FROM rules_sources WHERE topic_id=?',(q['topic_id'],)).fetchone()[0]
-    context=[_to_message(row) for row in bound if row['message_id'] not in (source.message_id,message.message_id)]
+    context=[_to_message(row) for row in bound if (row['chat_id'],row['message_id']) not in ((source.chat_id,source.message_id),(message.chat_id,message.message_id))]
     # An explicit A can append additional text as evidence, but it cannot
     # authorize media, forwarded instructions or unrelated conversation.
     # Recurrence still requires its own fresh success proof and holds context.
     planned_keys={tuple(key) for key in plan['source_keys']}
     extras=[m for m in context if (m.chat_id,m.message_id) not in planned_keys]
     supported_context=(choice=='evidence' and member_count==len(bound) and len(extras)<=8 and
-        all(m.chat_id==source.chat_id and source.message_id<m.message_id<message.message_id and
+        all(m.chat_id==source.chat_id and source.message_id<m.message_id and
             m.reply_to_id==source.message_id and not m.is_forward and not m.has_attachment and
             m.text.strip().startswith(choices['evidence_context_prefix']+' ') and
             m.text.strip()[len(choices['evidence_context_prefix']):].strip()
             for m in extras))
     exact_members=(member_count==len(bound) and {(r['chat_id'],r['message_id']) for r in bound}.issuperset(
         {(source.chat_id,source.message_id),(message.chat_id,message.message_id)}))
-    original_members={(r['chat_id'],r['message_id']) for r in bound if r['message_id']!=message.message_id}
+    original_members={(r['chat_id'],r['message_id']) for r in bound if (r['chat_id'],r['message_id'])!=(message.chat_id,message.message_id)}
     exact_members=exact_members and planned_keys<=original_members and all(_aware(message.received_at)>=_aware(_to_message(row).received_at) for row in bound)
     if not exact_members or (member_count!=len(planned_keys)+1 and not supported_context):
         with store._lock,store.connection:
-            changed=store.connection.execute("UPDATE rules_lifecycle_answers SET status='awaiting_context' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",(message.chat_id,q['source_id'],message.message_id)).rowcount
+            changed=store.connection.execute("UPDATE rules_lifecycle_answers SET status='awaiting_context' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",(q['chat_id'],q['source_id'],message.message_id)).rowcount
         if changed!=1: raise RulesHalt('lifecycle answer outcome unresolved; Owner inspection required')
         store.finish(message,waiting)
         return waiting
     if choice=='recurrence':
         hashes=plan.get('lifecycle_sources')
-        if hashes and hashes!={str(row['message_id']):_source_evidence_id(_to_message(row)) for row in bound if row['message_id']!=message.message_id}:
+        if hashes and hashes!={str(row['message_id']):_source_evidence_id(_to_message(row)) for row in bound if (row['chat_id'],row['message_id'])!=(message.chat_id,message.message_id)}:
             store.finish(message,waiting); return waiting
         return _create_related_episode(pipeline,q,source,message,proof,plan)
     result=_append_batch_group(pipeline,q['topic_id'],[source,*context,message],SimpleNamespace(state='APPEND_CLOSED',present={},rule='lifecycle_confirmed_evidence'),plan['targets'],plan.get('document_reads',()),asset_proofs=plan.get('lifecycle_assets'),evidence_plan=plan,plan_origin=(q['batch_id'],q['ordinal']))
     if result.decision!='followup':
         raise RulesHalt('lifecycle answer outcome unresolved; Owner inspection required')
     with store._lock,store.connection:
-        changed=store.connection.execute("UPDATE rules_lifecycle_answers SET status='done' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",(message.chat_id,q['source_id'],message.message_id)).rowcount
+        changed=store.connection.execute("UPDATE rules_lifecycle_answers SET status='done' WHERE chat_id=? AND source_id=? AND answer_id=? AND status='reserved'",(q['chat_id'],q['source_id'],message.message_id)).rowcount
     if changed!=1: raise RulesHalt('lifecycle answer outcome unresolved; Owner inspection required')
     return result
 
@@ -818,12 +859,13 @@ def _prewrite_lifecycle_guard(pipeline,topic,plan,members,plan_origin,*,owned_re
                 from .lifecycle import partition_source_roles
                 _,recurring,unknown=partition_source_roles(plan.get('lifecycle'),{m.message_id:m.reply_to_id for m in originals})
                 if require_roles and unknown: raise ValueError('source roles changed')
-                original_ids={m.message_id for m in originals}
+                original_keys={(m.chat_id,m.message_id) for m in originals}
+                recurring_keys={(m.chat_id,m.message_id) for m in originals if m.message_id in recurring}
                 for message in members:
                     row=store.get(message.chat_id,message.message_id)
                     if any(row[field] is not None for field in ('issue_number','issue_url','case_key','group_key')):
                         raise ValueError('source ownership changed')
-                    reserved=owned_reservation is not None and message.message_id in recurring and message.message_id in original_ids
+                    reserved=owned_reservation is not None and (message.chat_id,message.message_id) in recurring_keys and (message.chat_id,message.message_id) in original_keys
                     if (reserved and (row['decision']!='pending' or not row['github_called_at'])
                             or not reserved and (row['github_called_at'] is not None or row['decision'] not in ('pending_review','classifying','queued'))):
                         raise ValueError('source reservation changed')
@@ -833,11 +875,11 @@ def _prewrite_lifecycle_guard(pipeline,topic,plan,members,plan_origin,*,owned_re
                         (authority['chat_id'],authority['reply_message_id'])).fetchone()
                     expected_question=(authority['number'],pipeline.config.gh_repo,readonly_plan_id(*plan_origin,pipeline.rules_snapshot.fingerprint,plan),
                         pipeline.rules_snapshot.fingerprint,plan['lifecycle_question'])
-                    question_notice=store.connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',
-                        (authority['chat_id'],authority['reply_message_id'])).fetchone()
+                    question_notice=store.connection.execute("SELECT kind,status,notice_id FROM rules_notices WHERE topic_id=? AND ops_chat_id=? AND notice_id=? AND kind='question'",
+                        (topic,members[-1].chat_id,members[-1].reply_to_id)).fetchone()
                     if (not question or tuple(question)!=expected_question or not question_notice
-                            or tuple(question_notice)!=('LIFECYCLE_QUESTION','sent',members[-1].reply_to_id)
-                            or store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(members[-1].chat_id,members[-1].reply_to_id)).fetchone()[0]!=1
+                            or tuple(question_notice)!=('question','sent',members[-1].reply_to_id)
+                            or store.connection.execute("SELECT count(*) FROM rules_notices WHERE ops_chat_id=? AND notice_id=? AND status='sent'",(members[-1].chat_id,members[-1].reply_to_id)).fetchone()[0]!=1
                             or store.get(members[-1].chat_id,members[-1].reply_to_id) is not None):
                         raise ValueError('question authority changed')
                 answer=store.connection.execute('SELECT choice,status,answer_id FROM rules_lifecycle_answers WHERE chat_id=? AND source_id=?',
@@ -929,15 +971,23 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
         result=Decision('pending_review','rule',case_key=q['topic_id'],reason='lifecycle_recurrence_answer_pending')
         store.finish(answer,result)
         return result
+    if pipeline.config.mode!='dry-run' and pipeline.notice_sender is None:
+        import logging
+        logging.getLogger(__name__).warning('Ops related notice unavailable topic=%s',q['topic_id'])
     if (pipeline.rules_snapshot.extensions.disposition('recurrence')!='RELATED' or pipeline.config.mode=='dry-run'
             or pipeline.notice_sender is None or not any(m.text.strip() or m.has_attachment for m in recurrence)):
         return defer()
     try:
         facts={name:field for name,field in plan['present'].items() if set(field['source_ids'])<=recurrence_ids}
         facts['intent']={'value':plan['intent'],'source_ids':[anchor.message_id]}
-        ready=pipeline.rules_snapshot.evaluate(facts,code_facts(recurrence if direct else [*recurrence,answer],reply_target='none',
+        readiness_facts=code_facts(recurrence,reply_target='none',
             seen_image_ids=frozenset(int(mid) for mid in (plan.get('lifecycle_pixels') or {}) if int(mid) in recurrence_ids),
-            document_text_ids=frozenset(row['message_id'] for row in plan.get('document_reads',()) if row.get('read_status')=='read' and row['message_id'] in recurrence_ids)))
+            document_text_ids=frozenset(row['message_id'] for row in plan.get('document_reads',()) if row.get('read_status')=='read' and row['message_id'] in recurrence_ids))
+        # A bound B is an explicit textual confirmation, but its ops message ID
+        # must never enter the source-ID namespace or serve as field evidence.
+        if not direct:
+            readiness_facts=replace(readiness_facts,text='có')
+        ready=pipeline.rules_snapshot.evaluate(facts,readiness_facts)
         if ready.state!='READY' or ready.intent not in ('bug','task','feedback'):
             return defer()
         values=[ready.present[name].value for name in ('object','observed','work','problem','proposal') if name in ready.present]
@@ -980,7 +1030,7 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
                 JOIN followup_roots r ON r.root_key=j.root_key WHERE r.issue_number=?
                 AND o.kind='related_create' LIMIT 1''',(parent,)).fetchone()
             existing=store.connection.execute('SELECT 1 FROM rules_related_episodes WHERE repo=? COLLATE NOCASE AND parent_number=?',(repo,parent)).fetchone()
-            notice=store.connection.execute('SELECT 1 FROM group_notices WHERE chat_id=? AND message_id=?',(notice_source.chat_id,notice_source.message_id)).fetchone()
+            notice=store.connection.execute("SELECT 1 FROM rules_notices WHERE topic_id=? AND kind='other'",(q['topic_id'],)).fetchone()
             members=store.connection.execute('SELECT count(*) FROM rules_sources WHERE topic_id=?',(q['topic_id'],)).fetchone()[0]
             source_states=[store.connection.execute('SELECT decision,github_called_at,case_key,group_key FROM messages WHERE chat_id=? AND message_id=?',(m.chat_id,m.message_id)).fetchone() for m in originals]
             if (prior or prior_op or existing or notice or members!=len(all_members) or any(row is None or tuple(row)!=('pending_review',None,None,None) for row in source_states)
@@ -1010,7 +1060,7 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
         if _recurrence_predecessor(pipeline,source,parent) and direct:
             raise RulesHalt('related predecessor changed after attachment processing')
         issue=format_issue(anchor,classification,'rule',False,pipeline.config.ollama.model,
-            case_messages=recurrence if direct else [*recurrence,answer],key_message_ids=tuple(m.message_id for m in recurrence),
+            case_messages=recurrence if direct else [*recurrence,answer],key_message_keys=tuple((m.chat_id,m.message_id) for m in recurrence),
             max_quoted=len(recurrence)+(0 if direct else 1),details={},
             images=found.images if found else (),documents=found.documents if found else (),notes=found.notes if found else ())
         issue=replace(issue,body=_recurrence_body(issue.body,f'https://github.com/{repo}/issues/{parent}'))
@@ -1025,19 +1075,23 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
             changed=store.connection.execute("UPDATE rules_related_episodes SET status='verified',issue_number=?,issue_url=?,notice_body=? WHERE chat_id=? AND repo=? AND parent_number=? AND status='reserved'",
                 (number,url,notice_body,source.chat_id,repo,parent)).rowcount
             if changed!=1: raise RulesHalt('related issue ledger changed')
-            store.connection.execute("INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at) VALUES(?,?,?,'reserved',?)",
-                (notice_source.chat_id,notice_source.message_id,'LIFECYCLE_EPISODE',store.clock().isoformat()))
-        sent=pipeline.notice_sender(notice_source.chat_id,notice_source.message_id,notice_body)
-        if type(sent) is not int or sent<=max(m.message_id for m in all_members): raise RulesHalt('related episode notice unresolved')
-        store.finish_group_notice(notice_source.chat_id,notice_source.message_id,'sent',sent)
+            sequence=store.connection.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM rules_notices WHERE topic_id=?',(q['topic_id'],)).fetchone()[0]
+            store.connection.execute("INSERT INTO rules_notices VALUES(?,?,?,'other','reserved',NULL)",
+                (q['topic_id'],sequence,pipeline.config.telegram.ops_chat_id))
+        try:
+            sent=pipeline.notice_sender(pipeline.config.telegram.ops_chat_id,None,_ops_text(source,q['topic_id'],notice_body))
+        except Exception:
+            sent=None
+        if not pipeline.rules_pending.finish_notice(q['topic_id'],sequence,sent) or type(sent) is not int or sent<=0:
+            import logging
+            logging.getLogger(__name__).warning('Ops related notice outcome unresolved topic=%s',q['topic_id'])
+            raise RulesHalt('related episode notice unresolved')
         with store._lock,store.connection:
-            notice=store.connection.execute('SELECT kind,status,notice_message_id FROM group_notices WHERE chat_id=? AND message_id=?',(notice_source.chat_id,notice_source.message_id)).fetchone()
+            notice=store.connection.execute('SELECT kind,status,notice_id FROM rules_notices WHERE topic_id=? AND sequence=?',(q['topic_id'],sequence)).fetchone()
             episode=store.connection.execute('SELECT status,issue_number,issue_url,notice_body FROM rules_related_episodes WHERE chat_id=? AND repo=? AND parent_number=?',(source.chat_id,repo,parent)).fetchone()
-            collisions=store.connection.execute("SELECT count(*) FROM group_notices WHERE chat_id=? AND notice_message_id=? AND status='sent'",(notice_source.chat_id,sent)).fetchone()[0]
-            local_collision=store.connection.execute('SELECT 1 FROM messages WHERE chat_id=? AND message_id=?',(notice_source.chat_id,sent)).fetchone()
-            if notice is None or tuple(notice)!=('LIFECYCLE_EPISODE','sent',sent) or collisions!=1 or local_collision or episode is None or tuple(episode)!=('verified',number,url,notice_body):
+            if notice is None or tuple(notice)!=('other','sent',sent) or not _ops_notice_identity(store.connection,pipeline.config.telegram.ops_chat_id,sent) or episode is None or tuple(episode)!=('verified',number,url,notice_body):
                 raise RulesHalt('related episode notice unresolved')
-            mappings=[(m,'issue' if m.message_id==anchor.message_id else 'followup',number,url) for m in recurrence]
+            mappings=[(m,'issue' if (m.chat_id,m.message_id)==(anchor.chat_id,anchor.message_id) else 'followup',number,url) for m in recurrence]
             mappings += [(m,'followup',parent,f'https://github.com/{repo}/issues/{parent}') for m in historical]
             if not direct: mappings.append((answer,'followup',number,url))
             for item,state,target_number,target_url in mappings:
@@ -1098,7 +1152,9 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
     pending=pipeline.rules_pending
     handled=[]; remaining=[]
     for member in sources:
-        result=(_lifecycle_answer(pipeline,member) if batch_id is None else None) or _hold_lifecycle_reply(pipeline,member)
+        result=(Decision('pending_review','rule',reason='status_reply_requires_ops') if _status_source_reply(pipeline,member) else None)
+        if result is not None: pipeline.store.finish(member,result)
+        result=result or (_lifecycle_answer(pipeline,member) if batch_id is None else None) or _hold_lifecycle_reply(pipeline,member)
         if result is None: remaining.append(member)
         else: handled.append(result)
     if handled:
@@ -1427,13 +1483,17 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 continue
         elif decision.state in ('ANALYZE','STATUS'):
             from .rules_pending_store import readonly_plan_id
+            for member in source_members:
+                pipeline._acknowledge(Plan(topic,[member],member,'rule','pending_review'))
             result=_read_only_result(pipeline,first,topic,decision,plan_id=readonly_plan_id(batch_id,ordinal,fingerprint,plan),evidence_plan=plan,evidence_origin=(batch_id,ordinal))
             if result.decision=='pending_review':
                 pipeline.store.finish(first,result)
                 pending.transition_group(batch_id,ordinal,'RESERVED','BLOCKED')
                 results.append(result)
                 continue
-            pending.close(topic,'CLOSED')
+            from . import ticket_status
+            if decision.state!='STATUS' or ticket_status.resolve(pipeline.store,[first],pipeline.config.gh_repo)['state']!='missing_target':
+                pending.close(topic,'CLOSED')
         elif decision.state == 'READY':
             for member in source_members: _resume_source(pipeline,member)
             result=_create_single(pipeline,first,topic,decision,evidence_messages=originals if plan.get('pending_topic') else None,
@@ -1540,7 +1600,7 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     from .ticket_templates import active
     if not proofs or len({p['number'] for p in proofs}) != 1: raise ValueError('invalid append target')
     proof=proofs[0]; number=proof['number']
-    authority=next(m for m in members if m.message_id==proof['reply_message_id'])
+    authority=next(m for m in members if (m.chat_id,m.message_id)==(proof['chat_id'],proof['reply_message_id']))
     current=_resolve_lifecycle_target(pipeline,authority,proof)
     expected_state = 'closed' if decision.state == 'APPEND_CLOSED' else 'open'
     if current != proof or current['state'] != expected_state:
@@ -1564,7 +1624,7 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
         body += ''.join('\n\n['+name+']('+url+')' for name,url in found.documents)
         body += ''.join('\n\n'+note for note in found.notes)
     for target_proof in proofs:
-        target_source=next(m for m in members if m.message_id==target_proof['reply_message_id'])
+        target_source=next(m for m in members if (m.chat_id,m.message_id)==(target_proof['chat_id'],target_proof['reply_message_id']))
         if _resolve_lifecycle_target(pipeline,target_source,target_proof)!=target_proof:
             from .rules_pending_store import RulesHalt
             raise RulesHalt('comment target changed after attachment processing; Owner inspection required')
@@ -1648,7 +1708,66 @@ def _process_ops_reply(pipeline, message):
     if binding is None:
         pipeline.store.finish(message,Decision('chat','rule',reason='unbound_ops_reply'))
         return Decision('chat','rule',reason='unbound_ops_reply')
+    lifecycle=_lifecycle_answer(pipeline,message)
+    if lifecycle is not None:
+        return lifecycle
+    status=_status_ops_answer(pipeline,message,binding[0])
+    if status is not None:
+        return status
     return _process_existing_topic(pipeline,message,*binding,is_ops=True)
+
+
+def _status_ops_answer(pipeline, message, topic):
+    import hashlib
+    import json
+    from dataclasses import replace
+    from . import ticket_status
+    from .models import Decision
+    from .store import _to_message
+    store=pipeline.store
+    with store._lock:
+        proof=store.connection.execute('''SELECT p.chat_id,p.message_id,p.plan_id,p.body_hash,p.body FROM rules_readonly_notices p
+            JOIN rules_sources s ON s.chat_id=p.chat_id AND s.message_id=p.message_id
+            JOIN rules_notices n ON n.topic_id=s.topic_id
+            WHERE s.topic_id=? AND p.kind='STATUS' AND n.kind='question' AND n.status='sent'
+            AND n.ops_chat_id=? AND n.notice_id=?''',(topic,message.chat_id,message.reply_to_id)).fetchall()
+    if not proof: return None
+    waiting=Decision('pending_review','rule',case_key=topic,reason='status_target_unresolved')
+    if len(proof)!=1 or message.is_forward or message.has_attachment or not message.text.strip().isascii() or not message.text.strip().isdigit():
+        store.finish(message,waiting); return waiting
+    receipt=proof[0]
+    from .rules_pending_store import readonly_plan_id
+    with store._lock:
+        batches=store.connection.execute('''SELECT g.batch_id,g.ordinal,g.plan,g.status,b.fingerprint FROM rules_batch_groups g
+            JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.status='DONE' ''').fetchall()
+    valid=False
+    try:
+        for batch in batches:
+            plan=json.loads(batch['plan'])
+            if (plan.get('state')=='STATUS' and [receipt['chat_id'],receipt['message_id']] in plan.get('source_keys',())
+                    and batch['fingerprint']==pipeline.rules_snapshot.fingerprint
+                    and readonly_plan_id(batch['batch_id'],batch['ordinal'],batch['fingerprint'],plan)==receipt['plan_id']):
+                if valid: raise ValueError('ambiguous status plan')
+                valid=True
+        valid=valid and hashlib.sha256(receipt['body'].encode('utf8')).hexdigest()==receipt['body_hash']
+    except (TypeError,ValueError,KeyError):
+        valid=False
+    if not valid:
+        store.finish(message,waiting); return waiting
+    source_row=store.get(receipt['chat_id'],receipt['message_id'])
+    if source_row is None:
+        store.finish(message,waiting); return waiting
+    source=_to_message(source_row)
+    target=int(message.text.strip())
+    snapshot=ticket_status.resolve(store,[replace(source,reply_to_id=target)],pipeline.config.gh_repo)
+    if snapshot['state'] in ('unavailable','missing_target'):
+        store.finish(message,waiting); return waiting
+    if not _send_ops(pipeline,source,topic,'other',ticket_status.render(snapshot),once=True):
+        store.finish(message,waiting); return waiting
+    result=Decision('chat','rule',case_key=topic,reason='status_target_processed')
+    store.finish(message,result)
+    pipeline.rules_pending.close(topic,'CLOSED')
+    return result
 
 
 def _process_existing_topic(pipeline,message,topic,asked,*,is_ops):
@@ -1945,11 +2064,8 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
 
 def _question(pipeline, source, topic, decision):
     from . import group_notices
-    from .issue_format import telegram_link
     from .ticket_templates import active
-    if pipeline.config.mode == 'dry-run' or pipeline.notice_sender is None: return
-    link = telegram_link(source)
-    if not link: return
+    if pipeline.config.mode == 'dry-run': return
     templates = active()
     text = '\n'.join(templates.render('group-replies.md',block) for block in decision.questions)
     _send_ops(pipeline,source,topic,'question',text,decision.asked_fields)
@@ -1981,27 +2097,40 @@ def attachment_halt_warning(pipeline, messages):
         pipeline.notice_sender=sender
 
 
-def _send_ops(pipeline, source, topic, kind, body, fields=()):
+def _ops_text(source, topic, body):
     from . import group_notices
     from .issue_format import telegram_link
     from .ticket_templates import active
-    if pipeline.config.mode == 'dry-run' or pipeline.notice_sender is None: return False
     link = telegram_link(source)
-    if not link: return False
+    if not link: link = f'(group thường, không có link) · mã tin {source.message_id}'
     templates=active()
     header = templates.render('group-replies.md','ops.header',{
         'source_chat_name':group_notices.clean_question(source.chat_title or 'không rõ nhóm'),
         'source_link':link,'topic_id':group_notices.clean_question(topic),
         'sender_name':group_notices.clean_question(source.sender_name)})
-    text = header + '\n' + body
+    return header + '\n' + body
+
+
+def _send_ops(pipeline, source, topic, kind, body, fields=(), *, once=False):
+    import logging
+    if pipeline.config.mode == 'dry-run': return False
+    if pipeline.notice_sender is None:
+        logging.getLogger(__name__).warning('Ops notice unavailable: sender missing topic=%s', topic)
+        return False
+    text = _ops_text(source, topic, body)
     sequence = pipeline.rules_pending.reserve_notice(topic,pipeline.config.telegram.ops_chat_id,kind,fields,
-                 max_asks_per_field=pipeline.rules_snapshot.limits['max_asks_per_field'])
-    if sequence is None: return False
+                 max_asks_per_field=pipeline.rules_snapshot.limits['max_asks_per_field'],once=once)
+    if sequence is None:
+        logging.getLogger(__name__).warning('Ops notice not reserved topic=%s kind=%s', topic, kind)
+        return False
     try: notice_id = pipeline.notice_sender(pipeline.config.telegram.ops_chat_id,None,text)
     except Exception: notice_id = None
     from .rules_pending_store import RulesHalt
     try: recorded = pipeline.rules_pending.finish_notice(topic,sequence,notice_id)
-    except Exception: raise RulesHalt('notice outcome is unresolved; Owner inspection required') from None
-    if not recorded or type(notice_id) is not int or notice_id <= 0:
+    except Exception:
+        logging.getLogger(__name__).warning('Ops notice receipt unresolved topic=%s kind=%s', topic, kind)
+        raise RulesHalt('notice outcome is unresolved; Owner inspection required') from None
+    if not recorded or not _ops_notice_identity(pipeline.store.connection,pipeline.config.telegram.ops_chat_id,notice_id):
+        logging.getLogger(__name__).warning('Ops notice outcome unresolved topic=%s kind=%s', topic, kind)
         raise RulesHalt('notice outcome is unresolved; Owner inspection required')
     return True
