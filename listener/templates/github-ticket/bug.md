@@ -1,8 +1,8 @@
 {{#block body}}
-### 📝 Tóm tắt
+### Tóm tắt
 {{summary}}
 
-### 🐞 Lỗi
+### Lỗi
 **Môi trường:** {{environment|(chưa có thông tin)}}
 {{#if steps}}
 **Các bước tái hiện:**
@@ -14,7 +14,7 @@
 **Mong đợi:** {{expected|(chưa có thông tin)}}
 **Thực tế:** {{actual|(chưa có thông tin)}}
 
-### 🖼 Minh họa / Evidence
+### Minh họa / Evidence
 {{evidence|(chưa có thông tin)}}
 {{#if notes}}
 
@@ -22,7 +22,7 @@
 {{/if}}
 {{#if questions}}
 
-### ❓ Cần làm rõ
+### Cần làm rõ
 - {{@questions}}
 {{/if}}
 

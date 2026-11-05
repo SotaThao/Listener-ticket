@@ -68,8 +68,8 @@ def rendered_examples():
 class IssueTemplateTests(unittest.TestCase):
     def test_43_bug_complete_details_and_image(self):
         issue = render(details=BUG_DETAILS, images=(IMAGE,))
-        self.assertIn("### 🐞 Lỗi", issue.body)
-        self.assertIn("### 🖼 Minh họa / Evidence", issue.body)
+        self.assertIn("### 2. Lỗi", issue.body)
+        self.assertIn("### 3. Minh họa / Evidence", issue.body)
         for label in ("Môi trường", "Các bước tái hiện", "Mong đợi", "Thực tế"):
             self.assertIn(f"**{label}:**", issue.body)
         self.assertIn("1. Mở màn hình đăng nhập\n2. Nhấn Đăng nhập", issue.body)
@@ -86,7 +86,7 @@ class IssueTemplateTests(unittest.TestCase):
         details = dict(BUG_DETAILS, steps=[], error_text="")
         issue = render(details=details)
         self.assertIn("**Các bước tái hiện:** " + NO_DETAIL_LINE, issue.body)
-        self.assertIn("### 🖼 Minh họa / Evidence\n" + NO_DETAIL_LINE, issue.body)
+        self.assertIn("### 3. Minh họa / Evidence\n" + NO_DETAIL_LINE, issue.body)
         self.assertIn(BUG_QUESTIONS[1], issue.body)
         self.assertIn(BUG_QUESTIONS[3], issue.body)
         self.assertEqual(issue.labels, ("bug", "triage", "source:telegram"))
@@ -95,22 +95,22 @@ class IssueTemplateTests(unittest.TestCase):
 
     def test_45_feedback_required_optional_and_draft_checklist(self):
         body = render("feedback", FEEDBACK_DETAILS).body
-        self.assertIn("### 💡 Vấn đề / nhu cầu", body)
+        self.assertIn("### 2. Vấn đề / nhu cầu", body)
         self.assertIn("**User story:**", body)
         self.assertIn("- [ ] Given danh sách giao dịch", body)
-        self.assertIn("### ✅ Tiêu chí chấp nhận (nháp)", body)
+        self.assertIn("### 3. Tiêu chí chấp nhận (nháp)", body)
         for label in ("Đề xuất", "Phương án khác"):
             self.assertNotIn(f"**{label}:**", body)
-        self.assertNotIn("### 🧭 Ngữ cảnh", body)
+        self.assertNotIn("### 4. Ngữ cảnh", body)
         empty = render("feedback", {}).body
         self.assertEqual(empty.count(NO_DETAIL_LINE), 1)   # empty labels (user story...) are hidden
         self.assertNotIn("**User story:**", empty)
         self.assertNotIn("### ✅", empty)
-        self.assertIn("### ❓ Cần làm rõ", empty)
+        self.assertIn("### 3. Cần làm rõ", empty)
 
     def test_45_feedback_attachments_stay_in_context(self):
         body = render("feedback", FEEDBACK_DETAILS, images=(IMAGE,), documents=(DOCUMENT,)).body
-        self.assertLess(body.index("### 🧭 Ngữ cảnh"), body.index(IMAGE[1]))
+        self.assertLess(body.index("### 4. Ngữ cảnh"), body.index(IMAGE[1]))
         self.assertLess(body.index(DOCUMENT[1]), body.index("<details>"))
         self.assertEqual(body.count(IMAGE[1]), 1)
         self.assertEqual(body.count(DOCUMENT[1]), 1)
@@ -120,9 +120,9 @@ class IssueTemplateTests(unittest.TestCase):
             with self.subTest(details=details):
                 issue = render("task", details, images=(IMAGE,), documents=(DOCUMENT,))
                 body = issue.body
-                self.assertIn("### 🖼 Minh họa / Evidence (đầu vào)", body)
+                self.assertIn("### 3. Minh họa / Evidence (đầu vào)", body)
                 self.assertLess(body.index("Evidence (đầu vào)"), body.index(IMAGE[1]))
-                self.assertLess(body.index(DOCUMENT[1]), body.index("### 🏁 Xong khi"))
+                self.assertLess(body.index(DOCUMENT[1]), body.index("### 4. Xong khi"))
                 self.assertIn(DOD_EVIDENCE_LINE, body)
                 self.assertEqual(body.count(DOD_EVIDENCE_LINE), 1)
                 self.assertLess(body.index(DOD_EVIDENCE_LINE), body.index("<details>"))
@@ -207,19 +207,19 @@ class IssueTemplateTests(unittest.TestCase):
         self.assertEqual(old, new)
         self.assertTrue(new.title.startswith("[cần phân loại]"))
         self.assertNotIn("Ảnh đính kèm", new.body)
-        self.assertLess(new.body.index("### 🖼 Minh họa / Evidence"), new.body.index("<details>"))
+        self.assertLess(new.body.index("### 2. Minh họa / Evidence"), new.body.index("<details>"))
 
     def test_51_model_questions_first_deduplicated_and_bounded(self):
         model = ["Thông tin nào?", "Thông tin nào?", BUG_QUESTIONS[1]]
         body = render(details={}, clarify=model).body
-        block = body.split("### ❓ Cần làm rõ\n")[1].split("\n\n")[0]
+        block = body.split("### 4. Cần làm rõ\n")[1].split("\n\n")[0]
         lines = block.splitlines()
         self.assertEqual(len(lines), MAX_CLARIFY)
         self.assertEqual(len(set(lines)), MAX_CLARIFY)
         self.assertEqual(lines[:2], ["- Thông tin nào?", "- " + BUG_QUESTIONS[1]])
         self.assertEqual(body.count(BUG_QUESTIONS[1]), 1)
         many = render(details={}, clarify=[f"Câu hỏi {i}" for i in range(20)]).body
-        self.assertEqual(many.split("### ❓ Cần làm rõ\n")[1].split("\n\n")[0].count("- "), MAX_CLARIFY)
+        self.assertEqual(many.split("### 4. Cần làm rõ\n")[1].split("\n\n")[0].count("- "), MAX_CLARIFY)
         self.assertNotIn(BUG_QUESTIONS[0], many)
 
     def test_52_legacy_call_and_quotes_attachments_notes_preserved(self):

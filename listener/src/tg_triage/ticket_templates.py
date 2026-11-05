@@ -44,8 +44,10 @@ CATALOG = {
     "group-replies.md": {"notice.issue": _spec("issue_link:T"), "notice.needs_human": _spec("questions:L", "issue_link:T"),
                          "ops.header": _spec("source_chat_name:T source_link:T topic_id:T sender_name:T"),
                          "notice.hold_escalated": _spec("retry_count:T"),
+                         "notice.request_too_large": _spec("limit_bytes:T"),
                          **{x: {} for x in ("notice.error", "notice.comment_ambiguous", "notice.attachment_ambiguous", "notice.rate_limited", "notice.context_pending", "question.fallback", "question.legacy_pending", "question.technical_context", "followup.updated", "followup.split", "followup.recurrence", "ask.object", "ask.observed", "ask.work", "ask.problem")}},
 }
+NUMBERED = frozenset(("bug.md", "feedback.md", "task.md", "needs-human.md"))
 NAME = r"[a-z][a-z0-9_.]*"
 TOKEN = re.compile(r"{{(.*?)}}")
 ONE_LINE = {"_common.md": set(CATALOG["_common.md"]) - {"original", "footer"},
@@ -172,7 +174,8 @@ def _parse_body(filename, start, lines, spec):
     return Block(tuple(root))
 
 
-def render(block, values):
+def render(block, values, number_headings=False):
+    counter = [0]
     def walk(nodes):
         result = []
         for node in nodes:
@@ -180,6 +183,13 @@ def render(block, values):
                 result.extend(walk(node[2] if any(bool(values.get(key, '')) for key in node[1]) else node[3]))
                 continue
             _, pieces, list_name = node
+            # Only static template headings are numbered; slot values are never touched.
+            if number_headings and not list_name and all(p[0] == 'static' for p in pieces):
+                text = ''.join(p[1] for p in pieces)
+                if text.startswith('### '):
+                    counter[0] += 1
+                    result.append(f'### {counter[0]}. {text[4:]}')
+                    continue
             entries = values.get(list_name, ()) if list_name else (None,)
             for index, entry in enumerate(entries, 1):
                 line = []
@@ -200,7 +210,8 @@ class Templates:
     fingerprint: str
 
     def render(self, filename, block, values=None):
-        return render(self.blocks[filename][block], values or {})
+        return render(self.blocks[filename][block], values or {},
+                      number_headings=block == 'body' and filename in NUMBERED)
 
 
 def validate(directory):

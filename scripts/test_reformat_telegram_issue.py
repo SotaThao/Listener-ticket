@@ -25,8 +25,8 @@ class ReformatTests(unittest.TestCase):
     def test_context_uses_canonical_task_and_manual_provenance(self):
         issue = module.render(fixture())
         self.assertEqual([line for line in issue.body.splitlines() if line.startswith('### ')],
-                         ['### 📝 Tóm tắt', '### 🛠 Việc cần làm',
-                          '### 🖼 Minh họa / Evidence (đầu vào)', '### 🏁 Xong khi'])
+                         ['### 1. Tóm tắt', '### 2. Việc cần làm',
+                          '### 3. Minh họa / Evidence (đầu vào)', '### 4. Xong khi'])
         task_body = module.active().render('task.md', 'body', {'done': [], 'questions': []})
         dod_line = next(line for line in task_body.splitlines() if line.startswith('- [ ] '))
         self.assertIn(dod_line, issue.body)
@@ -38,8 +38,8 @@ class ReformatTests(unittest.TestCase):
     def test_missing_details_cannot_fall_back_to_legacy_template(self):
         spec = fixture(); spec.pop('details')
         body = module.render(spec).body
-        self.assertIn('### 🛠 Việc cần làm', body)
-        self.assertIn('### 🏁 Xong khi', body)
+        self.assertIn('### 2. Việc cần làm', body)
+        self.assertIn('### 4. Xong khi', body)
         self.assertIn('Việc cần làm là gì?', body)
 
     def test_preview_does_not_contact_github(self):

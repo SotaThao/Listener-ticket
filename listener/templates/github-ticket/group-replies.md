@@ -1,5 +1,5 @@
 {{#block notice.issue}}
-Em đã ghi nhận nội dung này và tạo ticket: {{issue_link}} rồi nhé 😊
+Em đã ghi nhận nội dung này và tạo ticket: {{issue_link}} rồi nhé
 {{/block}}
 {{#block notice.needs_human}}
 Em đã ghi nhận nội dung này rồi nhé. Nhờ Anh/Chị hoặc Owner bổ sung/xác nhận thông tin ngay trong group để làm rõ yêu cầu.
@@ -34,13 +34,13 @@ Anh/Chị muốn xử lý phần nào trong nội dung này và kết quả mong
 Em đã lưu các tin vừa nhận. Lượt phân tích đang lỗi nên chưa tạo được ticket.
 {{/block}}
 {{#block followup.updated}}
-Em đã bổ sung thông tin vào ticket rồi nhé 😊
+Em đã bổ sung thông tin vào ticket rồi nhé
 {{/block}}
 {{#block followup.split}}
-Em đã tách các yêu cầu thành từng ticket riêng rồi nhé 😊
+Em đã tách các yêu cầu thành từng ticket riêng rồi nhé
 {{/block}}
 {{#block followup.recurrence}}
-Em đã tạo ticket cho lần lỗi tái diễn và gắn ticket liên quan rồi nhé 😊
+Em đã tạo ticket cho lần lỗi tái diễn và gắn ticket liên quan rồi nhé
 {{/block}}
 {{#block ops.header}}
 Nhóm nguồn: {{source_chat_name}}
@@ -62,4 +62,7 @@ Anh/Chị đang gặp vấn đề hoặc nhu cầu cụ thể nào?
 {{/block}}
 {{#block notice.hold_escalated}}
 Chủ đề này chưa được phân tích thành công sau {{retry_count}} lần thử lại. Nhờ Owner kiểm tra; chưa tạo ticket.
+{{/block}}
+{{#block notice.request_too_large}}
+Nhóm tin này quá dài để bot tự phân tích (vượt giới hạn {{limit_bytes}} byte mỗi lần gọi model). Nhờ Owner xem thủ công; chưa tạo ticket.
 {{/block}}

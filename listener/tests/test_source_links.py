@@ -23,7 +23,7 @@ class SourceLinksTests(unittest.TestCase):
         body = format_issue(first, classification(type='task'), 'model', False,
                             case_messages=[first, second], details={}).body
         line = '- 🔗 [bitcoinnailbar.com/#gallery](https://bitcoinnailbar.com/#gallery)'
-        section = body.split('### 🖼 Minh họa / Evidence (đầu vào)\n')[1].split('\n\n### ')[0]
+        section = body.split('### 3. Minh họa / Evidence (đầu vào)\n')[1].split('\n\n### ')[0]
         self.assertEqual(section, line)
 
     def test_trim_deduplicate_cap_and_time_order(self):
@@ -69,10 +69,10 @@ class SourceLinksTests(unittest.TestCase):
         source = message(text='https://a.example/x')
         line = '- 🔗 [a.example/x](https://a.example/x)'
         for category, heading, after in (
-            ('bug', '### 🖼 Minh họa / Evidence', '### ❓ Cần làm rõ'),
-            ('feedback', '### 🧭 Ngữ cảnh', '### ❓ Cần làm rõ'),
-            ('task', '### 🖼 Minh họa / Evidence (đầu vào)', '### 🏁 Xong khi'),
-            ('human', '### 🖼 Minh họa / Evidence', '<details>'),
+            ('bug', '### 3. Minh họa / Evidence', '### 4. Cần làm rõ'),
+            ('feedback', '### 3. Ngữ cảnh', '### 4. Cần làm rõ'),
+            ('task', '### 3. Minh họa / Evidence (đầu vào)', '### 4. Xong khi'),
+            ('human', '### 2. Minh họa / Evidence', '<details>'),
         ):
             with self.subTest(category=category):
                 human = category == 'human'

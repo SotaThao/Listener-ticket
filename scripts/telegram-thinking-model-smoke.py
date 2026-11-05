@@ -274,7 +274,7 @@ def pos_print_smoke(cfg,image_path,sources_fixture):
             g['missing_count']==0 for g in initial_groups if g['verdict']=='ticket')
         valid=(len(gh.created)==1 and len(gh.updates)==1 and gh.updates[0][0]==101
             and initial_clear and known and print_scope and error_grounded and image_sent
-            and final is not None and '### 🐞 Lỗi' in final.body and '![' in final.body
+            and final is not None and '### 2. Lỗi' in final.body and '![' in final.body
             and [m for m,_ in notices]==[448,454])
         return dict(case='pos_print_context',pass_=valid,actual_startup_factory=True,
             tickets=len(gh.created),refreshes=len(gh.updates),comment_count=len(gh.comments),

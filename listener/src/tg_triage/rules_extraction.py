@@ -3,7 +3,9 @@ import base64
 import json
 
 from .classifier import strip_thinking
-from .thinking import ContextJSON, request_text_bytes
+from .thinking import ContextJSON, request_text_bytes, CURRENT, LOCAL_REQUEST_BUDGET_BYTES, RULES_MAX_PARTS
+
+TOO_LARGE = 'rules_request_too_large'
 
 
 def _unique_object(pairs):
@@ -76,8 +78,9 @@ def parse_grouped_facts(content, snapshot, source_ids):
         return None
 
 
-def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None):
+def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None, limit=None, size_out=None, body_out=None):
     """One bounded call for grouping plus facts; code owns all decisions and targets."""
+    if limit is None: limit = getattr(provider, 'request_budget_bytes', LOCAL_REQUEST_BUDGET_BYTES)
     sources = list(sources)
     if not sources or (not allow_mixed and any(m.chat_id != sources[0].chat_id for m in sources)): return None
     ids = [m.message_id for m in sources]
@@ -145,13 +148,25 @@ def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mix
     # Examples are optional teaching material. Reclaim them before dropping
     # supplied evidence or rejecting an otherwise bounded source/media batch.
     from .document_reader import request_fits
-    while not request_fits(body) and context['examples']:
+    while not request_fits(body,limit) and context['examples']:
         context['examples'].pop()
         body['messages'][0]['content']=system_intro+json.dumps(context,ensure_ascii=False,separators=(',',':'))
-    while not request_fits(body) and packet.get('read_only_context'):
+    while not request_fits(body,limit) and packet.get('read_only_context'):
         packet['read_only_context'].pop(0)
         user['content'] = kind(json.dumps(packet,ensure_ascii=False,separators=(',',':')))
-    if not request_fits(body): return None
+    if not request_fits(body,limit):
+        if size_out is not None: size_out.append(TOO_LARGE)
+        return None
+    if body_out is not None:
+        body_out.append(body); return ()   # build-only: used to test fit and to build the local body
+    body['_request_limit']=limit
+    if limit > LOCAL_REQUEST_BUDGET_BYTES and request_text_bytes(body) > LOCAL_REQUEST_BUDGET_BYTES:
+        # The call may be routed to Ollama (timeout, no image consent, pinned local): give it a body
+        # rebuilt by the same builder at the local limit, never the cloud-sized one.
+        local=[]
+        partition_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents,
+                              read_context=read_context, limit=LOCAL_REQUEST_BUDGET_BYTES, body_out=local)
+        if local: body['_local_messages']=local[0]['messages']
     view={}
     body['_evidence_view']=view
     groups=provider._ask(body, lambda raw: parse_grouped_facts(raw,snapshot,ids), attempts=1)
@@ -163,3 +178,89 @@ def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mix
         if reviews is None: return None
         review_out.update(reviews)
     return groups
+
+
+def _components(sources):
+    """Reply-connected components (a reply chain stays whole), ordered by first message."""
+    index = {m.message_id: n for n, m in enumerate(sources)}
+    parent = list(range(len(sources)))
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for n, m in enumerate(sources):
+        target = index.get(m.reply_to_id)
+        if target is not None: parent[find(n)] = find(target)
+    components = {}
+    for n in range(len(sources)): components.setdefault(find(n), []).append(n)
+    return [[sources[n] for n in members] for members in sorted(components.values(), key=lambda c: c[0])]
+
+
+def _overflow():
+    turn = CURRENT.get()
+    if turn is not None: turn.reason = TOO_LARGE
+    return None
+
+
+def _fits(provider, snapshot, members, images, allow_mixed, read_context, limit):
+    body = []
+    ids = {m.message_id for m in members}
+    partition_and_extract(provider, snapshot, members, images={i: p for i, p in images.items() if i in ids},
+                          allow_mixed=allow_mixed, read_context=read_context, limit=limit, body_out=body)
+    return bool(body)
+
+
+def _pack(provider, snapshot, sources, images, allow_mixed, read_context, limit):
+    """Greedy, order-preserving packing of whole components into parts that each fit; None = cannot."""
+    parts, current = [], []
+    for component in _components(sources):
+        trial = sorted(current + component, key=lambda m: sources.index(m))
+        if current and _fits(provider, snapshot, trial, images, allow_mixed, read_context, limit):
+            current = trial; continue
+        if current:
+            parts.append(current)
+        if not _fits(provider, snapshot, component, images, allow_mixed, read_context, limit): return None
+        current = component
+    if current: parts.append(current)
+    return parts
+
+
+def split_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None):
+    """One call when the whole batch fits the provider budget; otherwise at most RULES_MAX_PARTS parts.
+
+    Only a batch that can never fit sets turn.reason to 'rules_request_too_large' so the caller can tell the
+    Owner at once. A turn whose budget cannot be extended is an ordinary hold, never "too large"."""
+    sources = list(sources)
+    images = images or {}
+    limit = getattr(provider, 'request_budget_bytes', LOCAL_REQUEST_BUDGET_BYTES)
+    kwargs = dict(allow_mixed=allow_mixed, read_context=read_context)
+    turn = CURRENT.get()
+    if turn is not None and turn.reason == TOO_LARGE: turn.reason = None
+    if turn is not None: turn.configure_rules_parts(1)   # best effort; an already used budget just stays
+    size = []
+    groups = partition_and_extract(provider, snapshot, sources, images=images, documents=documents,
+                                   review_out=review_out, size_out=size, **kwargs)
+    if groups is not None or not size: return groups
+    # Does not fit one call. Mixed-chat and document batches are never split.
+    if allow_mixed or documents or len(sources) < 2: return _overflow()
+    parts = _pack(provider, snapshot, sources, images, allow_mixed, read_context, limit)
+    if parts is None or len(parts) < 2 or len(parts) > RULES_MAX_PARTS: return _overflow()
+    if turn is not None and not turn.configure_rules_parts(len(parts)): return None
+    merged, reviews = [], {}
+    for part in parts:
+        ids = {m.message_id for m in part}
+        part_reviews = {} if review_out is not None else None
+        size = []
+        groups = partition_and_extract(provider, snapshot, part, images={i: p for i, p in images.items() if i in ids},
+                                       review_out=part_reviews, size_out=size, **kwargs)
+        if groups is None: return _overflow() if size else None
+        offset = len(merged)
+        merged.extend(groups)
+        for local, receipt in (part_reviews or {}).items():
+            reviews[offset + local] = dict(receipt, group_index=offset + local,
+                                           review=dict(receipt['review'], group_index=offset + local))
+    if reviews:
+        # The receipt binds the partition of the whole batch, not of one part.
+        partition = [sorted(ids) for ids, _ in merged]
+        review_out.update({k: dict(v, partition=partition) for k, v in reviews.items()})
+    return tuple(merged)

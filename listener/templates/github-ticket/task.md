@@ -1,8 +1,8 @@
 {{#block body}}
-### 📝 Tóm tắt
+### Tóm tắt
 {{summary}}
 
-### 🛠 Việc cần làm
+### Việc cần làm
 {{work|(chưa có thông tin)}}
 {{#if reason}}
 **Lý do:** {{reason}}
@@ -23,16 +23,16 @@
 {{/if}}
 {{#if task_evidence}}
 
-### 🖼 Minh họa / Evidence (đầu vào)
+### Minh họa / Evidence (đầu vào)
 {{task_evidence}}
 {{/if}}
 
-### 🏁 Xong khi
+### Xong khi
 - [ ] {{@done}}
 - [ ] Đính kèm evidence kết quả (ảnh/link/log) khi đóng issue
 {{#if questions}}
 
-### ❓ Cần làm rõ
+### Cần làm rõ
 - {{@questions}}
 {{/if}}
 

@@ -61,6 +61,12 @@ do not demand the completed design to log design work. Bare images without a req
 context. Names/customers inside screenshots do not define product scope or assignee.'''
 
 
+# One source of truth for per-call model request limits (UTF-8 bytes via request_text_bytes).
+CLOUD_REQUEST_BUDGET_BYTES = 24000
+LOCAL_REQUEST_BUDGET_BYTES = 8000   # Ollama qwen3.5:9b runs with an 8192-token context; keep it.
+RULES_MAX_PARTS = 4
+
+
 def request_text_bytes(body):
     text=[{k:v for k,v in m.items() if k!='images'} for m in body['messages']]
     return (len(json.dumps(text,ensure_ascii=False).encode('utf-8'))
@@ -133,6 +139,7 @@ class Turn:
         self.calls = 0
         self.max_calls = 2
         self.document_manifest = None
+        self.rules_parts = None
         self.reads = 0
         if type(max_reads) is not int or not 1 <= max_reads <= 6:
             raise ValueError("Invalid bounded read limit")
@@ -153,10 +160,19 @@ class Turn:
         """Only the host's complete bounded partition may extend this same turn."""
         if type(parts) is not int or not 1<=parts<=16 or self.is_set():return False
         if self.document_manifest is not None:return self.document_manifest==manifest
-        if self.calls:return False
+        if self.calls or self.rules_parts not in (None,1):return False
         self.document_manifest=manifest
         self.max_calls=parts+4
         self.deadline=self.started+40+20*parts
+        return True
+
+    def configure_rules_parts(self,parts):
+        """A split rules batch buys 2 calls (extraction+review) and 20 s per extra part, plus one retry call."""
+        if type(parts) is not int or not 1<=parts<=RULES_MAX_PARTS or self.is_set():return False
+        if self.document_manifest is not None or self.calls or self.rules_parts not in (None,1):return False   # 1 part is the default; only an extension is one-shot
+        self.rules_parts=parts
+        self.max_calls=2*parts+1
+        self.deadline=self.started+40+20*(parts-1)
         return True
 
     def is_set(self):
@@ -166,12 +182,12 @@ class Turn:
         time.sleep(min(seconds, self.remaining()))
         return self.is_set()
 
-    def attempt(self, body, *, consume=True):
+    def attempt(self, body, *, consume=True, limit=LOCAL_REQUEST_BUDGET_BYTES):
         # UTF-8 bytes are a conservative upper bound on text tokens, including the prompt.
         # Pixel/image tokens are provider-specific and explicitly outside this text bound.
         size = request_text_bytes(body)
         from .document_reader import request_fits
-        if not request_fits(body):
+        if not request_fits(body, limit):
             self.reason = 'context_budget_exhausted'
         elif self.calls >= self.max_calls:
             self.reason = 'model_call_budget_exhausted'

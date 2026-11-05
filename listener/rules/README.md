@@ -135,6 +135,7 @@ Không sửa file quy tắc trực tiếp trên máy chạy; không có thư m�
 | Mục | File | Việc |
 |---|---|---|
 | Câu chữ 8 khối | `channels.md` · `blocks` → `templates/github-ticket/group-replies.md` | Owner đã duyệt `ops.header`, `ask.object`, `ask.observed`, `ask.work`, `ask.problem`, `notice.hold_escalated`, `notice.comment_ambiguous`, `notice.attachment_ambiguous` ngày 2026-10-30 |
+| Khối `notice.request_too_large` | `channels.md` · `blocks` → `templates/github-ticket/group-replies.md` | Owner duyệt câu chữ ngày 2026-11-05, nguyên văn “Duyệt câu chữ” |
 | Bảng quyền A01–A27 | `roles.md` · `actions` | Duyệt từng ô |
 | Mục kiểm P1–P13, điều kiện dừng H1–H7 | `preflight.md` | Duyệt danh sách và người ký |
 | Tiêu đề và footer ticket READY | `rules_intake.py` · `_ready_summary`, `templates/github-ticket/_common.md` · `provenance.rules` | Owner duyệt 2026-11-05 |

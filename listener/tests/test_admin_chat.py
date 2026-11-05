@@ -45,7 +45,7 @@ class RedactionTests(unittest.TestCase):
         needs = format_issue(item, None, "model", True, clarify=(f"Hỏi lại {EMAIL}?",),
                              text=(EMAIL, EMAIL))
         self.assertNotIn("vlinkgroup", needs.title + needs.body)
-        self.assertIn("### ❓ Cần làm rõ\n- Hỏi lại " + EMAIL_PLACEHOLDER, needs.body)
+        self.assertIn("### 2. Cần làm rõ\n- Hỏi lại " + EMAIL_PLACEHOLDER, needs.body)
 
     def test_b_phone_numbers_are_hidden(self):
         for number in ("0901234567", "+84 901 234 567", "090-123-4567", "090.123.4567"):

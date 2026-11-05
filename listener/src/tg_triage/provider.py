@@ -18,6 +18,7 @@ from dataclasses import replace
 
 from .classifier import Classifier
 from .config import check_provider
+from .thinking import CLOUD_REQUEST_BUDGET_BYTES, LOCAL_REQUEST_BUDGET_BYTES, request_text_bytes
 
 
 class ModelProvider:
@@ -97,6 +98,7 @@ class CloudProvider(OllamaProvider):
             self._fallback.max_output = c.max_output
 
     _ingress_cloud_view=True
+    request_budget_bytes = CLOUD_REQUEST_BUDGET_BYTES
 
     def _ingress_source_text(self, text):
         from .ai_transport import redact
@@ -165,11 +167,19 @@ class CloudProvider(OllamaProvider):
             turn.reason = 'model_call_budget_exhausted'
             return None
         local = dict(body, messages=body.get("_local_messages") or body["messages"], model=c.fallback_model, think=c.fallback_think,
-                     options=dict(body.get("options", {})))
+                     options=dict(body.get("options", {})), _request_limit=LOCAL_REQUEST_BUDGET_BYTES)
+        if request_text_bytes(local) > LOCAL_REQUEST_BUDGET_BYTES:
+            # Ollama would silently truncate its 8192-token context: never send it a cloud-sized body.
+            if turn: turn.reason = 'context_budget_exhausted'
+            return None
         result = self._fallback._ask(local, parse, attempts)
         if result is not None and isinstance(body.get("_evidence_view"), dict):
             body["_evidence_view"].update(kind="local", messages=local["messages"])
         return result
+
+    def _limit(self, body):
+        # Only rules extraction/review name a limit; every classic body keeps the 8 000-byte rule.
+        return min(body.get('_request_limit', LOCAL_REQUEST_BUDGET_BYTES), self.request_budget_bytes)
 
     def _ask_cloud(self, body, parse, attempts):
         from .ai_transport import complete, read_key, ProviderError
@@ -184,7 +194,7 @@ class CloudProvider(OllamaProvider):
         if messages is None:
             return None
         from .document_reader import request_fits,has_document_context
-        if has_document_context(messages) and not request_fits(dict(body,messages=messages)):
+        if has_document_context(messages) and not request_fits(dict(body,messages=messages),self._limit(body)):
             if turn:turn.reason='context_budget_exhausted'
             return None
         started = time.monotonic()
@@ -198,14 +208,14 @@ class CloudProvider(OllamaProvider):
         attempt_limit=max(attempts,2) if turn else attempts
         for attempt_index in range(attempt_limit):
             try:
-                timeout = turn.attempt(body,consume=False) if turn else c.timeout_seconds
+                timeout = turn.attempt(body,consume=False,limit=self._limit(body)) if turn else c.timeout_seconds
             except BudgetExhausted:
                 return None
             usage, outcome, result = {}, "ok", None
             try:
                 with MODEL_LOCK.enter(**({'stop': turn} if turn else {})):
                     if turn:
-                        timeout = turn.attempt(body)
+                        timeout = turn.attempt(body,limit=self._limit(body))
                         if timeout <= 0:
                             turn.reason = 'decision_deadline_exhausted'
                             return None
@@ -245,7 +255,7 @@ class CloudProvider(OllamaProvider):
                     return None
                 body=repaired
                 messages=self._cloud_messages(body['messages'])
-                if messages is None or has_document_context(messages) and not request_fits(dict(body,messages=messages)):
+                if messages is None or has_document_context(messages) and not request_fits(dict(body,messages=messages),self._limit(body)):
                     return None
         return None
 

@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 
 from .ai_transport import usage_of
 from .model_lock import MODEL_LOCK, LockUnavailable
+from .thinking import LOCAL_REQUEST_BUDGET_BYTES
 
 from .models import (CATEGORIES, CaseAnalysis, Classification, DETAIL_LIST_KEYS, DETAIL_STRING_KEYS,
                      ISSUE_TYPES, PRIORITIES, TICKET_CATEGORIES,
@@ -290,6 +291,7 @@ class Classifier:
     """Talks to Ollama `/api/chat`. `think` turns the model's reasoning on (12.12, default on)."""
 
     supports_vision = True
+    request_budget_bytes = LOCAL_REQUEST_BUDGET_BYTES   # Ollama context is 8192 tokens
     usage = None          # optional UsageRecorder; every model call then leaves one accounting row
     usage_role = "primary"
 
@@ -896,7 +898,7 @@ class Classifier:
         output_cap = body.get('_narrow_output',8192) if turn else 8192
         for attempt_index in range(attempts):
             try:
-                timeout = turn.attempt(body,consume=False) if turn else self.settings.timeout_seconds
+                timeout = turn.attempt(body,consume=False,limit=min(body.get('_request_limit',LOCAL_REQUEST_BUDGET_BYTES),self.request_budget_bytes)) if turn else self.settings.timeout_seconds
             except BudgetExhausted:
                 return None
             request = Request(
@@ -907,7 +909,7 @@ class Classifier:
             try:
                 with MODEL_LOCK.enter(**({'stop': turn} if turn else {})):
                     if turn:
-                        timeout = turn.attempt(body)
+                        timeout = turn.attempt(body,limit=min(body.get('_request_limit',LOCAL_REQUEST_BUDGET_BYTES),self.request_budget_bytes))
                         if timeout <= 0:
                             turn.reason = 'decision_deadline_exhausted'
                             return None

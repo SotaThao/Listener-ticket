@@ -103,7 +103,12 @@ def review(provider,snapshot,groups,sources,context,documents,images,view):
         body=dict(model=provider.settings.model,stream=False,think=provider.think,options={'temperature':0},
             messages=[dict(role='system',content=prompt),*users],format=_schema(),
             _evidence_view=sink,_evidence_pin=view['kind'],_local_messages=[dict(role='system',content=prompt),*users])
-        if not request_fits(body):return None
+        from .thinking import LOCAL_REQUEST_BUDGET_BYTES
+        limit=getattr(provider,'request_budget_bytes',LOCAL_REQUEST_BUDGET_BYTES) if view['kind']!='local' else LOCAL_REQUEST_BUDGET_BYTES
+        body['_request_limit']=limit
+        if not request_fits(body,limit):
+            turn.reason='rules_request_too_large'   # same Owner notice as an oversize extraction, never a silent hold
+            return None
         verdict=provider._ask(body,lambda raw:_parse(raw,proposals,packet),attempts=1)
         if verdict is None:return None
         # Host metadata identifies the actual successful provider projection.

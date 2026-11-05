@@ -1,8 +1,8 @@
 {{#block body}}
-### 📝 Tóm tắt
+### Tóm tắt
 {{summary}}
 
-### 💡 Vấn đề / nhu cầu
+### Vấn đề / nhu cầu
 {{problem|(chưa có thông tin)}}
 {{#if user_story}}
 **User story:** {{user_story}}
@@ -15,17 +15,17 @@
 {{/if}}
 {{#if acceptance}}
 
-### ✅ Tiêu chí chấp nhận (nháp)
+### Tiêu chí chấp nhận (nháp)
 - [ ] {{@acceptance}}
 {{/if}}
 {{#if context}}
 
-### 🧭 Ngữ cảnh
+### Ngữ cảnh
 {{context}}
 {{/if}}
 {{#if questions}}
 
-### ❓ Cần làm rõ
+### Cần làm rõ
 - {{@questions}}
 {{/if}}
 

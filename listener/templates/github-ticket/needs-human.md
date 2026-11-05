@@ -1,14 +1,14 @@
 {{#block body}}
-### 📝 Tóm tắt
+### Tóm tắt
 {{summary}}
 {{#if evidence}}
 
-### 🖼 Minh họa / Evidence
+### Minh họa / Evidence
 {{evidence}}
 {{/if}}
 {{#if questions}}
 
-### ❓ Cần làm rõ
+### Cần làm rõ
 - {{@questions}}
 {{/if}}
 
