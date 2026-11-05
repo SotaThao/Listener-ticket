@@ -87,9 +87,20 @@ def code_facts(sources, *, seen_image_ids=frozenset(), extraction_ok=True, reply
                      reply_target,ids,images,frozenset(seen_image_ids),text_ids,documents)
 
 
-def early_decision(snapshot, sources):
-    """Only table-prioritized outcomes independent of extraction, for a single new source."""
+def _prefilter_source(snapshot, message):
+    """readiness.md · prefilter scope: a new, non-reply, text-only, non-command message."""
+    return (message.reply_to_id is None and not message.has_attachment
+            and not rules.COMMAND.match(message.text or '') and snapshot.prefilter_text(message.text))
+
+
+def early_decision(snapshot, sources, *, prefilter=True):
+    """Only table-prioritized outcomes independent of extraction, for a single new source.
+
+    Owner 2026-11-05 ("Duyệt lọc trước"): when every source matches the local prefilter
+    (PR/issue review request), decide CHAT (F1) before any model call."""
     sources = list(sources)
+    if prefilter and sources and all(_prefilter_source(snapshot, m) for m in sources):
+        return snapshot.prefilter_decision()
     if len(sources) != 1: return None
     result = snapshot.evaluate({}, code_facts(sources, extraction_ok=False))
     row = next(row for row in snapshot.tables['readiness']['decision'] if row.cells['#'] == result.rule)
@@ -103,7 +114,8 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
     """Validate every group before returning decisions; None means the whole batch holds."""
     sources = list(sources)
     if not sources: return None
-    early = early_decision(snapshot, sources)
+    # A pending-answer merge (allow_mixed) is never short-circuited by the prefilter.
+    early = early_decision(snapshot, sources, prefilter=not allow_mixed)
     if early is not None: return ((tuple(sources),early),)
     from .rules_extraction import partition_and_extract
     reviews={}
@@ -121,6 +133,10 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         for group_index,(ids, facts) in enumerate(groups):
             members = tuple(source for source in sources if source.message_id in ids)
             if len(members) != len(ids): return None
+            if not allow_mixed and all(_prefilter_source(snapshot, m) for m in members):
+                # Local rule wins over the model's intent for a group made only of review requests.
+                outcomes.append((members, snapshot.prefilter_decision()))
+                continue
             if snapshot.extensions:
                 from .decision_rules import Decision
                 from types import MappingProxyType

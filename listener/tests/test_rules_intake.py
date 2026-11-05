@@ -1501,6 +1501,117 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         self.assertEqual(1,provider.calls);self.assertEqual([],github.calls);self.assertEqual(1,len(sent))
 
 
+class RulesPrefilterTests(RulesBootstrapTests):
+    """Owner 2026-11-05 ("Duyệt lọc trước"): PR/issue review requests are CHAT before any model call (#95, #111)."""
+    REVIEW = 'https://github.com/org/repo/pull/1427\nanh @​PmqQuan review giúp em pr nha'
+    TASK_FACTS = ('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"task","source_ids":[42]},'
+                  '"object":{"value":"pr","source_ids":[42]},"work":{"value":"review giúp em pr","source_ids":[42]}}}]}')
+
+    def test_batch_of_review_requests_settles_chat_f1_without_model(self):
+        import json
+        from tg_triage.rules_intake import _process_batch
+        from tg_triage.decision_rules import RulesSnapshot
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False; calls=0
+            def _ask(self,body,parse,attempts): Provider.calls+=1; return parse('{}')
+        class GitHub:
+            calls=[]
+            def create_issue(self,issue): GitHub.calls.append(issue); return 1,None
+        store=Store(':memory:'); self.addCleanup(store.close)
+        settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
+                         telegram=replace(config().telegram,ops_chat_id=-1009876543210))
+        notices=[]
+        pipeline=Pipeline(settings,store,Provider(),GitHub(),rules_snapshot=RulesSnapshot(root/'rules',root/'templates/github-ticket',extensions=True),
+                          notice_sender=lambda *a:notices.append(a) or 77)
+        sources=[message(41,text=self.REVIEW),message(42,text='anh merge PR này giúp em https://github.com/org/repo/pull/12')]
+        for source in sources: store.enqueue(source)
+        _process_batch(pipeline,sources)
+        self.assertEqual((0,[],[]),(Provider.calls,GitHub.calls,notices))
+        self.assertEqual({('chat','F1')},{tuple(r) for r in store.connection.execute('SELECT decision,reason FROM messages WHERE message_id IN (41,42)')})
+        groups=[(json.loads(plan)['rule'],status) for plan,status in store.connection.execute('SELECT plan,status FROM rules_batch_groups')]
+        self.assertEqual([('F1','DONE')],groups)
+
+    def test_tokenizer_edges(self):
+        import unicodedata
+        snapshot=self.snapshot()
+        self.assertTrue(snapshot.prefilter_text(unicodedata.normalize('NFD','anh duyệt giúp em nhé https://github.com/org/repo/pull/12')))
+        self.assertTrue(snapshot.prefilter_text('review gi​úp em https://github.com/org/repo/pull/12'))
+        self.assertFalse(snapshot.prefilter_text('anh Quân review giúp em https://github.com/org/repo/pull/12'))  # named teammate: residual, model decides
+        self.assertFalse(snapshot.prefilter_text(None))
+
+    def run_live(self, text, *, extensions, facts=None, **extra):
+        from tg_triage.decision_rules import RulesSnapshot
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        snapshot=RulesSnapshot(root/'rules',root/'templates/github-ticket',extensions=extensions)
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False
+            def __init__(self): self.calls=0
+            def _ask(self,body,parse,attempts):
+                self.calls+=1; return parse(facts or RulesPrefilterTests.TASK_FACTS)
+        class GitHub:
+            def __init__(self): self.calls=[]
+            def create_issue(self,issue): self.calls.append(issue); return len(self.calls),None
+        store=Store(':memory:'); self.addCleanup(store.close)
+        settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
+                         telegram=replace(config().telegram,ops_chat_id=-1009876543210))
+        provider,github,notices=Provider(),GitHub(),[]
+        pipeline=Pipeline(settings,store,provider,github,rules_snapshot=snapshot,notice_sender=lambda *a:notices.append(a) or 77)
+        result=pipeline.process(message(42,text=text,**extra))
+        row=store.connection.execute("SELECT state,decision_rule,intent_rule FROM rules_decisions ORDER BY id DESC LIMIT 1").fetchone()
+        return result,provider,github,notices,row
+
+    def test_live_review_request_is_chat_without_model_or_ticket(self):
+        for extensions in (False,True):
+            with self.subTest(extensions=extensions):
+                result,provider,github,notices,row=self.run_live(self.REVIEW,extensions=extensions)
+                self.assertEqual(('chat','F1'),(result.decision,result.reason))
+                self.assertEqual(0,provider.calls)
+                self.assertEqual([],github.calls)
+                self.assertEqual([],notices)
+                self.assertEqual(('CHAT','F1','prefilter'),tuple(row))
+
+    def test_bug_next_to_pr_link_still_reaches_model_and_ticket(self):
+        bug=('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+             '"object":{"value":"màn Queue","source_ids":[42]},"observed":{"value":"bị trắng","source_ids":[42]}}}]}')
+        result,provider,github,_,row=self.run_live('merge PR này xong màn Queue bị trắng https://github.com/org/repo/pull/12',
+                                                   extensions=True,facts=bug)
+        self.assertEqual(1,provider.calls)
+        self.assertEqual(1,len(github.calls))
+        self.assertEqual(('READY','R9'),tuple(row)[:2])
+
+    def test_reply_or_attachment_is_out_of_prefilter_scope(self):
+        from tg_triage.rules_intake import _prefilter_source
+        snapshot=self.snapshot()
+        self.assertTrue(_prefilter_source(snapshot,message(42,text=self.REVIEW)))
+        self.assertFalse(_prefilter_source(snapshot,message(42,text=self.REVIEW,reply_to_id=7)))
+        self.assertFalse(_prefilter_source(snapshot,message(42,text=self.REVIEW,has_image=True)))
+        self.assertFalse(_prefilter_source(snapshot,message(42,text='/task '+self.REVIEW)))
+
+    def test_batch_all_reviews_skip_model_and_mixed_group_keeps_model(self):
+        from tg_triage.rules_intake import evaluate_batch
+        snapshot=self.snapshot()
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False
+            def __init__(self,raw): self.raw=raw; self.calls=0
+            def _ask(self,body,parse,attempts): self.calls+=1; return parse(self.raw)
+        reviews=[message(41,text=self.REVIEW),message(42,text='xem issue này giúp em https://github.com/org/repo/issues/80')]
+        provider=Provider('{}')
+        groups=evaluate_batch(snapshot,provider,reviews)
+        self.assertEqual(0,provider.calls)
+        self.assertEqual([('CHAT','F1')],[(d.state,d.rule) for _,d in groups])
+        mixed=[message(41,text=self.REVIEW),message(42,text='màn Queue bị trắng khi mở')]
+        provider=Provider('{"groups":[{"message_ids":[41],"facts":{"intent":{"value":"task","source_ids":[41]},'
+                          '"object":{"value":"pr","source_ids":[41]},"work":{"value":"review","source_ids":[41]}}},'
+                          '{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+                          '"object":{"value":"màn Queue","source_ids":[42]},"observed":{"value":"bị trắng","source_ids":[42]}}}]}')
+        groups=evaluate_batch(snapshot,provider,mixed)
+        self.assertEqual(1,provider.calls)
+        self.assertEqual({41:('CHAT','F1'),42:('READY','R9')},{m.message_id:(d.state,d.rule) for ms,d in groups for m in ms})
+
+
 class RulesReadyTicketBodyTests(RulesBootstrapTests):
     """Live 2026-11-05 (#95-#99): READY facts must fill the type template, not raise false questions."""
 

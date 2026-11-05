@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 3 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 4 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -39,6 +39,36 @@ Cách ghi cột "Dữ kiện": `trường=giá trị` cách nhau bằng `;`; `�
 | X22 | Trả lời câu hỏi của bot ở group xử lý: "nút Thanh toán, bấm không phản hồi" | `∅` | `none` | `có` | 0 | 0 | `true` | `bot_question` | `bug` | object=nút Thanh toán; observed=bấm không phản hồi | `READY` | R9 | — |
 | X23 | "Màn giao dịch không ổn" | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `feedback` | object=màn giao dịch; problem=không ổn | `NEED_INFO` | R12 | `ask.problem` |
 | X24 | "Không in được" — đối tượng model lấy từ tin của chủ đề khác | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `bug` | object=máy in POS [ngoài-chủ-đề]; observed=không in được | `NEED_INFO` | R12 | `ask.object` |
+
+## Bảng: prefilter_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `prefilter`). `CHAT` = khớp lọc trước, không gọi model, không ticket; `không` = đi tiếp như cũ. PF1, PF2 là dạng ẩn danh của tin live đã thành ticket #95, #111.
+
+| # | Tin | Kết quả |
+|---|---|---|
+| PF1 | review giúp em nha anh @tên https://github.com/org/repo/pull/2585 | `CHAT` |
+| PF2 | https://github.com/org/repo/pull/1427 anh @tên review giúp em pr nha | `CHAT` |
+| PF3 | anh merge PR này giúp em https://github.com/org/repo/pull/12 | `CHAT` |
+| PF4 | xem issue này giúp em https://github.com/org/repo/issues/80 | `CHAT` |
+| PF5 | PR #12 rv giúp em với 🙏 https://github.com/org/repo/pull/12 | `CHAT` |
+| PF6 | merge PR này xong màn Queue bị trắng https://github.com/org/repo/pull/12 | `không` |
+| PF7 | anh xem issue này https://github.com/org/repo/issues/80, khách bị trừ tiền 2 lần | `không` |
+| PF8 | review giúp em nha anh | `không` |
+| PF9 | review giúp em https://gitlab.com/org/repo/-/merge_requests/3 | `không` |
+| PF10 | https://github.com/org/repo/pull/12 | `không` |
+| PF11 | sửa lại PR này giúp em https://github.com/org/repo/pull/12 | `không` |
+| PF12 | review giúp em https://github.com/org/repo | `không` |
+| PF13 | anh xem giúp https://github.com/org/repo/issues/80,lỗi | `không` |
+| PF14 | review giúp @tên,lỗi https://github.com/org/repo/pull/12 | `không` |
+| PF15 | anh check giúp em https://staging.example.com/pos/checkout https://github.com/org/repo/issues/80 | `không` |
+| PF16 | fix giúp em PR này https://github.com/org/repo/pull/12 | `không` |
+| PF17 | làm giúp em issue này https://github.com/org/repo/issues/80 | `không` |
+| PF18 | test giúp em PR này https://github.com/org/repo/pull/12 | `không` |
+| PF19 | deploy PR này giúp em https://github.com/org/repo/pull/12 | `không` |
+| PF20 | PR này merge chưa anh https://github.com/org/repo/pull/12 | `không` |
+| PF21 | [PR](https://github.com/org/repo/pull/12) review giúp em | `CHAT` |
+| PF22 | review giúp em https://github.com/org/repo/pull/12/files | `CHAT` |
+| PF23 | PR#12 review giúp em https://github.com/org/repo/pull/12 | `CHAT` |
 
 ## Bảng: normalize_cases
 

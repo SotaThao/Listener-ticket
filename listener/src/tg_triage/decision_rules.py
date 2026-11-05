@@ -13,11 +13,21 @@ FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
-    "readiness": {"intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
+    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
 }
+PREFILTER_RULE = "F1"
+PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
+# readiness.md · prefilter P1–P4, implemented explicitly (the prose is hash-locked in _validate).
+# A link/mention tail is printable ASCII without `,` `;` so text glued after it ("…/80,lỗi") is kept.
+_TAIL = r"[\x21-\x2b\x2d-\x3a\x3c-\x7e]"
+_GITHUB_REF = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:pull|issues)/[0-9]+(?![A-Za-z0-9_])" + _TAIL + "*", re.I)
+_URL = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+|\b[A-Za-z0-9.-]+\.[A-Za-z]{2,}/", re.I)
+_MENTION = re.compile(r"@\w+")
+_INVISIBLE = re.compile("[​-‍⁠﻿]")
+_NUMBER = re.compile(r"#?[0-9]+")
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
 TICKS = re.compile(r"`([^`]+)`")
@@ -147,7 +157,8 @@ class Decision:
 class RulesSnapshot:
     """Load once; never mutate or read rule files during evaluation."""
     __slots__ = ('tables','fingerprint','_instructions','text_fields','intents','commands',
-                 'domains','generic','limits','model_fields','model_instructions','extensions','_frozen')
+                 'domains','generic','limits','model_fields','model_instructions','extensions',
+                 'prefilter_work','prefilter_filler','_frozen')
     def __init__(self, rules_dir: Path, templates_dir: Path, *, extensions=False):
         tables, texts = {}, {}
         for name in FILES:
@@ -283,8 +294,39 @@ class RulesSnapshot:
             try: source = (templates / filename).read_text(encoding='utf-8')
             except (OSError, UnicodeError) as e: r.fail(f'template unavailable: {e}')
             if ('{{#block ' + block + '}}' in source) != (status == 'có'): r.fail('template block status mismatch')
+        steps = t['readiness']['prefilter']
+        if [r.cells['#'] for r in steps] != ['P1', 'P2', 'P3', 'P4']: steps[0].fail('unsupported prefilter sequence')
+        encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in steps).encode('utf8')
+        if hashlib.sha256(encoded).hexdigest() != PREFILTER_SHA256: steps[0].fail('unsupported prefilter definition')
+        words = {'việc': set(), 'đệm': set()}
+        for r in t['readiness']['prefilter_words']:
+            kind, word = r.one('Loại'), r.one('Từ')
+            if (kind not in words or word != unicodedata.normalize('NFC', word).casefold()
+                    or not re.fullmatch(r'\w+', word) or _NUMBER.fullmatch(word) or word in words['việc'] | words['đệm']):
+                r.fail('invalid or duplicate prefilter word')
+            words[kind].add(word)
+        if not words['việc']: t['readiness']['prefilter_words'][0].fail('prefilter needs a work word')
+        self.prefilter_work = frozenset(words['việc'])
+        self.prefilter_filler = frozenset(words['đệm'])
         self.model_fields = tuple(r.cells for r in t['facts']['fields'])
         self.model_instructions = self._instructions
+
+    def prefilter_text(self, text) -> bool:
+        """readiness.md · prefilter P1–P3 on one message text: True ⇒ CHAT (F1) without the model."""
+        if not isinstance(text, str): return False
+        value = unicodedata.normalize('NFC', _INVISIBLE.sub('', text))
+        if not _GITHUB_REF.search(value): return False
+        value = _GITHUB_REF.sub(' ', value)
+        if _URL.search(value): return False  # any other link may carry a bug report: let the model judge
+        value = _MENTION.sub(' ', value).casefold()
+        value = re.sub(r'#(?=[0-9])', ' #', value)
+        tokens = [w for w in re.sub(r'[^\w#]+|_', ' ', value).split() if not _NUMBER.fullmatch(w)]
+        tokens = [w.strip('#') for w in tokens if w.strip('#')]
+        return (bool(tokens) and all(w in self.prefilter_work or w in self.prefilter_filler for w in tokens)
+                and any(w in self.prefilter_work for w in tokens))
+
+    def prefilter_decision(self) -> Decision:
+        return Decision('CHAT', 'chat', 'prefilter', PREFILTER_RULE, MappingProxyType({}), (), (), self.fingerprint)
 
     def model_context(self):
         context = {'fields': [dict(row) for row in self.model_fields], 'instructions': self.model_instructions,
@@ -403,6 +445,13 @@ class RulesSnapshot:
                 coverage.add(decision.rule)
             except (ValueError, TypeError) as exc: row.fail(f'example self-check: {exc}')
         if coverage != {r.cells['#'] for r in self.tables['readiness']['decision']}: self.tables['examples']['examples'][0].fail('decision coverage incomplete')
+        outcomes = set()
+        for row in self.tables['examples']['prefilter_cases']:
+            expected = row.one('Kết quả')
+            if expected not in {'CHAT', 'không'}: row.fail('invalid prefilter outcome')
+            if self.prefilter_text(row.cells['Tin']) != (expected == 'CHAT'): row.fail('prefilter self-check failed')
+            outcomes.add(expected)
+        if outcomes != {'CHAT', 'không'}: self.tables['examples']['prefilter_cases'][0].fail('prefilter cases need both outcomes')
         for row in self.tables['examples']['normalize_cases']:
             field, value, expected = row.one('Trường'), row.one('Giá trị'), row.one('Chung chung')
             if field not in self.text_fields or expected not in {'có','không'} or (normalize(value) in self.generic[field]) != (expected == 'có'): row.fail('normalization self-check failed')

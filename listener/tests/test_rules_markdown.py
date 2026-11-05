@@ -46,6 +46,8 @@ REQUIRED = {
         "limits": ["Khóa", "Giá trị", "Nghĩa"],
     },
     "readiness": {
+        "prefilter": ["#", "Bước"],
+        "prefilter_words": ["Loại", "Từ"],
         "intent_resolve": ["#", "command", "intent (model)", "cần CÓ", "intent dùng"],
         "decision": [
             "#", "command", "command_payload", "text", "media", "extraction_ok", "reply_target",
@@ -72,6 +74,7 @@ REQUIRED = {
             "#", "Tin (rút gọn)", "command", "command_payload", "text", "media_seen", "media_unseen",
             "extraction_ok", "reply_target", "intent (model)", "Dữ kiện", "Kết quả", "Luật", "Hỏi",
         ],
+        "prefilter_cases": ["#", "Tin", "Kết quả"],
         "normalize_cases": ["#", "Trường", "Giá trị", "Chung chung"],
     },
     "roles": {

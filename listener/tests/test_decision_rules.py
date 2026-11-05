@@ -33,6 +33,24 @@ class DecisionRulesTest(unittest.TestCase):
         values.update(changes)
         return CodeFacts(**values)
 
+    def test_prefilter_definition_is_hash_locked(self):
+        self.mutate('readiness', '| P3 | Mọi từ còn lại', '| P3 | Hầu hết từ còn lại')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported prefilter definition'): self.load()
+
+    def test_prefilter_cases_execute_on_load(self):
+        self.mutate('examples', 'màn Queue bị trắng https://github.com/org/repo/pull/12 | `không` |',
+                    'màn Queue bị trắng https://github.com/org/repo/pull/12 | `CHAT` |')
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*prefilter self-check failed'): self.load()
+
+    def test_prefilter_words_are_validated(self):
+        self.mutate('readiness', '| `việc` | `rv` |', '| `việc` | `review` |')
+        with self.assertRaisesRegex(RulesError, 'invalid or duplicate prefilter word'): self.load()
+
+    def test_prefilter_word_list_is_data(self):
+        # Removing a filler word turns a matching case into a non-match, which the self-check catches.
+        self.mutate('readiness', '| `đệm` | `nha` |\n', '')
+        with self.assertRaisesRegex(RulesError, 'prefilter self-check failed'): self.load()
+
     def test_draft_fails_closed(self):
         self.mutate('facts', 'status ACTIVE', 'status DRAFT')
         with self.assertRaisesRegex(RulesError, r'facts.md:1:.*ACTIVE'): self.load()

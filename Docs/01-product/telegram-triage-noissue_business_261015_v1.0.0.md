@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.16 · **Updated**: 2026-11-05 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.17 · **Updated**: 2026-11-05 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -205,7 +205,7 @@ Yêu cầu DESIGN/redesign cho panel/mode đã nhận diện có thể là task 
 
 ### TG-09 — Câu hỏi thông tin và yêu cầu phân tích
 
-/question và câu hỏi thông tin thuần túy không tạo issue hay reaction kể cả có tag. Chat thông thường có thể im lặng; câu hỏi trực tiếp về trạng thái ticket dùng tuyến chỉ đọc `STATUS` bên dưới, không bị bỏ qua như xã giao. Kế hoạch hỏi Docs rồi trả lời tự động trong tài liệu cũ chưa được triển khai.
+/question và câu hỏi thông tin thuần túy không tạo issue hay reaction kể cả có tag. Owner 2026-11-05 (“Duyệt lọc trước”): nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback và không được log ticket. Rules mode lọc **local trước khi gọi model** (`readiness.md` · `prefilter`, luật `F1`): tin mới, không Reply, không command, không ảnh/tài liệu, có link GitHub tới PR/issue và phần chữ còn lại chỉ gồm từ trong `prefilter_words` (ít nhất một từ việc như review, duyệt, merge, xem) ⇒ `CHAT` ngay, không gọi model, không ticket. Có thêm chữ khác (vd mô tả lỗi sau khi merge) hoặc thêm link khác ngoài GitHub PR/issue ⇒ đi tiếp qua model như cũ, nên lỗi sản phẩm kèm link PR vẫn là bug. Rủi ro còn lại: gọi tên không có `@` ("anh Quân review…") hoặc gõ không dấu ("giup") không khớp bảng từ nên vẫn do model quyết; Owner có thể thêm từ đệm vào `prefilter_words`. Chat thông thường có thể im lặng; câu hỏi trực tiếp về trạng thái ticket dùng tuyến chỉ đọc `STATUS` bên dưới, không bị bỏ qua như xã giao. Kế hoạch hỏi Docs rồi trả lời tự động trong tài liệu cũ chưa được triển khai.
 
 `STATUS` do model nhận diện ý định, không dùng so khớp câu tiếng Việt để cấp quyền. Host chỉ xác định đích từ Reply thật trong cùng chat tới source hoặc sent-notice có bằng chứng. Đọc đúng partition group/case đã xác lập, gồm anchor/sibling thực sự giữ reservation hoặc ticket; không mượn tin gần nhất, chung thời gian hay topic bên cạnh. Issue đã xác nhận cần số/link canonical đúng repository cấu hình. Model không được tự cung cấp target/ticket hoặc lời khẳng định trạng thái. Nội dung chuyển tiếp/trích dẫn đơn thuần không thành lệnh hỏi hay thao tác.
 
@@ -2246,7 +2246,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "860dae897cbf50e110d9761e29272e1e0d7ee2a2b65c681f7ed7637d4f9362a3",
     "listener/src/tg_triage/config.py": "33464c0643bfb4a86a7be648be979e6899ea340b54b302d7b41cd59e10a616d8",
-    "listener/src/tg_triage/decision_rules.py": "6aa004a2bbadc3fc229c4ff9c13e83103748c37f9325a88a96a49b624d6cd250",
+    "listener/src/tg_triage/decision_rules.py": "8807e6eea8055acd5d2d832489bf660e7a7fa324a4ea05ee0512fa78d32ce3c9",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "163595000162d5fa1c162538d997c449d2913934e03f104fb79603e778b0cd1f",
     "listener/src/tg_triage/followup_model.py": "898ae428bc0e5101550665853ed66dbfa0a8324fcc2ba4df18f4ab33d513d934",
@@ -2272,7 +2272,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_analysis.py": "8d1ed397042fa99bf8fc50f4841a5256c1596cfa3a15888ea4228538e2f42d7e",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "242f8e3a9afb094d4a95ce61415d54bd3569f4b03ec1dba0f24510552470d87e",
-    "listener/src/tg_triage/rules_intake.py": "0fa3cc5b1a4f72866d3f814ea15e524a57e61848d8f01b0aebf91d4c4943f082",
+    "listener/src/tg_triage/rules_intake.py": "724695889debad632a76d31fe2e6f15f00881a6ae248e7f609493dcbb462dbae",
     "listener/src/tg_triage/rules_pending_store.py": "53c7361bde4cb26b1d835333443792149bc9108ef52d14191a8e202888547a2a",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
@@ -2321,7 +2321,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "5a504270eda50993d5e23d422bcf91ecf2e3451772534c59bd0a5cf4aa2f057a",
+  "runtime_fingerprint": "e324db61b532a02fde709c91f0db41b5f1e60253309454e0f05b8932c6577dde",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2339,6 +2339,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.17 | 2026-11-05 | Claude / owner AlexChu | Live #95, #111 (group PROD): nhờ review PR thành ticket qua R10 vì model đọc là `task`. Owner: “các nội dung về review PR không phải là task và bug hoặc feedback nên không thể log ticket đc” và “Duyệt lọc trước”. Thêm lọc local trước model ở TG-09: `readiness.md` v4 bảng `prefilter` P1–P4 (khóa hash) + `prefilter_words`, `examples.md` v4 bảng `prefilter_cases` PF1–PF23 tự kiểm lúc nạp (gồm chốt chặn fix/làm/test/deploy, chữ dính sau link, link không phải GitHub); review GATE 0b APPROVED, các mục nên sửa đã áp; nhóm chỉ gồm tin khớp ⇒ `CHAT` luật `F1`, không gọi model. Rules fingerprint đổi. Trace runtime `decision_rules.py`, `rules_intake.py`; test `RulesPrefilterTests`, `test_prefilter_*`. Không đổi R1–R13, kênh ops hay reaction. |
 | v1.16.16 | 2026-11-05 | Claude / owner AlexChu | Sự cố live 2026-11-05 16:02: một chủ đề `HOLD` đã `ESCALATED` (báo Owner lúc 11:46) để lại tin `pending_review` mà kiểm tra lúc khởi động coi là "legacy pending" ⇒ mọi lần restart đều `RulesHalt`, bot dừng sau deploy. Owner chọn “Sửa code”: kiểm tra khởi động coi tin `pending_review` thuộc chủ đề `ESCALATED` có thông báo escalation đã gửi (Owner đã được báo), chưa gọi GitHub và không có issue là đã xong; trạng thái khác, chủ đề `CLOSED`/`EXPIRED`, escalation chưa gửi thông báo (vd lifecycle HOLD) hoặc đã gọi GitHub vẫn dừng. Q5 ghi rõ. Trace runtime `rules_pending_store.py`; test `test_escalated_hold_source_does_not_halt_restart`, `test_escalated_exemption_is_narrow`. Không đổi quyết định, kênh ops hay reaction. |
 | v1.16.15 | 2026-11-05 | Claude / owner AlexChu | Sửa ticket READY của rules mode (live #95–#99): dữ kiện `work`/`observed`/`expected`/`problem`/`proposal` được điền vào đúng mục của template (hết "(chưa có thông tin)" và câu hỏi "Việc cần làm là gì?" sai). Owner 2026-11-05 “Áp cả hai”: tiêu đề/tóm tắt là một câu (task `<work> — <object>`, bug `<object>: <observed>`, feedback `<proposal hoặc problem>[ — <object>]`) thay cho dữ kiện nối bằng `; `; footer ticket theo luật markdown ghi `luật Rnn (rules/readiness.md)` (block mới `_common.md` · `provenance.rules`), lệnh thật vẫn `tầng 1 lệnh`. Trace runtime: `rules_intake.py`, `issue_format.py`, `pipeline.py`, `ticket_templates.py`, `_common.md`; test `RulesReadyTicketBodyTests`. Không đổi quyết định, kênh ops hay reaction. |
 | v1.16.13 | 2026-11-05 | Claude / owner AlexChu | Owner yêu cầu tạm tắt reaction ở group nguồn tới khi go-live: thêm config `telegram.source_reactions` (mặc định `true`; `false` = không tạo bộ gửi reaction, mọi đường heart/OK hand bỏ qua). Cập nhật TG-13 và trace runtime (`config.py`, `telegram_io.py`, test `SourceReactionsSwitchTests`). Không đổi quyết định, kênh ops hay dữ liệu. |

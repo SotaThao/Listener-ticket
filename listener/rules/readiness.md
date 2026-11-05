@@ -1,5 +1,7 @@
-<!-- rule-file: readiness · version 3 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 4 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
+
+Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -8,6 +10,62 @@ Cách đọc mọi bảng ở đây:
 - Đọc từ trên xuống, **dòng đầu tiên khớp mọi cột là kết quả**.
 - Ô `*` = bất kỳ. Ô có một hoặc nhiều giá trị trong backtick = giá trị phải là **một trong** các giá trị đó.
 - `cần CÓ tất cả`: mọi trường liệt kê phải CÓ. `cần CÓ ít nhất một`: ít nhất một trường CÓ. Ô `—` = không yêu cầu.
+
+## Bảng: prefilter
+
+Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ xét tin mới: không phải Reply, không command, không ảnh, không tài liệu. Khớp ⇒ `CHAT` ngay với luật `F1`, không gọi model. Không khớp ⇒ đi tiếp như cũ. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp.
+
+| # | Bước |
+|---|---|
+| P1 | Tin có ít nhất một link GitHub tới PR hoặc issue: `github.com/<owner>/<repo>/pull/<số>` hoặc `github.com/<owner>/<repo>/issues/<số>` |
+| P2 | Bỏ ký tự vô hình; bỏ link GitHub ở P1 (đuôi link dừng ở `,` `;`, khoảng trắng và chữ có dấu); còn link khác ⇒ không khớp; bỏ mọi `@tên`, mọi cụm chỉ gồm số hoặc `#` + số; đổi dấu câu, emoji và `_` thành khoảng trắng; chữ thường; tách theo khoảng trắng |
+| P3 | Mọi từ còn lại thuộc bảng `prefilter_words`, và có ít nhất một từ loại `việc` |
+| P4 | Khớp P1–P3 ⇒ `CHAT` (luật `F1`); báo lỗi sản phẩm hay có chữ ngoài bảng ⇒ không khớp |
+
+## Bảng: prefilter_words
+
+`việc` = việc được nhờ (phải có ít nhất một). `đệm` = xưng hô, xã giao, tên gọi PR/issue.
+
+| Loại | Từ |
+|---|---|
+| `việc` | `review` |
+| `việc` | `rv` |
+| `việc` | `duyệt` |
+| `việc` | `approve` |
+| `việc` | `merge` |
+| `việc` | `xem` |
+| `việc` | `coi` |
+| `việc` | `check` |
+| `đệm` | `anh` |
+| `đệm` | `em` |
+| `đệm` | `chị` |
+| `đệm` | `bạn` |
+| `đệm` | `mình` |
+| `đệm` | `team` |
+| `đệm` | `giúp` |
+| `đệm` | `giùm` |
+| `đệm` | `dùm` |
+| `đệm` | `hộ` |
+| `đệm` | `nhờ` |
+| `đệm` | `cho` |
+| `đệm` | `với` |
+| `đệm` | `nha` |
+| `đệm` | `nhé` |
+| `đệm` | `nhe` |
+| `đệm` | `nhá` |
+| `đệm` | `ạ` |
+| `đệm` | `ơi` |
+| `đệm` | `đi` |
+| `đệm` | `này` |
+| `đệm` | `cái` |
+| `đệm` | `đây` |
+| `đệm` | `link` |
+| `đệm` | `pr` |
+| `đệm` | `pull` |
+| `đệm` | `request` |
+| `đệm` | `issue` |
+| `đệm` | `please` |
+| `đệm` | `pls` |
 
 ## Bảng: intent_resolve
 
