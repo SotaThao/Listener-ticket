@@ -123,6 +123,15 @@ class WholeCaseTests(unittest.TestCase):
         self.assertTrue(body.endswith("confidence 0.83 · case 3 tin · tạo tự động bởi tg-triage</sub>"))
         self.assertTrue(body.startswith("<!-- tg:-1001234567890:1 -->\n"))
 
+    def test_rule_footer_names_readiness_row_only_for_valid_rule_id(self):
+        def footer(rule_id):
+            return format_issue(message(), classification(), "rule", False, details={}, rule_id=rule_id).body.rsplit("---", 1)[1]
+        self.assertIn("Phân loại: luật R10 (rules/readiness.md)", footer("R10"))
+        self.assertIn("luật R100 (rules/readiness.md)", footer("R100"))
+        for rejected in (None, "lifecycle_direct_recurrence", "R10a", "r10", "R", 10):
+            self.assertIn("Phân loại: tầng 1 lệnh", footer(rejected))
+        self.assertIn("xác nhận thủ công", format_issue(message(), classification(), "manual", False, details={}, rule_id="R10").body)
+
     def test_messages_are_ordered_by_received_time_then_id(self):  # (d)
         early = message(30, "sớm nhất", received_at=NOW)
         tie_low = message(5, "cùng giờ id thấp", received_at=NOW + timedelta(minutes=1))

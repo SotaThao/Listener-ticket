@@ -992,7 +992,7 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
             return defer()
         values=[ready.present[name].value for name in ('object','observed','work','problem','proposal') if name in ready.present]
         if not values: return defer()
-        summary='; '.join(values)[:200]
+        summary=_ready_summary(ready.intent,ready.present)
         classification=Classification(ready.intent,1.0,summary[:80],summary,'medium')
     except (ValueError,KeyError,TypeError):
         return defer()
@@ -1061,7 +1061,7 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
             raise RulesHalt('related predecessor changed after attachment processing')
         issue=format_issue(anchor,classification,'rule',False,pipeline.config.ollama.model,
             case_messages=recurrence if direct else [*recurrence,answer],key_message_keys=tuple((m.chat_id,m.message_id) for m in recurrence),
-            max_quoted=len(recurrence)+(0 if direct else 1),details={},
+            max_quoted=len(recurrence)+(0 if direct else 1),details=_ready_details(ready.present),rule_id=ready.rule,
             images=found.images if found else (),documents=found.documents if found else (),notes=found.notes if found else ())
         issue=replace(issue,body=_recurrence_body(issue.body,f'https://github.com/{repo}/issues/{parent}'))
         _prewrite_lifecycle_guard(pipeline,q['topic_id'],plan,all_members,(q['batch_id'],q['ordinal']),
@@ -1663,19 +1663,47 @@ def _map_append_proven(pipeline,members,number,expected,target):
         raise RulesHalt('comment mapping unresolved; Owner inspection required') from error
 
 
+# Rules facts (facts.md) -> type-template detail keys (models.DETAIL_STRING_KEYS).
+# Live 2026-11-05: without this, a READY ticket rendered "(chưa có thông tin)" and
+# asked for `work` that R10 had already required. `object` has no template slot.
+_READY_DETAIL_KEYS = (('work','work'),('observed','actual'),('expected','expected'),
+                      ('problem','problem'),('proposal','proposal'))
+
+
+def _ready_details(present):
+    return {detail: present[fact].value for fact,detail in _READY_DETAIL_KEYS if fact in present}
+
+
+def _ready_summary(intent, present):
+    """Owner 2026-11-05 ("Áp cả hai"): one readable sentence, not '; '-joined facts.
+
+    task: <work> — <object> · bug: <object>: <observed> · feedback: <proposal|problem>[ — <object>].
+    A missing part is dropped; an empty result falls back to the old joined values.
+    """
+    value=lambda name: ' '.join(present[name].value.split()) if name in present else ''
+    obj=value('object')
+    if intent=='task': parts,sep=(value('work'),obj),' — '
+    elif intent=='bug': parts,sep=(obj,value('observed')),': '
+    else: parts,sep=(value('proposal') or value('problem'),obj),' — '
+    text=sep.join(part for part in parts if part)
+    if not text:
+        text='; '.join(present[name].value for name in ('object','observed','work','problem','proposal') if name in present)
+    return text[:200]
+
+
 def _create_single(pipeline, source, topic, decision, evidence_messages=None, members=None, document_reads=()):
     from .models import Classification
     from .pipeline import Plan
     from . import group_notices
     values = [decision.present[name].value for name in ('object','observed','work','problem','proposal') if name in decision.present]
     if not values or decision.intent not in ('bug','task','feedback'): raise ValueError('invalid ready facts')
-    summary = '; '.join(values)[:200]
+    summary = _ready_summary(decision.intent,decision.present)
     classification = Classification(decision.intent,1.0,summary[:80],summary,'medium')
     case,group,members = pipeline.store.autonomy_case(list(members or [source]))
     plan = Plan(group,members,source,'rule','issue',classification,typed=True,reason=decision.rule,
                 key_ids=tuple(m.message_id for m in members) if evidence_messages is None else (),
                 evidence_messages=tuple(evidence_messages) if evidence_messages is not None else None,
-                document_reads=tuple(document_reads))
+                document_reads=tuple(document_reads),details=_ready_details(decision.present),rule_id=decision.rule)
     sender = pipeline.notice_sender
     pipeline.notice_sender = None
     pipeline._rules_warning_sender = sender

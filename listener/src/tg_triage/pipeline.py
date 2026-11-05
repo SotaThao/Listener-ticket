@@ -97,6 +97,7 @@ class Plan:
     document_reads: tuple = ()       # host read proofs, never model content or authority
     related_issue_number: int | None = None  # host-proven replied ticket; never a model target
     evidence_messages: tuple | None = None  # original composite provenance, not managed source membership
+    rule_id: str | None = None      # readiness row (e.g. R10) for the footer of a markdown-rule ticket
 
 
 def _order(item):
@@ -935,7 +936,8 @@ class Pipeline:
                 plan.action == "needs_human", self.config.ollama.model,
                 case_messages=plan.evidence_messages or plan.messages, key_message_ids=plan.key_ids, images=found.images,
                 documents=found.documents, notes=found.notes, clarify=plan.clarify, text=plan.text,
-                max_quoted=len(plan.evidence_messages or plan.messages), details=plan.details if plan.details is not None else {})
+                max_quoted=len(plan.evidence_messages or plan.messages), details=plan.details if plan.details is not None else {},
+                rule_id=plan.rule_id)
             if type(plan.related_issue_number) is int and plan.related_issue_number>0:
                 issue=replace(issue,body=_related_body(issue.body,self.config.gh_repo,plan.related_issue_number))
             if not self.store.reserve_github_call(first, self.config.max_issues_per_hour):

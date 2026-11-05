@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.13 · **Updated**: 2026-11-05 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.15 · **Updated**: 2026-11-05 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -2256,7 +2256,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/group_notices.py": "94c2a95d6757d7fa4e42779b76dcddb32346b37f3de8ceab83c43d569871598d",
     "listener/src/tg_triage/ingress_diagnostics.py": "f61db228b7b23e4357c47ec38b3fc915cfa0e9ec2a1eec26071abd897bb4f82a",
     "listener/src/tg_triage/ingress_model.py": "489f3005ecd639f30cef3cb2acb3edc732b08f63921384eab408ed687fb59c96",
-    "listener/src/tg_triage/issue_format.py": "1e5ae3e360e5088b8ad802d871bee1c4415118de70e95fbb77e4e4a0de1dc957",
+    "listener/src/tg_triage/issue_format.py": "c01c865efe9a037bb006f5c3e0d1673716c53ca176b4694de7ec972ba939b0ad",
     "listener/src/tg_triage/legacy_preflight.py": "49225f7053005e8232120c0da61191eec493dc6589fb2cdc0831b26aecd38880",
     "listener/src/tg_triage/legacy_reconciliation.py": "c26c46020bd218f4d5bf0df9e2111cf0094e7ab2f5ada1195680896b2d7baa50",
     "listener/src/tg_triage/lifecycle.py": "0c06d3a4360364b28a1be851bc7ff88080293486c3a7d6d8e276286eede84155",
@@ -2264,7 +2264,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/models.py": "4f5eccde0c4b989e7ae8fac637a3a1ee29c38b523c6b289c32a592b6dd672f79",
     "listener/src/tg_triage/offline_snapshot.py": "07589cfcb814048842bce602aeb5d1bd5e48705bd8ad1bafa0c79fb653b2909e",
     "listener/src/tg_triage/pacing.py": "6d104e30d9b51883dfb27d56ad107089e93a42e88c085ae72e03c0f06af0793e",
-    "listener/src/tg_triage/pipeline.py": "46d604735d4dc54ef2dec58bd2822a9363a6b3316e09a478e80b3ee86a4a5219",
+    "listener/src/tg_triage/pipeline.py": "6af1619cbbc7343a3d4b3349cac17b7115c641817049e480af002c898ffda87c",
     "listener/src/tg_triage/provider.py": "e99a0779abaf25d9da65de154217a5a036361abe223a5ab812de903df22cc59c",
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
     "listener/src/tg_triage/receipt.py": "ff455fdfb9424cc3e802641607dfe3c872ddc65490b2705bb804ca92f282d51a",
@@ -2272,7 +2272,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_analysis.py": "8d1ed397042fa99bf8fc50f4841a5256c1596cfa3a15888ea4228538e2f42d7e",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "242f8e3a9afb094d4a95ce61415d54bd3569f4b03ec1dba0f24510552470d87e",
-    "listener/src/tg_triage/rules_intake.py": "cd6797de584d134e7ee99a7420cea598359664a1a44313ff1228fad1bd90281f",
+    "listener/src/tg_triage/rules_intake.py": "0fa3cc5b1a4f72866d3f814ea15e524a57e61848d8f01b0aebf91d4c4943f082",
     "listener/src/tg_triage/rules_pending_store.py": "b7e415d0ee9e64f2c8c2c4d899bad17008d5f112aaffa611e5706274f4dfa8cb",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
@@ -2280,11 +2280,11 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/thinking.py": "26d7ead0c0355e03a03aa85eafa561bb2231b746ddb17621f2ff56355fb78224",
     "listener/src/tg_triage/thinking_transport.py": "12aa57301f012f1091e79af7a3756139c8ac8b475e4c97e4d9b66024932e0d66",
     "listener/src/tg_triage/ticket_status.py": "6ca9ee02dcfd523df6e778247e4ed1bdac82ccc9233c9aacf0dad7cdcfe2d4bb",
-    "listener/src/tg_triage/ticket_templates.py": "b9bc9465dc2ba755efdb58b33707ce295da871530f6769b5d138b6dda52cd4a0",
+    "listener/src/tg_triage/ticket_templates.py": "ae31c782edd0b9e183a9d3d826d47cd6b5c15dea4f3a4fe9a3cbc6e2a67d8d07",
     "listener/src/tg_triage/topic_store.py": "495bd90150783df45463d86a66dd32927e69fec001f7406808f8496f2466f672",
     "listener/src/tg_triage/trace.py": "3b4c55d7664a8024359c3a35113841c7af76e7770a1823dfe3843d3ea01d2ba0",
     "listener/src/tg_triage/usage.py": "421146bd0ac181a2ff45be7c2d7e82cca1ff54cafc2941bc958f20eb9622828e",
-    "listener/templates/github-ticket/_common.md": "289673fcdee85098ce2b0f64675961b58f5260a0aac271788c5c3b2c692c6c1d",
+    "listener/templates/github-ticket/_common.md": "14be08601a1ef8cb0dce40bab5e54e317376cbbe56c8c9d41c1bc8d57e8e9716",
     "listener/templates/github-ticket/bug.md": "4a0eb199589d55dbc33c2db4297b71258858c915e513c79ab2be62c23e390bb4",
     "listener/templates/github-ticket/comments.md": "3a358d5d6ee36d1bcc810fadb03208c2f9cffbd9a672ccdb5348761fa43f8a27",
     "listener/templates/github-ticket/feedback.md": "4f42dce1ab50b3f8c492f24523caf447d4273b8fbad629243b716e81bbc92cda",
@@ -2339,6 +2339,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.15 | 2026-11-05 | Claude / owner AlexChu | Sửa ticket READY của rules mode (live #95–#99): dữ kiện `work`/`observed`/`expected`/`problem`/`proposal` được điền vào đúng mục của template (hết "(chưa có thông tin)" và câu hỏi "Việc cần làm là gì?" sai). Owner 2026-11-05 “Áp cả hai”: tiêu đề/tóm tắt là một câu (task `<work> — <object>`, bug `<object>: <observed>`, feedback `<proposal hoặc problem>[ — <object>]`) thay cho dữ kiện nối bằng `; `; footer ticket theo luật markdown ghi `luật Rnn (rules/readiness.md)` (block mới `_common.md` · `provenance.rules`), lệnh thật vẫn `tầng 1 lệnh`. Trace runtime: `rules_intake.py`, `issue_format.py`, `pipeline.py`, `ticket_templates.py`, `_common.md`; test `RulesReadyTicketBodyTests`. Không đổi quyết định, kênh ops hay reaction. |
 | v1.16.13 | 2026-11-05 | Claude / owner AlexChu | Owner yêu cầu tạm tắt reaction ở group nguồn tới khi go-live: thêm config `telegram.source_reactions` (mặc định `true`; `false` = không tạo bộ gửi reaction, mọi đường heart/OK hand bỏ qua). Cập nhật TG-13 và trace runtime (`config.py`, `telegram_io.py`, test `SourceReactionsSwitchTests`). Không đổi quyết định, kênh ops hay dữ liệu. |
 | v1.16.12 | 2026-11-04 | Claude / owner AlexChu | Ghi Owner GO cho release `7ba210b` (rules mode, ops supergroup, fingerprint) và kết quả P12 thực tế; thêm câu chỉ dẫn ops ở TG-09/11/12 cho rules mode, giữ nguyên chữ mặc định khi tắt rules. Các dòng v1.16.9–v1.16.11 ghi “chờ kiểm thử”: đã được kiểm (1670 test OK, review APPROVED). Không đổi business rule hay trace runtime. |
 | v1.16.11 | 2026-11-04 | Codex / owner AlexChu | Khôi phục xử lý tái diễn chỉ có ảnh sau xác nhận B đã bind trong ops, giữ namespace ID nguồn riêng; chờ controller kiểm thử lại. |

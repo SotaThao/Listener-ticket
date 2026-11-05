@@ -31,7 +31,7 @@ CATALOG = {
     "task.md": {"body": _spec("summary:T task_evidence:B questions:L original:B footer:B", "work:T reason:T scope_in:T scope_out:T due:T done:L"), "question.work": {}},
     "needs-human.md": {"body": _spec("summary:T evidence:B questions:L original:B footer:B")},
     "_common.md": {"original": _spec("count:T senders:T time:T messages:B"), "footer": _spec("provenance:T"),
-                   "provenance.manual": {}, "provenance.rule": {}, "provenance.model": _spec("model:T confidence:T"),
+                   "provenance.manual": {}, "provenance.rule": {}, "provenance.rules": _spec("rule:T"), "provenance.model": _spec("model:T confidence:T"),
                    "provenance.case": _spec("count:T"), "confidence.none": {}, "original.open_link": {},
                    "original.key_mark": {}, "original.hidden": _spec("count:T"), "original.image_only": {},
                    "original.document_only": {}, "original.unknown_sender": {}, "document.fallback_label": _spec("index:T"),

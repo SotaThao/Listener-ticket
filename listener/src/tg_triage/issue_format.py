@@ -279,6 +279,7 @@ def _clean_line(value) -> str:
 
 
 TIME_FORMAT = "%d/%m %H:%M"
+RULE_ID = re.compile(r"R\d+")
 MAX_DETAIL_CHARS = 500
 MAX_DETAIL_ITEMS = 10
 MAX_DETAIL_ITEM_CHARS = 200
@@ -353,7 +354,7 @@ def _original_text(item, limit) -> str:
 def format_issue(message: IncomingMessage, classification: Classification | None,
                  tier: str, needs_human: bool, model: str = "qwen3.5:9b", *,
                  case_messages=None, key_message_ids=None, key_message_keys=None, images=(), documents=(), notes=(),
-                 clarify=None, text=None, max_quoted=None, details=None) -> Issue:
+                 clarify=None, text=None, max_quoted=None, details=None, rule_id=None) -> Issue:
     """Render one issue. `message` is the case's (or topic group's) first message.
 
     `details=None` preserves the legacy body; an empty mapping enables the type template
@@ -422,6 +423,9 @@ def format_issue(message: IncomingMessage, classification: Classification | None
         blocks.append(active().render('_common.md', 'original.hidden', {'count': str(hidden)}))
     if tier == "manual":
         provenance = active().render('_common.md', 'provenance.manual')
+    elif tier == "rule" and isinstance(rule_id, str) and RULE_ID.fullmatch(rule_id):
+        # Owner 2026-11-05: a markdown-rule ticket names its readiness row, not the command tier.
+        provenance = active().render('_common.md', 'provenance.rules', {'rule': rule_id})
     elif tier == "rule":
         provenance = active().render('_common.md', 'provenance.rule')
     else:

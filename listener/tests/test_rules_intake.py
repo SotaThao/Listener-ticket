@@ -1499,3 +1499,77 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         self.assertIsNone(result)  # Store recovery already retained the queued deferred Reply as HOLD.
         self.assertEqual(('pending_review','rules_reply_deferred_during_effect'),tuple(store.connection.execute('SELECT decision,reason FROM messages WHERE chat_id=? AND message_id=?',(late.chat_id,late.message_id)).fetchone()))
         self.assertEqual(1,provider.calls);self.assertEqual([],github.calls);self.assertEqual(1,len(sent))
+
+
+class RulesReadyTicketBodyTests(RulesBootstrapTests):
+    """Live 2026-11-05 (#95-#99): READY facts must fill the type template, not raise false questions."""
+
+    @staticmethod
+    def section(body, title):
+        # Heading-format agnostic: Owner may renumber or drop emoji ("### 2. Việc cần làm").
+        import re
+        return re.split(r'^### .*'+re.escape(title)+r'.*$',body,maxsplit=1,flags=re.M)[1].split('\n### ',1)[0]
+
+    def created(self, facts_json, text):
+        snapshot=self.snapshot()
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False
+            def _ask(self,body,parse,attempts): return parse(facts_json)
+        class GitHub:
+            def __init__(self): self.calls=[]
+            def create_issue(self,issue): self.calls.append(issue); return len(self.calls),None
+        store=Store(':memory:'); self.addCleanup(store.close)
+        settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
+                         telegram=replace(config().telegram,ops_chat_id=-1009876543210))
+        github=GitHub()
+        pipeline=Pipeline(settings,store,Provider(),github,rules_snapshot=snapshot,notice_sender=lambda *a:77)
+        pipeline.process(message(42,text=text))
+        self.assertEqual(1,len(github.calls))
+        return github.calls[0]
+
+    def test_ready_task_fills_work_and_asks_no_false_work_question(self):
+        issue=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"task","source_ids":[42]},'
+                           '"object":{"value":"function này","source_ids":[42]},"work":{"value":"gán lại function","source_ids":[42]}}}]}',
+                           'function này cần gán lại function')
+        section=self.section(issue.body,'Việc cần làm')
+        self.assertIn('gán lại function',section)
+        self.assertNotIn('(chưa có thông tin)',section)
+        self.assertNotIn('Việc cần làm là gì?',issue.body)
+
+    def test_ready_bug_fills_observed_as_actual(self):
+        issue=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+                           '"object":{"value":"POS","source_ids":[42]},"observed":{"value":"không in được receipt","source_ids":[42]}}}]}',
+                           'POS không in được receipt')
+        self.assertIn('**Thực tế:** không in được receipt',issue.body)
+
+    def test_ready_feedback_fills_problem_and_proposal(self):
+        issue=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"feedback","source_ids":[42]},'
+                           '"problem":{"value":"khó tìm giao dịch","source_ids":[42]},"proposal":{"value":"thêm bộ lọc ngày","source_ids":[42]}}}]}',
+                           'khó tìm giao dịch, nên thêm bộ lọc ngày')
+        section=self.section(issue.body,'Vấn đề / nhu cầu')
+        self.assertIn('khó tìm giao dịch',section)
+        self.assertIn('**Đề xuất:** thêm bộ lọc ngày',issue.body)
+
+    def test_ready_titles_are_sentences_not_joined_facts(self):
+        task=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"task","source_ids":[42]},'
+                          '"object":{"value":"function này","source_ids":[42]},"work":{"value":"gán lại function","source_ids":[42]}}}]}',
+                          'function này cần gán lại function')
+        self.assertEqual('[task] gán lại function — function này',task.title)
+        self.assertIn('gán lại function — function này',self.section(task.body,'Tóm tắt'))
+        self.assertNotIn(';',task.title)
+        bug=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+                         '"object":{"value":"POS","source_ids":[42]},"observed":{"value":"không in được receipt","source_ids":[42]}}}]}',
+                         'POS không in được receipt')
+        self.assertEqual('[bug] POS: không in được receipt',bug.title)
+        feedback=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"feedback","source_ids":[42]},'
+                              '"problem":{"value":"khó tìm giao dịch","source_ids":[42]},"proposal":{"value":"thêm bộ lọc ngày","source_ids":[42]}}}]}',
+                              'khó tìm giao dịch, nên thêm bộ lọc ngày')
+        self.assertEqual('[feedback] thêm bộ lọc ngày',feedback.title)
+
+    def test_ready_footer_names_markdown_rule_not_command_tier(self):
+        issue=self.created('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"task","source_ids":[42]},'
+                           '"object":{"value":"màn báo cáo","source_ids":[42]},"work":{"value":"thêm CSV","source_ids":[42]}}}]}',
+                           'màn báo cáo thêm CSV')
+        footer=issue.body.rsplit('---',1)[1]
+        self.assertIn('luật R10 (rules/readiness.md)',footer)
+        self.assertNotIn('tầng 1 lệnh',footer)
