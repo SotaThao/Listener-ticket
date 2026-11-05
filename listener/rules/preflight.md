@@ -66,9 +66,33 @@ P13 PASS — Owner: GO · <ngày>
 Kết luận: GO|NO_GO
 ```
 
-## Hiện trạng (2026-11-04)
+## Hiện trạng (2026-11-05)
 
 `GO`:
+
+```
+Phiếu bật · release main 2eae517 · ngày 2026-11-05
+Fingerprint rules: 6f40ec4377b2cc47c41b38860e0c512982801e68c7324881bb09babc5d9f3df0
+Fingerprint template: 7f0087efa70689014396bb703266520df9040003bff5b89fe3a048bbf6f30a22
+P1  PASS — readiness.md, examples.md v4 ACTIVE; Owner “Duyệt lọc trước” 2026-11-05 — ký: OWNER, AlexChu
+P2  PASS — test_rules_markdown trong full suite — ký: DEV
+P3  PASS — check-config + kiểm khởi động trên ledger thật (chỉ đọc), fingerprint như trên — ký: DEV
+P4  PASS — 1757 test OK (skipped=2) trên 2eae517; bản cài trên máy chạy 1757 OK — ký: DEV
+P5  PASS — policy checker 33/61 + policy test — ký: DEV
+P6  PASS — review GATE 0b APPROVED cho 96cce8e (Việc cần làm), 10ba5fd (kiểm khởi động ESCALATED), 2eae517 (lọc trước) — ký: DEV
+P7  PASS — fake-tool test: pipeline live, batch, extension bật/tắt — ký: DEV
+P8  WAIVED — chưa chạy lại corpus model thật; ví dụ gửi model không đổi so với 7ba210b, lọc trước chạy trước model — ký: OWNER, AlexChu
+P9  PASS — config máy chạy không đổi (SHA trước/sau giống nhau), source_reactions=false, group ops như phiếu trước — ký: OPERATOR
+P10 PASS — rollback thật 2026-11-05 16:02: script deploy tự cài lại bản trước — ký: OPERATOR
+P11 PASS — deploy 2eae517, restart 21:39, fingerprint trong log khớp P3, 0 lỗi — ký: OPERATOR
+P12 UNCHECKED — group nguồn là PROD, không gửi tin thử; ticket thật #111 xác nhận mục "Việc cần làm"; theo dõi tin review PR thật phải ra F1 — ký: OPERATOR
+P13 PASS — Owner: GO · 2026-11-05
+Kết luận: GO
+```
+
+Owner 2026-11-05: “Ký GO” (P8 WAIVED, P12 theo dõi tin thật).
+
+Phiếu trước (thay thế bởi phiếu trên):
 
 ```
 Phiếu bật · release main 7ba210b · ngày 2026-11-04
