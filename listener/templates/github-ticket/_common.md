@@ -15,6 +15,9 @@ xác nhận thủ công
 {{#block provenance.rule}}
 tầng 1 lệnh
 {{/block}}
+{{#block provenance.rules}}
+luật {{rule}} (rules/readiness.md)
+{{/block}}
 {{#block provenance.model}}
 tầng 2 {{model}}, confidence {{confidence}}
 {{/block}}
