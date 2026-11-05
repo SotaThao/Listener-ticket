@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.12 · **Updated**: 2026-11-04 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.13 · **Updated**: 2026-11-05 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -243,7 +243,7 @@ Ngoại lệ pending do **vision partition technical failure**: mỗi component 
 
 ### TG-13 — Reaction
 
-Command đủ điều kiện có heart khi nhận; topic issue có heart trước tạo và OK hand sau khi đã biết issue number. Waiting/followup không tự có reaction mới; /question không reaction. Dry-run có thể heart nhưng không OK hand.
+Command đủ điều kiện có heart khi nhận; topic issue có heart trước tạo và OK hand sau khi đã biết issue number. Waiting/followup không tự có reaction mới; /question không reaction. Dry-run có thể heart nhưng không OK hand. Config `telegram.source_reactions = false` tắt mọi reaction trong group nguồn (heart, OK hand, heart của command, cả trong dry-run); mặc định `true`; chỉ có hiệu lực sau khi restart listener. Tắt reaction không đổi nơi gửi tin chữ (rules mode: chỉ group ops). Owner 2026-11-05 yêu cầu tạm tắt cho tới khi sản phẩm go-live; việc đặt `false` trên máy chạy được ghi riêng trong bằng chứng deploy. Khi bật lại, bot không bù reaction cho tin đã xử lý xong lúc tắt; chỉ tin được quyết định muộn sau khi bật (pending được trả lời ở ops, case đóng bởi sweep, tin còn trong hàng đợi lúc restart) mới nhận reaction trên tin gốc cũ.
 
 ### TG-14 — Ảnh và tài liệu
 
@@ -1168,6 +1168,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/pipeline.py",
           "symbol": "Pipeline._acknowledge"
+        },
+        {
+          "path": "listener/src/tg_triage/telegram_io.py",
+          "symbol": "run"
         }
       ],
       "tests": [
@@ -1182,6 +1186,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_direct_call.py",
           "symbol": "Test37To42.test_39_an_automatic_bug_in_dry_run_is_hearted_but_never_ok_handed"
+        },
+        {
+          "path": "listener/tests/test_reactions.py",
+          "symbol": "SourceReactionsSwitchTests.test_off_builds_no_reaction_sender_and_worker_gets_none"
+        },
+        {
+          "path": "listener/tests/test_reactions.py",
+          "symbol": "SourceReactionsSwitchTests.test_none_react_skips_command_heart_and_issue_reaction"
         }
       ]
     },
@@ -2233,7 +2245,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "860dae897cbf50e110d9761e29272e1e0d7ee2a2b65c681f7ed7637d4f9362a3",
-    "listener/src/tg_triage/config.py": "72c18a4a67b80186e01c27164da2f8e8661794936d28685ae4341d9280b4764b",
+    "listener/src/tg_triage/config.py": "33464c0643bfb4a86a7be648be979e6899ea340b54b302d7b41cd59e10a616d8",
     "listener/src/tg_triage/decision_rules.py": "6aa004a2bbadc3fc229c4ff9c13e83103748c37f9325a88a96a49b624d6cd250",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "163595000162d5fa1c162538d997c449d2913934e03f104fb79603e778b0cd1f",
@@ -2264,7 +2276,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_pending_store.py": "b7e415d0ee9e64f2c8c2c4d899bad17008d5f112aaffa611e5706274f4dfa8cb",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
-    "listener/src/tg_triage/telegram_io.py": "207c9908128f2b099695ea0ad4b7d5d38a2db6df7cdaf53bdbca40146207577b",
+    "listener/src/tg_triage/telegram_io.py": "5980311c35b9966ff1a1680870fc9a800ddda1b855d1707de3307d8ecf34ec7c",
     "listener/src/tg_triage/thinking.py": "26d7ead0c0355e03a03aa85eafa561bb2231b746ddb17621f2ff56355fb78224",
     "listener/src/tg_triage/thinking_transport.py": "12aa57301f012f1091e79af7a3756139c8ac8b475e4c97e4d9b66024932e0d66",
     "listener/src/tg_triage/ticket_status.py": "6ca9ee02dcfd523df6e778247e4ed1bdac82ccc9233c9aacf0dad7cdcfe2d4bb",
@@ -2309,7 +2321,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "472393937d943ee85cf930a0621a427298e9d0d3ef4b5ef1850689f6ddf07f6c",
+  "runtime_fingerprint": "9b5e40109129a0d9a212df84d5074195d436cc48d3c38ad2ced588cf6a086a87",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2327,6 +2339,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.13 | 2026-11-05 | Claude / owner AlexChu | Owner yêu cầu tạm tắt reaction ở group nguồn tới khi go-live: thêm config `telegram.source_reactions` (mặc định `true`; `false` = không tạo bộ gửi reaction, mọi đường heart/OK hand bỏ qua). Cập nhật TG-13 và trace runtime (`config.py`, `telegram_io.py`, test `SourceReactionsSwitchTests`). Không đổi quyết định, kênh ops hay dữ liệu. |
 | v1.16.12 | 2026-11-04 | Claude / owner AlexChu | Ghi Owner GO cho release `7ba210b` (rules mode, ops supergroup, fingerprint) và kết quả P12 thực tế; thêm câu chỉ dẫn ops ở TG-09/11/12 cho rules mode, giữ nguyên chữ mặc định khi tắt rules. Các dòng v1.16.9–v1.16.11 ghi “chờ kiểm thử”: đã được kiểm (1670 test OK, review APPROVED). Không đổi business rule hay trace runtime. |
 | v1.16.11 | 2026-11-04 | Codex / owner AlexChu | Khôi phục xử lý tái diễn chỉ có ảnh sau xác nhận B đã bind trong ops, giữ namespace ID nguồn riêng; chờ controller kiểm thử lại. |
 | v1.16.10 | 2026-11-04 | Codex / owner AlexChu | Phân biệt ID tin nguồn và ops, kiểm collision receipt khi khôi phục và giữ guard gửi ops ổn định khi khôi phục sender; chờ controller kiểm thử lại. |

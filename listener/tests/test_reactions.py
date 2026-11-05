@@ -575,5 +575,79 @@ class TelethonSenderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item.emoticon for item in sent[0].reaction], [HEART])
 
 
+class SourceReactionsSwitchTests(unittest.IsolatedAsyncioTestCase):
+    """TG-13: source_reactions = false places no reaction anywhere in source groups."""
+
+    def load(self, telegram_lines):
+        return ListenAllGroupsConfigTests.load(self, "chat_ids = [-1001234567890]\n" + telegram_lines)
+
+    def test_default_on_example_on_and_false_loads(self):
+        self.assertTrue(load_config(EXAMPLE, {"TG_API_ID": "1", "TG_API_HASH": FAKE_HASH}).telegram.source_reactions)
+        self.assertTrue(self.load("").telegram.source_reactions)
+        self.assertFalse(self.load("source_reactions = false").telegram.source_reactions)
+
+    def test_switch_must_be_boolean(self):
+        for value in ('"no"', "0"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ConfigError, "telegram.source_reactions"):
+                    self.load("source_reactions = " + value)
+
+    async def run_transport(self, source_reactions):
+        events = SimpleNamespace(NewMessage=lambda **kwargs: kwargs)
+        seen, handlers = {}, []
+
+        async def worker(queue, pipeline, stop, **kwargs):
+            seen["react"] = kwargs.get("react")
+
+        async def enqueue(*args, **kwargs):
+            seen["enqueue_react"] = kwargs.get("react", "missing")
+
+        client = SimpleNamespace(
+            add_event_handler=lambda handler, builder: handlers.append(handler),
+            connect=AsyncMock(), get_me=AsyncMock(return_value=SimpleNamespace(bot=False)),
+            run_until_disconnected=AsyncMock(), disconnect=AsyncMock())
+        settings = config()
+        settings = replace(settings, telegram=replace(settings.telegram, source_reactions=source_reactions))
+        store = Store(":memory:")
+        self.addCleanup(store.close)
+        pipeline = SimpleNamespace(store=store, process=lambda msg: None, config=settings)
+        sender = AsyncMock()
+        with patch.dict("sys.modules", {"telethon": SimpleNamespace(events=events)}), \
+                patch("tg_triage.telegram_io.make_client", return_value=client), \
+                patch("tg_triage.telegram_io.make_reaction_sender", return_value=sender) as factory, \
+                patch("tg_triage.telegram_io.worker", side_effect=worker):
+            with self.assertRaisesRegex(RuntimeError, "disconnected"):
+                await telegram_io.run(settings, pipeline)
+            with patch("tg_triage.telegram_io.enqueue_event", side_effect=enqueue):
+                await handlers[0](event())
+        self.enqueue_react = seen.get("enqueue_react", "not-called")
+        return factory, seen.get("react", "not-called"), sender
+
+    async def test_off_builds_no_reaction_sender_and_worker_gets_none(self):
+        factory, react, sender = await self.run_transport(False)
+        factory.assert_not_called()
+        self.assertIsNone(react)
+        self.assertIsNone(self.enqueue_react)
+        sender.assert_not_called()
+
+    async def test_on_keeps_current_behaviour(self):
+        factory, react, _ = await self.run_transport(True)
+        factory.assert_called_once()
+        self.assertIs(react, factory.return_value)
+        self.assertIs(self.enqueue_react, factory.return_value)
+
+    async def test_none_react_skips_command_heart_and_issue_reaction(self):
+        queue = asyncio.Queue()
+        store = Store(":memory:")
+        self.addCleanup(store.close)
+        await telegram_io.enqueue_event(event(), queue, (CHAT,), store, react=None)
+        self.assertEqual(queue.qsize(), 1)
+        self.assertFalse(store.reaction_done(CHAT, 7, "received"))
+        pipeline = SimpleNamespace(config=SimpleNamespace(mode="live"), store=store)
+        decision = Decision("issue", "rule", issue_number=7, case_key=f"{CHAT}:7")
+        await telegram_io._react_issue_created(pipeline, None, decision, CHAT, 7)
+        self.assertFalse(store.reaction_done(CHAT, 7, "ok"))
+
+
 if __name__ == "__main__":
     unittest.main()

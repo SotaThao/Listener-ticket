@@ -31,6 +31,7 @@ class TelegramConfig:
     listen_all_groups: bool = False
     ignored_command_prefixes: tuple[str, ...] = ()
     ops_chat_id: int | None = None
+    source_reactions: bool = True
 
 
 @dataclass(frozen=True)
@@ -291,6 +292,9 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
     ops_chat_id = tg.get('ops_chat_id')
     if ops_chat_id is not None and (type(ops_chat_id) is not int or ops_chat_id >= 0):
         raise ConfigError('telegram.ops_chat_id: expected group ID')
+    source_reactions = tg.get("source_reactions", True)
+    if type(source_reactions) is not bool:
+        raise ConfigError("telegram.source_reactions: expected true or false")
     proxy = tg.get("proxy", {})
     if not isinstance(proxy, dict):
         raise ConfigError("telegram.proxy: expected TOML table")
@@ -393,7 +397,8 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         telegram=TelegramConfig(
             _string(tg, "session_path", "telegram.session_path"), tuple(chats),
             _integer(tg.get("min_text_length"), "telegram.min_text_length", 0),
-            ProxyConfig(host, port, secret), listen_all, tuple(ignored_prefixes), ops_chat_id),
+            ProxyConfig(host, port, secret), listen_all, tuple(ignored_prefixes), ops_chat_id,
+            source_reactions),
         ollama=OllamaConfig(
             (base_url if provider == "ollama" else url).rstrip("/"), model_name, timeout,
             _number(ollama.get("confidence_threshold"), "ollama.confidence_threshold", 0, 1)),

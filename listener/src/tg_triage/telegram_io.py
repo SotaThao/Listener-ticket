@@ -719,7 +719,8 @@ async def run(config, pipeline):
     from telethon import events
 
     client = make_client(config)
-    react = make_reaction_sender(client)
+    # TG-13: source_reactions = false turns off every reaction in source groups (Owner, until go-live).
+    react = make_reaction_sender(client) if config.telegram.source_reactions else None
     queue = asyncio.Queue()
     stop = asyncio.Event()
     cleanup_signals = lambda: None

@@ -68,6 +68,12 @@ a non-blocking OS lock on `tg-triage.lock` in the database directory, acquired
 before recovery; a contended lock exits with code 3. Linux uses flock and Windows locks byte zero.
 CSV export does not perform recovery or change message decisions.
 
+`[telegram] source_reactions` defaults to `true`. Set it to `false` to stop every reaction
+the bot places in source groups (received heart, issue OK hand, command heart); text output
+is unaffected. The key is read at startup, so restart the listener after changing it. The
+Owner requested it off on 2026-11-05 until go-live (TG-13); the live-config change is a
+separate deploy step. Turning it back on does not backfill reactions for items finished while off.
+
 The experimental `[thinking] decision_rules_enabled` setting defaults to `false`.
 With it off, existing intake and ANALYZE/STATUS behavior remain in use. With it on,
 `check-config` requires thinking and autonomous mode, a separate `telegram.ops_chat_id`,

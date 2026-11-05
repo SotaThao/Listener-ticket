@@ -8,6 +8,8 @@ chat_ids = [-1001234567890]
 listen_all_groups = false
 # Required only when decision rules are enabled; must be distinct from source groups.
 # ops_chat_id = -1009876543210
+# false = the bot places no reaction (heart / OK hand) in source groups; read at startup.
+source_reactions = true
 # Kept for compatibility; no longer used to drop short messages (the model judges them, 12.12).
 min_text_length = 8
 
