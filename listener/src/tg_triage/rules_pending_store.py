@@ -307,6 +307,16 @@ def check_connection_before_recovery(connection):
                  if 'rules_sources' in tables else '')
         if 'rules_deferred_ops' in tables:
             bound += " AND NOT EXISTS (SELECT 1 FROM rules_deferred_ops d JOIN rules_topics t ON t.topic_id=d.topic_id WHERE d.chat_id=m.chat_id AND d.message_id=m.message_id AND t.status='OPEN')"
+        if {'rules_sources','rules_notices'} <= tables:
+            # Live 2026-11-05: an escalated HOLD (terminal per states.md) left its no-ticket
+            # `pending_review` source here and halted every later restart. Settled only when the
+            # Owner was provably notified (a sent escalation notice), with no GitHub call and no
+            # issue. An escalation without a sent notice (e.g. lifecycle HOLD) still halts.
+            bound += (" AND NOT (m.decision='pending_review' AND m.github_called_at IS NULL AND m.issue_number IS NULL"
+                      " AND m.issue_url IS NULL AND EXISTS (SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id"
+                      " WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id AND t.status='ESCALATED'"
+                      " AND EXISTS (SELECT 1 FROM rules_notices n WHERE n.topic_id=t.topic_id AND n.kind='escalation'"
+                      " AND n.status='sent' AND n.notice_id>0)))")
         unowned=connection.execute("SELECT m.chat_id,m.message_id FROM messages m WHERE m.decision IN ('queued','classifying','in_case','pending','pending_review') " + bound + " LIMIT 1001").fetchall()
         if unowned:
             settled=_proven_closed_chat_sources(connection)

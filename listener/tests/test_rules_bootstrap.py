@@ -264,6 +264,65 @@ class RulesBootstrapTests(unittest.TestCase):
         provider.assert_not_called()
         self.assertEqual(hashlib.sha256(db.read_bytes()).digest(), before)
 
+    def _escalated_hold_db(self, name, *, decision='pending_review', topic_status='ESCALATED', notice='sent',
+                           github=False, issue=False, also_closed=False):
+        """Live 2026-11-05 shape: HOLD topic escalated to the Owner (sent escalation notice),
+        source left as no-ticket pending_review."""
+        from tg_triage.store import Store
+        from tg_triage.models import Decision
+        from tg_triage.rules_pending_store import RulesPendingStore
+        from tests.helpers import message
+        db=self.root/name; store=Store(db); pending=RulesPendingStore(store)
+        source=message(6344,text='không trích được'); store.enqueue(source)
+        topic=f'batch:{source.chat_id}:6344'
+        pending.create(topic,source.chat_id,source.message_id)
+        if also_closed:
+            pending.create('other-topic',source.chat_id,source.message_id); self.assertTrue(pending.close('other-topic','CLOSED'))
+        store.finish(source,Decision('pending_review','rule',case_key=topic,reason='rules_extract_pending'))
+        with store.connection:
+            store.connection.execute("UPDATE rules_topics SET phase='HOLD' WHERE topic_id=?",(topic,))
+            if decision!='pending_review':
+                store.connection.execute('UPDATE messages SET decision=? WHERE message_id=6344',(decision,))
+            if github:
+                store.connection.execute("UPDATE messages SET github_called_at='2026-11-05T04:46:50+00:00' WHERE message_id=6344")
+            if issue:
+                store.connection.execute("UPDATE messages SET issue_number=7,issue_url='https://github.com/o/r/issues/7' WHERE message_id=6344")
+        if notice is not None:
+            sequence=pending.reserve_notice(topic,-1009876543210,'escalation'); self.assertIsNotNone(sequence)
+            if notice=='sent': self.assertTrue(pending.finish_notice(topic,sequence,555))
+        if topic_status!='OPEN': self.assertTrue(pending.close(topic,topic_status))
+        store.close()
+        return db
+
+    def test_escalated_hold_source_does_not_halt_restart(self):
+        import hashlib
+        from tg_triage.rules_pending_store import check_before_recovery
+        db=self._escalated_hold_db('escalated.sqlite3')
+        before=hashlib.sha256(db.read_bytes()).digest()
+        check_before_recovery(db)
+        self.assertEqual(hashlib.sha256(db.read_bytes()).digest(),before)
+
+    def test_escalated_exemption_is_narrow(self):
+        from tg_triage.rules_pending_store import check_before_recovery,RulesHalt
+        pending_cases={'closed_topic':dict(topic_status='CLOSED'),'expired_topic':dict(topic_status='EXPIRED'),
+                       'queued_message':dict(decision='queued'),'classifying_message':dict(decision='classifying'),
+                       'no_owner_notice':dict(notice=None),'issue_without_call':dict(issue=True),
+                       'escalated_and_closed_with_issue':dict(issue=True,also_closed=True)}
+        for label,kwargs in pending_cases.items():
+            with self.subTest(label):
+                db=self._escalated_hold_db(f'narrow-{label}.sqlite3',**kwargs)
+                with self.assertRaisesRegex(RulesHalt,'legacy pending'): check_before_recovery(db)
+        with self.subTest('github_called_with_issue'):
+            # Not exempt, so the pending barrier halts before the POST-outcome check.
+            db=self._escalated_hold_db('narrow-github.sqlite3',github=True,issue=True)
+            with self.assertRaisesRegex(RulesHalt,'legacy pending'): check_before_recovery(db)
+        with self.subTest('github_called_without_issue'):
+            db=self._escalated_hold_db('narrow-github-noissue.sqlite3',github=True)
+            with self.assertRaisesRegex(RulesHalt,'unconfirmed issue metadata'): check_before_recovery(db)
+        with self.subTest('notice_not_sent'):
+            db=self._escalated_hold_db('narrow-reserved-notice.sqlite3',notice='reserved')
+            with self.assertRaises(RulesHalt): check_before_recovery(db)
+
     def test_readonly_claim_recovers_after_safe_preflight(self):
         from tg_triage.store import Store
         from tg_triage.rules_pending_store import RulesPendingStore, check_before_recovery
