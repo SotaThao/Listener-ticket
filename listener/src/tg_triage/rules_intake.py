@@ -117,10 +117,10 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
     # A pending-answer merge (allow_mixed) is never short-circuited by the prefilter.
     early = early_decision(snapshot, sources, prefilter=not allow_mixed)
     if early is not None: return ((tuple(sources),early),)
-    from .rules_extraction import partition_and_extract
+    from .rules_extraction import split_and_extract
     reviews={}
     try:
-        groups = partition_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=reviews)
+        groups = split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=reviews)
         if groups is None: return None
         if allow_mixed and len(groups) != 1: return None
         owner = {mid: n for n,(ids,_) in enumerate(groups) for mid in ids}
@@ -312,7 +312,7 @@ def _process_single_with_images(pipeline, message):
     if attempt is None:
         return _escalate(pipeline,message,topic)
     pipeline.store.finish(message,Decision('pending_review','rule',case_key=topic,reason='rules_extract_pending'))
-    with decision_turn(pipeline, 'rules:' + topic, topic, message.message_id):
+    with decision_turn(pipeline, 'rules:' + topic, topic, message.message_id) as turn:
         from . import document_reader, document_processing
         documents=document_reader.read_documents([message],pipeline.attachments.downloader) if message.has_document else []
         if documents: documents=document_processing.prepare(documents,pipeline.classifier)
@@ -320,6 +320,12 @@ def _process_single_with_images(pipeline, message):
         unread=any(document_reader.text_intent(message) and row.get('read_status')!='read' for row in documents)
         context=pipeline.store.autonomous_read_context([message]) if pipeline.rules_snapshot.extensions else ()
         outcome = None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],images=images,documents=documents,read_context=context)
+        too_large = outcome is None and _too_large(turn)
+    if outcome is None and too_large:
+        result = _request_too_large(pipeline,message,topic,attempt)
+        if result is not None:
+            pipeline.store.finish(message,result)
+            return result
     if outcome is None:
         pending.finish_attempt(topic,attempt)
         pending.record_decision(topic,pipeline.rules_snapshot.evaluate({},code_facts([message],extraction_ok=False)))
@@ -1201,7 +1207,8 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
         if attempt is None: return _escalate(pipeline,sources[0],batch_id)
         for source in sources:
             pipeline.store.finish(source,Decision('pending_review','rule',case_key=batch_id,reason='rules_extract_pending'))
-        with decision_turn(pipeline,'rules:' + batch_id,batch_id,sources[0].message_id):
+        too_large=False
+        with decision_turn(pipeline,'rules:' + batch_id,batch_id,sources[0].message_id) as turn:
             pending_bindings={}
             proofs={}
             if not pipeline.rules_snapshot.extensions:
@@ -1236,6 +1243,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             images=pipeline._prepared_images.for_messages(sources) if pipeline._prepared_images is not None else {}
             context=pipeline.store.autonomous_read_context(sources) if pipeline.rules_snapshot.extensions else ()
             groups=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,sources,images=images,documents=documents,reply_target_for=reply_target,read_context=context)
+            too_large=groups is None and not unread and _too_large(turn)
             pending_groups={}
             if groups is not None:
                 from dataclasses import replace
@@ -1282,9 +1290,14 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                         scoped_images={lookup[(m.chat_id,m.message_id)]:path for m,path in pipeline._prepared_images.accepted
                                        if (m.chat_id,m.message_id) in lookup}
                     merged=evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,scoped,images=scoped_images,asked_counts=asked,allow_mixed=True)
-                    if merged is None or len(merged)!=1: groups=None; break
+                    if merged is None or len(merged)!=1:
+                        too_large=too_large or (merged is None and _too_large(turn))
+                        groups=None; break
                     pending_groups[index]=(topic,merged[0][1],tuple(m.message_id for m in members if pending_bindings.get(m.message_id)),snapshot,additions)
         if groups is None:
+            if too_large:
+                result=_request_too_large(pipeline,sources[0],batch_id,attempt)
+                if result is not None: return result
             pending.finish_attempt(batch_id,attempt)
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_hold')
         owner={m.message_id:i for i,(members,_) in enumerate(groups) for m in members}
@@ -1852,7 +1865,7 @@ def _process_ops_evaluate(pipeline,message,topic,asked,originals,snapshot,*,is_o
     attempt = pending.reserve_attempt(topic,pipeline.rules_snapshot.limits['hold_max_retries'])
     if attempt is None: return _escalate(pipeline,source,topic)
     pipeline.store.finish(message,Decision('pending_review','rule',case_key=topic,reason='rules_extract_pending'))
-    with decision_turn(pipeline,'rules:' + topic,topic,message.message_id):
+    with decision_turn(pipeline,'rules:' + topic,topic,message.message_id) as turn:
         from . import document_reader, document_processing
         doc_sources=[(ref,m) for ref,m in originals if m.has_document]
         raw_docs=document_reader.read_documents([m for _,m in doc_sources],pipeline.attachments.downloader)
@@ -1867,6 +1880,12 @@ def _process_ops_evaluate(pipeline,message,topic,asked,originals,snapshot,*,is_o
         reply_target='bot_question' if is_ops else 'none'
         outcome=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,model_sources,images=images,documents=documents,
                                                     reply_target_for=lambda _: reply_target,asked_counts=asked,allow_mixed=True)
+        too_large = outcome is None and _too_large(turn)
+    if outcome is None and too_large:
+        result = _request_too_large(pipeline,source,topic,attempt)
+        if result is not None:
+            pipeline.store.finish(message,result)
+            return result
     if outcome is None:
         pending.finish_attempt(topic,attempt)
         pending.record_decision(topic,pipeline.rules_snapshot.evaluate({},code_facts(model_sources,extraction_ok=False,reply_target=reply_target)))
@@ -1962,13 +1981,19 @@ def _process_source_reply_inner(pipeline,message):
     attempt=pending.reserve_attempt(topic,pipeline.rules_snapshot.limits['hold_max_retries'])
     if attempt is None: return _escalate(pipeline,message,topic)
     pipeline.store.finish(message,Decision('pending_review','rule',case_key=topic,reason='rules_extract_pending'))
-    with decision_turn(pipeline,'rules:' + topic,topic,message.message_id):
+    with decision_turn(pipeline,'rules:' + topic,topic,message.message_id) as turn:
         from . import document_reader, document_processing
         documents=document_reader.read_documents([message],pipeline.attachments.downloader) if message.has_document else []
         if documents: documents=document_processing.prepare(documents,pipeline.classifier)
         unread=any(document_reader.text_intent(message) and row.get('read_status')!='read' for row in documents)
         images=pipeline._prepared_images.for_messages([message]) if pipeline._prepared_images is not None else {}
         outcome=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],images=images,documents=documents,reply_target_for=lambda _: 'ticket_open')
+        too_large = outcome is None and _too_large(turn)
+    if outcome is None and too_large:
+        result = _request_too_large(pipeline,message,topic,attempt)
+        if result is not None:
+            pipeline.store.finish(message,result)
+            return result
     if outcome is None:
         pending.finish_attempt(topic,attempt)
         result=Decision('pending_review','rule',case_key=topic,reason='rules_hold')
@@ -2044,6 +2069,25 @@ def _resume_source(pipeline, source):
         if row['decision'] == 'pending_review':
             pipeline.store.connection.execute("UPDATE messages SET decision='classifying' WHERE chat_id=? AND message_id=?", (source.chat_id,source.message_id))
         elif row['decision'] != 'classifying': raise RuntimeError('rules source no longer available')
+
+
+def _too_large(turn):
+    return turn is not None and turn.reason == 'rules_request_too_large'
+
+
+def _request_too_large(pipeline, source, topic, attempt):
+    """The batch can never fit one model call: tell the Owner now (ops group only), no retry loop."""
+    from .models import Decision
+    from .ticket_templates import active
+    from .thinking import LOCAL_REQUEST_BUDGET_BYTES
+    if pipeline.config.mode != 'dry-run' and pipeline.notice_sender is None: return None
+    text=active().render('group-replies.md','notice.request_too_large',
+        {'limit_bytes':str(getattr(pipeline.classifier,'request_budget_bytes',LOCAL_REQUEST_BUDGET_BYTES))})
+    sent=_send_ops(pipeline,source,topic,'escalation',text)
+    if not sent and pipeline.config.mode != 'dry-run': return None
+    pipeline.rules_pending.finish_attempt(topic,attempt,success=True)
+    pipeline.rules_pending.close(topic,'ESCALATED')
+    return Decision('pending_review','rule',case_key=topic,reason='rules_request_too_large')
 
 
 def _escalate(pipeline, source, topic):

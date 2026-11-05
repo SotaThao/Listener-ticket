@@ -129,7 +129,7 @@ flowchart TD
 
 Dùng group, media caption, reply và link của Telegram hiện có; không thêm màn hình, component hoặc token giao diện. Layout/responsive do Telegram quản lý trên mobile/tablet/desktop, không đặt breakpoint riêng cho bot. Audit giao diện: không áp dụng thay đổi token; không phát sinh hardcoded UI value cần thiết kế lại.
 
-Tin xác nhận tạo thành công: **“Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé 😊”**. Reply tin đầu đúng chủ đề. Câu hỏi phải nhắc phần đã biết và hỏi phần còn thiếu, ví dụ “Em đã ghi nhận lỗi POS trên app và web với máy in có dây. Anh/Chị cho Em biết lỗi chưa từng hết hay đã in được rồi mới lỗi lại nhé?”. Xưng hô theo TG-28/TG-29; không đoán giới tính từ tên/ảnh.
+Tin xác nhận tạo thành công: **“Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé”**. Reply tin đầu đúng chủ đề. Câu hỏi phải nhắc phần đã biết và hỏi phần còn thiếu, ví dụ “Em đã ghi nhận lỗi POS trên app và web với máy in có dây. Anh/Chị cho Em biết lỗi chưa từng hết hay đã in được rồi mới lỗi lại nhé?”. Xưng hô theo TG-28/TG-29; không đoán giới tính từ tên/ảnh.
 
 ### Bộ nhớ, debug và tiêu chí nghiệm thu
 
@@ -233,7 +233,7 @@ Command có payload ép loại issue; mention Telegram thật có thể ép need
 
 ### TG-11 — Xác nhận tạo ticket
 
-Sau khi xác nhận tạo thành công: “Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé 😊”. Reply tin đầu của topic; ba tin/một ticket chỉ một reply, ba topic/ticket thì ba reply với link tương ứng. Link do code dựng từ repo/issue tin cậy. Khi bật rules, câu xác nhận này gửi vào group ops kèm `ops.header`; group nguồn chỉ nhận ❤️ rồi 👌.
+Sau khi xác nhận tạo thành công: “Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé”. Reply tin đầu của topic; ba tin/một ticket chỉ một reply, ba topic/ticket thì ba reply với link tương ứng. Link do code dựng từ repo/issue tin cậy. Khi bật rules, câu xác nhận này gửi vào group ops kèm `ops.header`; group nguồn chỉ nhận ❤️ rồi 👌.
 
 ### TG-12 — Hỏi rõ và báo lỗi
 
@@ -344,6 +344,8 @@ Chỉ đổi prose do assistant tạo. Giữ nguyên source quote, URL và nội
 Provider local/hosted theo cấu hình. Cloud text cần consent và redact; cloud ảnh cần thêm image consent và provider hỗ trợ. Lỗi/unusable theo fallback cấu hình. Chỉ parse content, strip think block; private thinking không được lưu/log/đưa issue. Local think không hứa parity với hosted.
 
 Khi THINKING bật, hosted trả `invalid_json` hoặc output không qua parser dùng slot còn lại để retry validation trên cùng host, nguyên context bundle/schema. Không gửi output lỗi vào repair prompt, không nới parser. Lỗi transport/auth/timeout chuyển fallback cấu hình ngay nếu còn slot. Hai format failures tiêu hết hai actual attempts: dừng, không gọi local lần thứ ba; fallback hỏi rõ theo scope hiện có. THINKING tắt giữ hành vi legacy.
+
+**Giới hạn kích thước request ở rules mode (Owner 2026-11-05).** Owner duyệt nguyên văn “Duyệt 24.000 byte” và “Duyệt, làm bước 3” cho đề xuất: mỗi lần gọi provider cloud tối đa **24.000 byte** UTF-8 (đo bằng cùng cách đếm cũ, ≈8.000 token tiếng Việt — đúng con số tài liệu research đề xuất, trước đây bị cài thành 8.000 byte). Provider local (Ollama) giữ **8.000 byte**; khi request lớn hơn thì không chuyển sang Ollama làm fallback, vì Ollama có ngữ cảnh 8.192 token và chạy CPU không kịp hạn 20 giây. Nhóm tin vừa 24.000 byte thì gửi chung **một lần gọi**, không giới hạn số tin (Owner 2026-11-05, nguyên văn “Chỉ tách khi quá byte”, thay cho trần 5 tin mỗi lần để tránh hai ticket cho cùng một chủ đề); chỉ khi vượt byte mới tách tối đa **4 phần**, mỗi phần giữ nguyên chuỗi tin trả lời nhau và ảnh của tin, mỗi phần thêm 2 lượt gọi và 20 giây; đường đánh giá lại chủ đề đang chờ (cần đúng một nhóm) không tách; mỗi lần gọi vẫn tối đa 20 giây. Rules mode có thêm một lượt gọi để thử lại khi model trả JSON hỏng mà không lấy mất lượt kiểm lại. Một phần hỏng thì cả nhóm giữ lại, không tạo ticket một phần. Nếu nhóm vẫn quá lớn (quá 4 phần, một tin hoặc một chuỗi trả lời vượt 24.000 byte, nhóm có tài liệu cần tách, hoặc lượt kiểm lại ANALYZE không vừa giới hạn) thì bot ghi `pending_review` lý do `rules_request_too_large`, gửi **ngay một** thông báo `notice.request_too_large` vào group ops và đóng chủ đề `ESCALATED`, không thử lại 3 lần vô ích; group nguồn không nhận chữ. Câu chữ `notice.request_too_large` được Owner duyệt nguyên văn “Duyệt câu chữ” (2026-11-05). Số đo (DeepSeek `deepseek-flash` trên gw-01, 2026-11-05): 1,1–14,4 giây cho request 8–64 kB, độ trễ do số nhóm trả về quyết định; tin tối đa vừa một lần gọi: 1 tin 1.331 → 13.763 ký tự, 2 tin 589 → 6.803, 3 tin 341 → 4.484, 5 tin 142 → 2.632 mỗi tin. Đường THINKING/classic (ngoài rules mode) giữ 8.000 byte.
 
 Đường THINKING bounded transport gửi `thinking: {type: disabled}` cho DeepSeek để thực thi `model.think=false` đã cấu hình: bỏ tham số này sẽ dùng chế độ reasoning mặc định của nhà cung cấp. Không đổi model/consent, không thêm hỗ trợ hosted `think=true`, không đọc/lưu reasoning_content. Đây là sửa wire request riêng listener; rollback semantic path cũ vẫn dùng shared transport cũ. [DeepSeek Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/), [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/).
 
@@ -1990,6 +1992,18 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/decision_rules.py",
           "symbol": "RulesSnapshot.model_context"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_extraction.py",
+          "symbol": "split_and_extract"
+        },
+        {
+          "path": "listener/src/tg_triage/thinking.py",
+          "symbol": "Turn.configure_rules_parts"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "_request_too_large"
         }
       ],
       "tests": [
@@ -2064,6 +2078,34 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_decision_rules.py",
           "symbol": "DecisionRulesTest.test_prompt_excludes_decisions_and_schema_uses_fields"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "SplitTests.test_whole_batch_that_fits_is_one_call_whatever_the_message_count"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "SplitTests.test_batch_over_budget_is_split_by_bytes_keeping_reply_chains_together"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "SplitTests.test_spent_turn_budget_is_never_reported_as_too_large"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "TurnBudgetTests.test_configure_rules_parts_guards"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "ProviderBudgetTests.test_cloud_timeout_falls_back_to_ollama_with_a_body_rebuilt_at_eight_thousand"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "ProviderBudgetTests.test_ollama_primary_is_still_limited_to_eight_thousand_bytes"
+        },
+        {
+          "path": "listener/tests/test_request_budget.py",
+          "symbol": "OverflowIntakeTests.test_single_thirty_thousand_char_message_is_reported_once_to_ops"
         }
       ]
     },
@@ -2244,11 +2286,11 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/attachments.py": "53a94fb982339aa8aba247ba763583bdc0436a73dae618c2942c61b4e7af55b6",
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
-    "listener/src/tg_triage/classifier.py": "860dae897cbf50e110d9761e29272e1e0d7ee2a2b65c681f7ed7637d4f9362a3",
+    "listener/src/tg_triage/classifier.py": "6c7fad4793eb9cfa716eefc506143311199b9f70b8830376915799548bd95fa6",
     "listener/src/tg_triage/config.py": "33464c0643bfb4a86a7be648be979e6899ea340b54b302d7b41cd59e10a616d8",
     "listener/src/tg_triage/decision_rules.py": "8807e6eea8055acd5d2d832489bf660e7a7fa324a4ea05ee0512fa78d32ce3c9",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
-    "listener/src/tg_triage/document_reader.py": "163595000162d5fa1c162538d997c449d2913934e03f104fb79603e778b0cd1f",
+    "listener/src/tg_triage/document_reader.py": "b3568ca6f772ed617f3d354ef32a04973e00ec02e375b8bfcfe14347a7c7e1b3",
     "listener/src/tg_triage/followup_model.py": "898ae428bc0e5101550665853ed66dbfa0a8324fcc2ba4df18f4ab33d513d934",
     "listener/src/tg_triage/followup_store.py": "d793ce24c46e7385adaf4022e671ff4300757ef30ea584c149e440e42f360c48",
     "listener/src/tg_triage/followups.py": "3336fa28a2d4e87edfa5599ceae323c1716b49ba6aabe121b3d1972b6b4ff8f3",
@@ -2265,32 +2307,32 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/offline_snapshot.py": "07589cfcb814048842bce602aeb5d1bd5e48705bd8ad1bafa0c79fb653b2909e",
     "listener/src/tg_triage/pacing.py": "6d104e30d9b51883dfb27d56ad107089e93a42e88c085ae72e03c0f06af0793e",
     "listener/src/tg_triage/pipeline.py": "6af1619cbbc7343a3d4b3349cac17b7115c641817049e480af002c898ffda87c",
-    "listener/src/tg_triage/provider.py": "e99a0779abaf25d9da65de154217a5a036361abe223a5ab812de903df22cc59c",
+    "listener/src/tg_triage/provider.py": "22c0378e6d3722d857fee4ca1f9687b91eabd6f137b1e7b22bdc92db5fd2533b",
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
     "listener/src/tg_triage/receipt.py": "ff455fdfb9424cc3e802641607dfe3c872ddc65490b2705bb804ca92f282d51a",
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
-    "listener/src/tg_triage/rules_analysis.py": "8d1ed397042fa99bf8fc50f4841a5256c1596cfa3a15888ea4228538e2f42d7e",
+    "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
-    "listener/src/tg_triage/rules_extraction.py": "242f8e3a9afb094d4a95ce61415d54bd3569f4b03ec1dba0f24510552470d87e",
-    "listener/src/tg_triage/rules_intake.py": "724695889debad632a76d31fe2e6f15f00881a6ae248e7f609493dcbb462dbae",
+    "listener/src/tg_triage/rules_extraction.py": "0db35221ce177672468e2173d9b8f769e4c616617bd580f0a7674ecd50eb0297",
+    "listener/src/tg_triage/rules_intake.py": "7f3ff9d42745b7b2aa65e5a6d1c632c56589436a0dc50922079cbc7ceff80c7c",
     "listener/src/tg_triage/rules_pending_store.py": "53c7361bde4cb26b1d835333443792149bc9108ef52d14191a8e202888547a2a",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
     "listener/src/tg_triage/telegram_io.py": "5980311c35b9966ff1a1680870fc9a800ddda1b855d1707de3307d8ecf34ec7c",
-    "listener/src/tg_triage/thinking.py": "26d7ead0c0355e03a03aa85eafa561bb2231b746ddb17621f2ff56355fb78224",
+    "listener/src/tg_triage/thinking.py": "2b6b77fc94412144a68f7410b9ff594818d34dc0d6f3720ae93dede7970aa418",
     "listener/src/tg_triage/thinking_transport.py": "12aa57301f012f1091e79af7a3756139c8ac8b475e4c97e4d9b66024932e0d66",
     "listener/src/tg_triage/ticket_status.py": "6ca9ee02dcfd523df6e778247e4ed1bdac82ccc9233c9aacf0dad7cdcfe2d4bb",
-    "listener/src/tg_triage/ticket_templates.py": "ae31c782edd0b9e183a9d3d826d47cd6b5c15dea4f3a4fe9a3cbc6e2a67d8d07",
+    "listener/src/tg_triage/ticket_templates.py": "ed373d6f490c2005fd119f46c009af35cf389878d443d002183c1bbe2b93baa9",
     "listener/src/tg_triage/topic_store.py": "495bd90150783df45463d86a66dd32927e69fec001f7406808f8496f2466f672",
     "listener/src/tg_triage/trace.py": "3b4c55d7664a8024359c3a35113841c7af76e7770a1823dfe3843d3ea01d2ba0",
     "listener/src/tg_triage/usage.py": "421146bd0ac181a2ff45be7c2d7e82cca1ff54cafc2941bc958f20eb9622828e",
     "listener/templates/github-ticket/_common.md": "14be08601a1ef8cb0dce40bab5e54e317376cbbe56c8c9d41c1bc8d57e8e9716",
-    "listener/templates/github-ticket/bug.md": "4a0eb199589d55dbc33c2db4297b71258858c915e513c79ab2be62c23e390bb4",
+    "listener/templates/github-ticket/bug.md": "d517980a99b5ecfacf8de9e14d444f728b279d8841f699b767562f2579c2113c",
     "listener/templates/github-ticket/comments.md": "3a358d5d6ee36d1bcc810fadb03208c2f9cffbd9a672ccdb5348761fa43f8a27",
-    "listener/templates/github-ticket/feedback.md": "4f42dce1ab50b3f8c492f24523caf447d4273b8fbad629243b716e81bbc92cda",
-    "listener/templates/github-ticket/group-replies.md": "789a36ce075ae8a481a4215ec024de42465f365326395de19a5716f5f4979e42",
-    "listener/templates/github-ticket/needs-human.md": "18b91e7b06d9c9f90b4deb12141da33994ecf545c3233b8ebfa46854e41a5867",
-    "listener/templates/github-ticket/task.md": "232aeefe6d073116fa88401ee22b67f83e08eddedd3de57a8954e09afc17d279"
+    "listener/templates/github-ticket/feedback.md": "97082da5b8503b743d2b3df18502498c05a65d9975621eef2dad812e67565dbc",
+    "listener/templates/github-ticket/group-replies.md": "456e766494ce45b8d508e662c48c6eff2c4e34853163d2fc7867f09f55ea9397",
+    "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
+    "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056"
   },
   "legacy_documents": [
     "Docs/00-master/worker-agent-fleet-1_brief_261007_v1.0.7.md",
@@ -2339,6 +2381,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.18 | 2026-11-05 | Claude / owner AlexChu | Owner duyệt giới hạn request rules mode: 24.000 byte mỗi lần gọi cloud (“Duyệt 24.000 byte”, “Duyệt, làm bước 3”), chỉ tách nhóm khi quá byte (“Chỉ tách khi quá byte”), tối đa 4 phần, thêm một lượt thử lại JSON; Ollama giữ 8.000 byte và nhận request dựng lại ở 8.000; quá lớn ⇒ báo ops ngay bằng `notice.request_too_large` (câu chữ Owner đã duyệt: “Duyệt câu chữ”), không giữ im lặng. Cập nhật TG-30, trace runtime (9 file) và test `test_request_budget.py`; `rules/channels.md` lên version 5. Review độc lập GATE 0b vòng 2 APPROVED. Kèm chỉnh sửa template của Owner (2026-11-05): bỏ emoji ở tiêu đề mục và cuối câu thông báo, tiêu đề mục trong `bug.md`, `feedback.md`, `needs-human.md`, `task.md` do code tự đánh số liên tục theo các mục thực sự hiện (Owner: “cho Code tự đánh số”; review độc lập APPROVED sau khi sửa test `scripts/`); trace runtime cập nhật hash. Chưa deploy. |
 | v1.16.17 | 2026-11-05 | Claude / owner AlexChu | Live #95, #111 (group PROD): nhờ review PR thành ticket qua R10 vì model đọc là `task`. Owner: “các nội dung về review PR không phải là task và bug hoặc feedback nên không thể log ticket đc” và “Duyệt lọc trước”. Thêm lọc local trước model ở TG-09: `readiness.md` v4 bảng `prefilter` P1–P4 (khóa hash) + `prefilter_words`, `examples.md` v4 bảng `prefilter_cases` PF1–PF23 tự kiểm lúc nạp (gồm chốt chặn fix/làm/test/deploy, chữ dính sau link, link không phải GitHub); review GATE 0b APPROVED, các mục nên sửa đã áp; nhóm chỉ gồm tin khớp ⇒ `CHAT` luật `F1`, không gọi model. Rules fingerprint đổi. Trace runtime `decision_rules.py`, `rules_intake.py`; test `RulesPrefilterTests`, `test_prefilter_*`. Không đổi R1–R13, kênh ops hay reaction. |
 | v1.16.16 | 2026-11-05 | Claude / owner AlexChu | Sự cố live 2026-11-05 16:02: một chủ đề `HOLD` đã `ESCALATED` (báo Owner lúc 11:46) để lại tin `pending_review` mà kiểm tra lúc khởi động coi là "legacy pending" ⇒ mọi lần restart đều `RulesHalt`, bot dừng sau deploy. Owner chọn “Sửa code”: kiểm tra khởi động coi tin `pending_review` thuộc chủ đề `ESCALATED` có thông báo escalation đã gửi (Owner đã được báo), chưa gọi GitHub và không có issue là đã xong; trạng thái khác, chủ đề `CLOSED`/`EXPIRED`, escalation chưa gửi thông báo (vd lifecycle HOLD) hoặc đã gọi GitHub vẫn dừng. Q5 ghi rõ. Trace runtime `rules_pending_store.py`; test `test_escalated_hold_source_does_not_halt_restart`, `test_escalated_exemption_is_narrow`. Không đổi quyết định, kênh ops hay reaction. |
 | v1.16.15 | 2026-11-05 | Claude / owner AlexChu | Sửa ticket READY của rules mode (live #95–#99): dữ kiện `work`/`observed`/`expected`/`problem`/`proposal` được điền vào đúng mục của template (hết "(chưa có thông tin)" và câu hỏi "Việc cần làm là gì?" sai). Owner 2026-11-05 “Áp cả hai”: tiêu đề/tóm tắt là một câu (task `<work> — <object>`, bug `<object>: <observed>`, feedback `<proposal hoặc problem>[ — <object>]`) thay cho dữ kiện nối bằng `; `; footer ticket theo luật markdown ghi `luật Rnn (rules/readiness.md)` (block mới `_common.md` · `provenance.rules`), lệnh thật vẫn `tầng 1 lệnh`. Trace runtime: `rules_intake.py`, `issue_format.py`, `pipeline.py`, `ticket_templates.py`, `_common.md`; test `RulesReadyTicketBodyTests`. Không đổi quyết định, kênh ops hay reaction. |

@@ -11,8 +11,8 @@ from tests.helpers import NOW, classification, message
 from tests.test_issue_templates import (BUG_DETAILS, DOCUMENT, FEEDBACK_DETAILS, IMAGE, TASK_DETAILS,
                                         case_payload)
 
-SUMMARY = "### 📝 Tóm tắt"
-CLARIFY = "### ❓ Cần làm rõ"
+SUMMARY = "### 1. Tóm tắt"
+CLARIFY = "### 2. Cần làm rõ"
 TIME = re.compile(r"\d{2}/\d{2} \d{2}:\d{2}")
 
 
@@ -54,26 +54,26 @@ class IssueLayoutTests(unittest.TestCase):
 
     def test_54_heading_order_per_issue_type(self):
         full_bug = typed("bug", BUG_DETAILS, images=(IMAGE,))
-        self.assertEqual(headings(full_bug.body), [SUMMARY, "### 🐞 Lỗi", "### 🖼 Minh họa / Evidence"])
+        self.assertEqual(headings(full_bug.body), [SUMMARY, "### 2. Lỗi", "### 3. Minh họa / Evidence"])
         bug = typed("bug", {}, images=(IMAGE,), documents=(DOCUMENT,))
-        self.assertEqual(headings(bug.body), [SUMMARY, "### 🐞 Lỗi", "### 🖼 Minh họa / Evidence", CLARIFY])
+        self.assertEqual(headings(bug.body), [SUMMARY, "### 2. Lỗi", "### 3. Minh họa / Evidence", "### 4. Cần làm rõ"])
         feedback_details = dict(FEEDBACK_DETAILS, proposal="Thêm bộ lọc", alternatives="Xuất Excel",
                                 context="Đối soát cuối tháng")
         feedback = typed("feedback", feedback_details, images=(IMAGE,))
-        self.assertEqual(headings(feedback.body), [SUMMARY, "### 💡 Vấn đề / nhu cầu",
-                                                   "### ✅ Tiêu chí chấp nhận (nháp)", "### 🧭 Ngữ cảnh"])
+        self.assertEqual(headings(feedback.body), [SUMMARY, "### 2. Vấn đề / nhu cầu",
+                                                   "### 3. Tiêu chí chấp nhận (nháp)", "### 4. Ngữ cảnh"])
         self.assertEqual(headings(typed("feedback", dict(problem="Khó tìm", user_story="Là kế toán...")).body),
-                         [SUMMARY, "### 💡 Vấn đề / nhu cầu"])   # empty acceptance / context are hidden
+                         [SUMMARY, "### 2. Vấn đề / nhu cầu"])   # empty acceptance / context are hidden
         task = typed("task", dict(TASK_DETAILS, links=["https://example.invalid/mockup"]), images=(IMAGE,))
-        self.assertEqual(headings(task.body), [SUMMARY, "### 🛠 Việc cần làm",
-                                               "### 🖼 Minh họa / Evidence (đầu vào)", "### 🏁 Xong khi"])
+        self.assertEqual(headings(task.body), [SUMMARY, "### 2. Việc cần làm",
+                                               "### 3. Minh họa / Evidence (đầu vào)", "### 4. Xong khi"])
         self.assertEqual(headings(typed("task", {"work": "Thêm bộ lọc"}).body),
-                         [SUMMARY, "### 🛠 Việc cần làm", "### 🏁 Xong khi"])
+                         [SUMMARY, "### 2. Việc cần làm", "### 3. Xong khi"])
         self.assertEqual(headings(typed("task", {}).body),
-                         [SUMMARY, "### 🛠 Việc cần làm", "### 🏁 Xong khi", CLARIFY])
+                         [SUMMARY, "### 2. Việc cần làm", "### 3. Xong khi", "### 4. Cần làm rõ"])
         self.assertEqual(headings(untyped().body), [SUMMARY, CLARIFY])
         self.assertEqual(headings(untyped(images=(IMAGE,), documents=(DOCUMENT,)).body),
-                         [SUMMARY, "### 🖼 Minh họa / Evidence", CLARIFY])
+                         [SUMMARY, "### 2. Minh họa / Evidence", "### 3. Cần làm rõ"])
         self.assertEqual(headings(format_issue(message(), classification(), "model", False).body), [SUMMARY])
 
     def test_54_labels_are_bold_and_on_the_same_line_as_their_content(self):
@@ -86,7 +86,7 @@ class IssueLayoutTests(unittest.TestCase):
         self.assertIn("**Phạm vi:** Làm — Bộ lọc · Không làm — Xuất file", task)
         self.assertIn("**Lý do:** Đối soát", task)
         self.assertIn("**Hạn / người được nhắc:** Ngày 20/10", task)
-        self.assertIn("\n### 🏁 Xong khi\n- [ ] Bộ lọc áp dụng đúng khoảng ngày\n- [ ] Đính kèm evidence", task)
+        self.assertIn("\n### 3. Xong khi\n- [ ] Bộ lọc áp dụng đúng khoảng ngày\n- [ ] Đính kèm evidence", task)
 
     def test_54_documents_are_listed_with_a_paperclip_and_notes_sit_under_them(self):
         body = typed("bug", BUG_DETAILS, images=(IMAGE,), documents=(DOCUMENT,), notes=("Tài liệu không tải được: X",)).body
@@ -100,18 +100,18 @@ class IssueLayoutTests(unittest.TestCase):
     def test_54_notes_sit_inside_the_task_evidence_and_feedback_context_sections(self):
         note = "Ảnh đính kèm không tải được: OSError"
         task = typed("task", TASK_DETAILS, images=(IMAGE,), documents=(DOCUMENT,), notes=(note,)).body
-        section = task.split("### 🖼 Minh họa / Evidence (đầu vào)\n")[1].split("\n### ")[0]
+        section = task.split("### 3. Minh họa / Evidence (đầu vào)\n")[1].split("\n### ")[0]
         self.assertIn(note, section)
         self.assertIn(DOCUMENT[1], section)
         self.assertLess(section.index(DOCUMENT[1]), section.index(note))
-        self.assertLess(task.index(note), task.index("### 🏁 Xong khi"))
+        self.assertLess(task.index(note), task.index("### 4. Xong khi"))
         only_note = typed("task", TASK_DETAILS, notes=(note,)).body       # a note alone still opens the section
-        self.assertIn("### 🖼 Minh họa / Evidence (đầu vào)\n" + note, only_note)
+        self.assertIn("### 3. Minh họa / Evidence (đầu vào)\n" + note, only_note)
         feedback = typed("feedback", FEEDBACK_DETAILS, images=(IMAGE,), documents=(DOCUMENT,), notes=(note,)).body
-        context = feedback.split("### 🧭 Ngữ cảnh\n")[1].split("<details>")[0]
+        context = feedback.split("### 4. Ngữ cảnh\n")[1].split("<details>")[0]
         self.assertIn(note, context)
         self.assertLess(context.index(DOCUMENT[1]), context.index(note))
-        self.assertIn("### 🧭 Ngữ cảnh\n" + note, typed("feedback", FEEDBACK_DETAILS, notes=(note,)).body)
+        self.assertIn("### 4. Ngữ cảnh\n" + note, typed("feedback", FEEDBACK_DETAILS, notes=(note,)).body)
 
     def test_55_original_messages_are_collapsed_with_a_blank_line_after_summary(self):
         messages = group(3, ["Lan", "Lan", "Minh"])
@@ -253,7 +253,7 @@ class LineStartSyntaxTests(unittest.TestCase):
         analysis = parse_case_analysis(json.dumps(case_payload("bug", BUG_DETAILS, summary="### Lỗi giả"),
                                                   ensure_ascii=False))
         body = format_issue(message(), analysis.classification, "model", False, details=analysis.details).body
-        self.assertEqual(headings(body), [SUMMARY, "### 🐞 Lỗi", "### 🖼 Minh họa / Evidence"])
+        self.assertEqual(headings(body), [SUMMARY, "### 2. Lỗi", "### 3. Minh họa / Evidence"])
         self.assertIn(SUMMARY + "\n\\### Lỗi giả\n", body)
 
     def test_62_detail_values_that_look_like_block_syntax_are_literal(self):
@@ -277,23 +277,24 @@ class LineStartSyntaxTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 bug = typed("bug", dict(BUG_DETAILS, steps=[raw])).body
                 self.assertIn(f"**Các bước tái hiện:**\n1. {escaped}\n\n", bug)
-                self.assertEqual(headings(bug), [SUMMARY, "### 🐞 Lỗi", "### 🖼 Minh họa / Evidence"])
+                self.assertEqual(headings(bug), [SUMMARY, "### 2. Lỗi", "### 3. Minh họa / Evidence"])
                 feedback = typed("feedback", dict(FEEDBACK_DETAILS, acceptance=[raw])).body
                 self.assertIn(f"\n- [ ] {escaped}\n", feedback)
-                self.assertEqual(headings(feedback), [SUMMARY, "### 💡 Vấn đề / nhu cầu",
-                                                      "### ✅ Tiêu chí chấp nhận (nháp)"])
+                self.assertEqual(headings(feedback), [SUMMARY, "### 2. Vấn đề / nhu cầu",
+                                                      "### 3. Tiêu chí chấp nhận (nháp)"])
                 task = typed("task", dict(TASK_DETAILS, done=[raw], links=[raw])).body
                 self.assertIn(f"\n- [ ] {escaped}\n- [ ] Đính kèm evidence", task)
-                self.assertIn(f"### 🖼 Minh họa / Evidence (đầu vào)\n- {escaped}\n", task)
-                self.assertEqual(headings(task), [SUMMARY, "### 🛠 Việc cần làm",
-                                                  "### 🖼 Minh họa / Evidence (đầu vào)", "### 🏁 Xong khi"])
+                self.assertIn(f"### 3. Minh họa / Evidence (đầu vào)\n- {escaped}\n", task)
+                self.assertEqual(headings(task), [SUMMARY, "### 2. Việc cần làm",
+                                                  "### 3. Minh họa / Evidence (đầu vào)", "### 4. Xong khi"])
 
     def test_62_clarify_questions_that_look_like_block_syntax_are_literal(self):
         for raw, escaped in BLOCK_SYNTAX:
             with self.subTest(raw=raw):
-                for body in (untyped(clarify=[raw]).body, typed("bug", BUG_DETAILS, clarify=[raw]).body):
-                    self.assertIn(f"{CLARIFY}\n- {escaped}\n", body)
-                    self.assertEqual(headings(body)[-1], CLARIFY)
+                for body, clarify in ((untyped(clarify=[raw]).body, CLARIFY),
+                                      (typed("bug", BUG_DETAILS, clarify=[raw]).body, "### 4. Cần làm rõ")):
+                    self.assertIn(f"{clarify}\n- {escaped}\n", body)
+                    self.assertEqual(headings(body)[-1], clarify)
 
     def test_62_original_message_lines_are_literal_inside_the_quote(self):
         raw_lines = [raw for raw, _ in BLOCK_SYNTAX] + ["    indented code"]

@@ -56,7 +56,7 @@ class ImageInIssueTests(AttachmentBase):
         self.assertEqual(result.decision, "issue")
         url = f"{ASSET_BASE}/{TAG}/1-1.jpg"
         self.assertIn(f"![Ảnh 1]({url})", self.issue_body())
-        self.assertIn("### 🖼 Minh họa / Evidence", self.issue_body())
+        self.assertIn("### 3. Minh họa / Evidence", self.issue_body())
         self.assertNotIn("Ảnh đính kèm", self.issue_body())   # no sub-label any more (12.16)
         self.assertEqual(self.uploader.releases, [TAG])
         self.assertEqual([(item["tag"], item["asset"]) for item in self.uploader.uploads], [(TAG, "1-1.jpg")])

@@ -236,11 +236,11 @@ Code áp theo **đúng thứ tự** sau, bước đầu tiên khớp thì dừng
 | Nhãn — ticket thường | `<type>, triage, source:telegram` |
 | Nhãn — needs_human có type tin cậy | `<type>, triage, needs-human, source:telegram` |
 | Nhãn — needs_human không type | `needs-human, source:telegram` |
-| Body mở đầu | Marker `<!-- tg:<chat_id>:<message_id> -->` + `### 📝 Tóm tắt` |
-| Bug | `### 🐞 Lỗi` (Môi trường, Các bước, Mong đợi, Thực tế) + `### 🖼 Minh họa / Evidence` |
-| Feedback | `### 💡 Vấn đề / nhu cầu` + tùy chọn `### ✅ Tiêu chí chấp nhận (nháp)`, `### 🧭 Ngữ cảnh` |
-| Task | `### 🛠 Việc cần làm` + tùy chọn `### 🖼 Minh họa / Evidence (đầu vào)` + `### 🏁 Xong khi` |
-| Thiếu chi tiết | Ghi vào `### ❓ Cần làm rõ` trong body; **không** chặn việc tạo ticket |
+| Body mở đầu | Marker `<!-- tg:<chat_id>:<message_id> -->` + `### 1. Tóm tắt` (tiêu đề mục do code tự đánh số liên tục theo các mục thực sự hiện, Owner 2026-11-06) |
+| Bug | `### Lỗi` (Môi trường, Các bước, Mong đợi, Thực tế) + `### Minh họa / Evidence` |
+| Feedback | `### Vấn đề / nhu cầu` + tùy chọn `### Tiêu chí chấp nhận (nháp)`, `### Ngữ cảnh` |
+| Task | `### Việc cần làm` + tùy chọn `### Minh họa / Evidence (đầu vào)` + `### Xong khi` |
+| Thiếu chi tiết | Ghi vào `### Cần làm rõ` trong body; **không** chặn việc tạo ticket |
 | Tin gốc | Khối thu gọn trích toàn bộ tin của topic theo thời gian |
 | Trường chi tiết model được phép trả | `environment, expected, actual, error_text, problem, user_story, proposal, alternatives, context, work, reason_context, scope_in, scope_out, due` và danh sách `steps, acceptance, links, done` (≤ 10 mục); trường khác bị bỏ |
 
@@ -252,7 +252,7 @@ Soạn ticket hoặc comment thủ công (người hoặc Agent) MUST theo [hư�
 
 | ID | Rule | Thực thi |
 |---|---|---|
-| TG-11.1 | Tạo thành công ⇒ reply **tin đầu** của topic: "Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé 😊". Link do code dựng. | `group_notices.py` |
+| TG-11.1 | Tạo thành công ⇒ reply **tin đầu** của topic: "Em đã ghi nhận nội dung này và tạo ticket: [Link] rồi nhé". Link do code dựng. | `group_notices.py` |
 | TG-11.2 | 3 tin / 1 ticket ⇒ 1 reply. 3 ticket ⇒ 3 reply, mỗi reply đúng link của nó. | `group_notices.py` |
 | TG-11.3 [L] | `needs_human` ⇒ "Em đã ghi nhận nội dung này rồi nhé. Nhờ Anh/Chị hoặc Owner bổ sung/xác nhận thông tin ngay trong group để làm rõ yêu cầu." + dòng link ticket theo dõi. | `group_notices.py` |
 | TG-13.1 | ❤ khi nhận command hợp lệ, và trên topic sắp tạo issue. 👌 chỉ sau khi đã có số issue. | `reactions.py` |

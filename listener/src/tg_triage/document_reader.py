@@ -258,8 +258,9 @@ def _text_messages(messages):
     return result
 
 
-def request_fits(body):
-    from .thinking import DocumentContextJSON,ContextJSON,request_text_bytes
+def request_fits(body, limit=None):
+    from .thinking import DocumentContextJSON,ContextJSON,request_text_bytes,LOCAL_REQUEST_BUDGET_BYTES
+    if limit is None: limit=LOCAL_REQUEST_BUDGET_BYTES
     try:
         messages=_text_messages(body['messages'])
         if messages is None:
@@ -267,7 +268,7 @@ def request_fits(body):
         normalized=dict(wire_body(body),messages=messages)
         marked=[m for m in messages if isinstance(m.get('content'),DocumentContextJSON)]
         if not marked:
-            return request_text_bytes(normalized)<=8000
+            return request_text_bytes(normalized)<=limit
         if len(marked)!=1 or marked[0].get('role')!='user':
             return False
         packet=json.loads(marked[0]['content'])
@@ -290,7 +291,7 @@ def request_fits(body):
         if count>MAX_DOCUMENTS or total>MAX_TOTAL_BYTES:
             return False
         base=[dict(m,content=ContextJSON(json.dumps(packet,ensure_ascii=False,separators=(',',':')))) if m is marked[0] else m for m in messages]
-        if request_text_bytes(dict(normalized,messages=base))>8000:
+        if request_text_bytes(dict(normalized,messages=base))>limit:
             return False
         # Escaped serialization is a stricter bound than raw UTF-8 character accounting.
         escaped=dict(normalized,messages=[{k:v for k,v in m.items() if k!='images'} for m in messages])

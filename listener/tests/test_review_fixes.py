@@ -97,7 +97,7 @@ class ReviewFixTests(unittest.TestCase):
         self.assertNotIn("<img", value.body)
         self.assertEqual(value.body.count("<!--"), 1)
         lines = value.body.splitlines()
-        summary = lines[lines.index("### 📝 Tóm tắt") + 1]
+        summary = lines[lines.index("### 1. Tóm tắt") + 1]
         self.assertIn("\\[x\\]\\(https:\u200b//evil.invalid\\)", summary)
         self.assertIn("summary end", summary)
         self.assertIn("&amp;#\u200b64;user", value.body)

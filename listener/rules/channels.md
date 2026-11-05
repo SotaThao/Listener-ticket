@@ -1,4 +1,4 @@
-<!-- rule-file: channels · version 4 · status ACTIVE · audience: code -->
+<!-- rule-file: channels · version 5 · status ACTIVE · audience: code -->
 # Bot nói gì, ở đâu
 
 Owner chốt 2026-10-29: **group gốc chỉ có reaction**; mọi tin chữ của bot (câu hỏi, link ticket, báo lỗi, hết quota) gửi vào **một group xử lý chung** cho mọi group nguồn, để group gốc không bị loãng.
@@ -24,7 +24,7 @@ Mỗi trạng thái đúng một dòng. Ô `Không` = bot không làm gì ở k�
 | `NEED_INFO` | ❤️ | Một tin hỏi theo `questions.md` | `ops.header` `ask.object` `ask.observed` `ask.work` `ask.problem` `question.fallback` |
 | `MEDIA_ONLY` | Không | Không | — |
 | `CHAT` | Không | Không | — |
-| `HOLD` | Không | Hết quota: báo hỗ trợ (TG-12). `ESCALATED`: báo Owner | `ops.header` `notice.rate_limited` `notice.hold_escalated` |
+| `HOLD` | Không | Hết quota: báo hỗ trợ (TG-12). `ESCALATED`: báo Owner | `ops.header` `notice.rate_limited` `notice.hold_escalated` `notice.request_too_large` |
 | `ANALYZE` | ❤️ | Nội dung phân tích | `ops.header` |
 | `STATUS` | ❤️ | Trạng thái hoặc câu hỏi thiếu target | `ops.header` |
 | `LIFECYCLE_QUESTION` | Không | Câu hỏi xác nhận vòng đời | `ops.header` |
@@ -61,4 +61,5 @@ Danh mục mọi khối template rules dùng. `có` = đã có trong file templa
 | `ask.work` | `group-replies.md` | `có` |
 | `ask.problem` | `group-replies.md` | `có` |
 | `notice.hold_escalated` | `group-replies.md` | `có` |
+| `notice.request_too_large` | `group-replies.md` | `có` |
 | `followup.recurrence` | `group-replies.md` | `có` |

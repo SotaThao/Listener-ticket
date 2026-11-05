@@ -135,7 +135,7 @@ Giá trị mặc định lấy từ [listener.example.toml](../../config/listene
 | `aggregation.max_messages_per_case` / `_per_window` | 20 / 40 | Trần tin mỗi case / cửa sổ |
 | `thinking.context_quiet_seconds` / `_max_wait_seconds` | 30 / 60 | Nhịp gom (autonomous) |
 | Budget model | 2 attempt / 40s, mỗi request ≤ 20s | TG-30 |
-| Packet text | ≤ 8000 byte UTF-8; 20 tin mới; 6 candidate | TG-05, TG-30 |
+| Packet text | ≤ 8000 byte UTF-8; 20 tin mới; 6 candidate. Rules mode: ≤ 24000 byte mỗi lần gọi cloud, chỉ tách khi quá byte, tối đa 4 phần; Ollama giữ 8000 (Owner 2026-11-05) | TG-05, TG-30 |
 | `attachments.max_bytes` | 10 MB | Mỗi file |
 | `attachments.max_per_case` / `max_documents_per_case` | 5 / 5 | Ảnh / tài liệu mỗi case |
 | `attachments.max_per_hour` | 60 | Upload chung ảnh + tài liệu |

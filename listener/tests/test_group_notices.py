@@ -139,7 +139,7 @@ class NoticeTests(unittest.TestCase):
         chat, target, text = self.calls[0]
         self.assertEqual((chat, target), (message().chat_id, 1))
         self.assertEqual(text, "Em đã ghi nhận nội dung này và tạo ticket: "
-                         "https://github.com/sandbox/triage/issues/42 rồi nhé 😊")
+                         "https://github.com/sandbox/triage/issues/42 rồi nhé")
         self.assertIn("https://github.com/sandbox/triage/issues/42", text)
         self.assertNotIn("evil", text)
         self.assertIsNone(p.process(message(1)))

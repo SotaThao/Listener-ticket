@@ -186,20 +186,38 @@ class RulesAnalysisTests(unittest.TestCase):
         self.assertEqual(len(chunks)+2,len(http.calls))
         self.assertIn('processing',result[0][1].analysis_review['documents'][0])
 
-    def test_cloud_actual_retry_and_fallback_cannot_buy_third_normal_call(self):
+    def test_cloud_json_retry_and_fallback_stay_inside_the_three_call_rules_budget(self):
         from tg_triage.provider import CloudProvider
         from tg_triage.ai_transport import ProviderError
         base=config();settings=replace(base,model=replace(base.model,provider='openai',cloud_consent=True,fallback='ollama'))
-        for responses in (({},generated()),(ProviderError('provider_failed'),)):
-            with self.subTest(responses=responses):
-                http=FakeHTTP(envelope(generated()),envelope(verdict()))
-                provider=CloudProvider(settings,opener=http);turn=Turn(self.store,'cloud','cloud',42);token=CURRENT.set(turn)
+        # (cloud responses, fallback http responses, expected result state, calls, cloud calls, fallback calls);
+        # the review is pinned to the provider that produced the extraction, so a failed cloud call moves both to Ollama
+        cases=(('invalid_json',[{},generated(),verdict()],[],'ANALYZE',3,3,0),
+               ('provider_failed',[ProviderError('provider_failed')],[envelope(generated()),envelope(verdict())],'ANALYZE',3,1,2))
+        for name,cloud,local,expected,calls,cloud_calls,local_calls in cases:
+            with self.subTest(name=name):
+                http=FakeHTTP(*local)
+                provider=CloudProvider(settings,opener=http);turn=Turn(self.store,'cloud'+name,'cloud',42);token=CURRENT.set(turn)
                 try:
-                    with patch('tg_triage.ai_transport.read_key',return_value='fake-key'),patch('tg_triage.thinking_transport.complete',side_effect=responses) as complete:
+                    with patch('tg_triage.ai_transport.read_key',return_value='fake-key'),patch('tg_triage.thinking_transport.complete',side_effect=cloud) as complete:
                         result=evaluate_batch(self.snapshot,provider,[message(42,text=TEXT)])
                 finally:CURRENT.reset(token)
-                self.assertIsNone(result);self.assertEqual(2,turn.calls)
-                self.assertEqual(2,complete.call_count+len(http.calls))
+                self.assertEqual(3,turn.max_calls);self.assertEqual(calls,turn.calls)
+                if expected=='ANALYZE':self.assertEqual('ANALYZE',result[0][1].state)
+                else:self.assertIsNone(result)
+                self.assertEqual(cloud_calls,complete.call_count);self.assertEqual(local_calls,len(http.calls))
+
+    def test_long_analyze_message_runs_its_review_inside_the_cloud_budget(self):
+        from tg_triage.provider import CloudProvider
+        base=config();settings=replace(base,model=replace(base.model,provider='openai',cloud_consent=True,fallback='ollama'))
+        text=TEXT+' '+('Máy in hóa đơn ở quầy số hai không in được, khách đang chờ. '*(10000//62))
+        provider=CloudProvider(settings,opener=FakeHTTP());turn=Turn(self.store,'long','long',42);token=CURRENT.set(turn)
+        try:
+            with patch('tg_triage.ai_transport.read_key',return_value='fake-key'),patch('tg_triage.thinking_transport.complete',side_effect=[generated(),verdict()]) as complete:
+                result=evaluate_batch(self.snapshot,provider,[message(42,text=text)])
+        finally:CURRENT.reset(token)
+        self.assertEqual('ANALYZE',result[0][1].state);self.assertEqual(2,complete.call_count)
+        self.assertGreater(len(text.encode()),9000);self.assertIsNone(turn.reason)
 
     def test_cloud_redaction_and_real_pixels_are_pinned_for_both_calls(self):
         from tg_triage.provider import CloudProvider

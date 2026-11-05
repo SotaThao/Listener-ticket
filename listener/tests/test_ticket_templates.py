@@ -64,7 +64,7 @@ class TicketTemplatesTests(unittest.TestCase):
             with self.subTest(value=value):
                 path = self.directory / 'bug.md'
                 original = (SOURCE / 'bug.md').read_text(encoding='utf-8')
-                path.write_text(original.replace('### 🐞 Lỗi', value, 1), encoding='utf-8')
+                path.write_text(original.replace('### Lỗi', value, 1), encoding='utf-8')
                 with self.assertRaises(TemplateError):
                     validate(self.directory)
 
