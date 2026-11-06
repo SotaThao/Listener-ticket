@@ -71,6 +71,30 @@ Kết luận: GO|NO_GO
 `GO`:
 
 ```
+Phiếu bật · release 064e1c8 (nhánh feat/2178_chat-words, trên main e93b5e2) · ngày 2026-11-06
+Fingerprint rules: 0a17f80922332608447ed6f6952a86b8e11c11fc226b263d666daaaf24c6d8c7
+Fingerprint template: 4e09d8626c7c3b1c49498cf51c560e613a93edb2458315ab876d71834dd2ef44
+P1  PASS — readiness.md v7 (chat_only + chat_words, luật F4), facts.md v5 (N6, 12 cụm work), examples.md v8 (CC1–CC14, G1–G15) ACTIVE; Owner “Duyệt cả ba”, “Đồng ý, deploy” (giùm/giúp ngoài N6, tin có `?` không khớp F4) 2026-11-06 — ký: OWNER, AlexChu
+P2  PASS — test_rules_markdown trong full suite; chat_cases và normalize_cases tự kiểm lúc nạp — ký: DEV
+P3  PASS — check-config + kiểm khởi động trên ledger thật (chỉ đọc, DB không đổi byte), fingerprint như trên — ký: DEV
+P4  PASS — source stage tại máy chạy 2017 test OK (skipped=14) trên 064e1c8; local 2017 test với 1 kỳ vọng cập nhật (CHAT/R7 ⇒ CHAT/F4), class chạy lại OK — ký: DEV
+P5  PASS — policy checker 33/61 + 18 policy test OK — ký: DEV
+P6  PASS — review GATE 0b độc lập CHANGES_REQUESTED, đã sửa hết (ghi lệch giùm/giúp, câu rủi ro cũ, tin có `?`, test merge) — ký: DEV
+P7  PASS — fake-tool test RulesChatOnlyTests: live 0 lần gọi model, batch, nhóm trộn, phạm vi, merge, câu hỏi trạng thái — ký: DEV
+P8  WAIVED — chưa chạy lại corpus model thật; 9 ví dụ gửi model không đổi, F4 chạy trước model, N6 chỉ dùng khi so cụm — ký: OWNER, AlexChu
+P9  PASS — config máy chạy không đổi (SHA trước/sau giống nhau), source_reactions=false — ký: OPERATOR
+P10 PASS — bản trước lưu ở backup của lần deploy 2026-11-06 15:05; rollback thật đã thử 2026-11-05 — ký: OPERATOR
+P11 PASS — deploy 064e1c8, restart 15:05:52, fingerprint trong log khớp P3, 0 lỗi — ký: OPERATOR
+P12 UNCHECKED — group nguồn là PROD, không gửi tin thử; theo dõi tin thật: F1 review PR, F2 giao việc nội bộ, F3 chỉ có link, F4 xã giao, "báo giùm… nha" ra CHAT/NEED_INFO — ký: OPERATOR
+P13 PASS — Owner: GO · 2026-11-06
+Kết luận: GO
+```
+
+Owner 2026-11-06: “Ký GO” cho 064e1c8 (P8 WAIVED, P12 theo dõi tin thật).
+
+Phiếu ba8f5b0 (thay thế bởi phiếu trên):
+
+```
 Phiếu bật · release ba8f5b0 (nhánh feat/2178_team-request-chat, trên main e49c215) · ngày 2026-11-06
 Fingerprint rules: 0eba5319dadf30f50b98dcd7098c9ad356694cdbb2838998a48e86ba6d6a151d
 Fingerprint template: 4e09d8626c7c3b1c49498cf51c560e613a93edb2458315ab876d71834dd2ef44
@@ -92,7 +116,7 @@ Kết luận: GO
 
 Owner 2026-11-06: “Ký GO” cho ba8f5b0 (P8 WAIVED, P12 theo dõi tin thật).
 
-Phiếu 5ecf7e5 (thay thế bởi phiếu trên):
+Phiếu 5ecf7e5 (thay thế bởi phiếu ba8f5b0):
 
 ```
 Phiếu bật · release 5ecf7e5 (nhánh feat/2178_team-request-chat, trên main e49c215) · ngày 2026-11-06

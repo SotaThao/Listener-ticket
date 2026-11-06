@@ -7,7 +7,7 @@ Owner quy trình/data/state: **AlexChu**. Executor (Codex, Gemini/Antigravity, C
 1. **Xác định vai của mình** trong [`rules/roles.md`](rules/roles.md) · bảng `actors`. Chưa được Owner giao vai trong phiên ⇒ bạn là `AGENT`, kể cả khi là model mạnh.
 2. **Tra quyền** của việc sắp làm ở bảng `actions` (A01–A27): `ALLOW` làm; `ASK_OWNER` chỉ làm khi có **đồng ý của Owner trong phiên** đúng định nghĩa trong `roles.md` (nêu đúng việc, gửi trong cuộc trò chuyện hiện tại, trích nguyên văn vào báo cáo); `DENY` hoặc không có trong bảng ⇒ không làm.
 3. Gặp điều kiện ở bảng `stop_and_ask` (S1–S7) ⇒ dừng, báo Owner kèm bằng chứng.
-4. **Bật bot, cài bản mới, đổi config máy chạy**: chỉ khi phiếu trong [`rules/preflight.md`](rules/preflight.md) là `GO` (P1–P13 đã ký). Đang chạy mà gặp H1–H7 ⇒ dừng bot theo bảng `halt`. Hiện trạng: `GO` từ 2026-11-06 cho release `ba8f5b0` (rules mode, lọc trước review PR, tin chỉ có link là CHAT, giao việc nội bộ có `@tên` là CHAT, "báo giùm em" không tính là việc, giới hạn gửi model 24.000 byte, `source_reactions=false`); bản cài hoặc config mới cần phiếu mới.
+4. **Bật bot, cài bản mới, đổi config máy chạy**: chỉ khi phiếu trong [`rules/preflight.md`](rules/preflight.md) là `GO` (P1–P13 đã ký). Đang chạy mà gặp H1–H7 ⇒ dừng bot theo bảng `halt`. Hiện trạng: `GO` từ 2026-11-06 cho release `064e1c8` (rules mode, lọc trước review PR, tin chỉ có link là CHAT, tin chỉ có từ xã giao là CHAT, giao việc nội bộ có `@tên` là CHAT, "báo giùm em" không tính là việc, giới hạn gửi model 24.000 byte, `source_reactions=false`); bản cài hoặc config mới cần phiếu mới.
 
 ## Nguyên tắc nền (Owner, 2026-10-29)
 
