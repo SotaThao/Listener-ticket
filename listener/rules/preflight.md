@@ -66,9 +66,57 @@ P13 PASS — Owner: GO · <ngày>
 Kết luận: GO|NO_GO
 ```
 
-## Hiện trạng (2026-11-05)
+## Hiện trạng (2026-11-06)
 
 `GO`:
+
+```
+Phiếu bật · release ae4b795 (nhánh feat/2178_team-request-chat, trên main e49c215) · ngày 2026-11-06
+Fingerprint rules: 9245d160a5f1c5de2b098dab6813b4e5b4762dad4dc14234c469756fc8302b0d
+Fingerprint template: 4e09d8626c7c3b1c49498cf51c560e613a93edb2458315ab876d71834dd2ef44
+P1  PASS — readiness.md, examples.md v5 ACTIVE (bảng team_request, luật F2); Owner “Có, là CHAT” 2026-11-06 — ký: OWNER, AlexChu
+P2  PASS — test_rules_markdown trong full suite; team_cases TC1–TC12 tự kiểm lúc nạp — ký: DEV
+P3  PASS — check-config + kiểm khởi động trên ledger thật (chỉ đọc, DB không đổi byte), fingerprint như trên — ký: DEV
+P4  PASS — 1939 test OK (skipped=2) trên ae4b795; source stage tại máy chạy 1939 OK (skipped=12) — ký: DEV
+P5  PASS — policy checker 33/61 + 18 policy test OK — ký: DEV
+P6  PASS — review GATE 0b độc lập: vòng 1–2 CHANGES_REQUESTED đã sửa, vòng 3 APPROVED — ký: DEV
+P7  PASS — fake-tool test RulesTeamRequestTests: live 1 tin, batch 2 tin gộp, forward, tag bot, merge, link có @ — ký: DEV
+P8  WAIVED — chưa chạy lại corpus model thật; ví dụ gửi model không đổi, F2 chỉ dùng dữ kiện code tính sau model — ký: OWNER, AlexChu
+P9  PASS — config máy chạy không đổi (SHA trước/sau giống nhau), source_reactions=false — ký: OPERATOR
+P10 PASS — bản trước lưu ở backup của lần deploy 2026-11-06 09:19; rollback thật đã thử 2026-11-05 — ký: OPERATOR
+P11 PASS — deploy ae4b795, restart 09:19:10, fingerprint trong log khớp P3, 0 lỗi — ký: OPERATOR
+P12 UNCHECKED — group nguồn là PROD, không gửi tin thử; #112/#113 xác nhận chữ chỉ vào group xử lý và tiêu đề đánh số; theo dõi tin thật: review PR ra F1, giao việc nội bộ ra F2 — ký: OPERATOR
+P13 PASS — Owner: GO · 2026-11-06
+Kết luận: GO
+```
+
+Owner 2026-11-06: “Ký GO” cho ae4b795 (P8 WAIVED, P12 theo dõi tin thật).
+
+Phiếu e49c215 (thay thế bởi phiếu trên):
+
+```
+Phiếu bật · release main e49c215 · ngày 2026-11-06
+Fingerprint rules: ffe28fd3c88152f92c565fbc77104c763578a17f3dd5b06139666fe46270e23d
+Fingerprint template: 4e09d8626c7c3b1c49498cf51c560e613a93edb2458315ab876d71834dd2ef44
+P1  PASS — sáu file quyết định ACTIVE, không đổi so với 2eae517 — ký: OWNER, AlexChu
+P2  PASS — test_rules_markdown trong full suite — ký: DEV
+P3  PASS — check-config + kiểm khởi động trên ledger thật (chỉ đọc, DB không đổi byte), fingerprint như trên — ký: DEV
+P4  PASS — 1898 test OK (skipped=11) trên source stage e49c215 tại máy chạy — ký: DEV
+P5  PASS — policy checker 33/61 + 18 policy test OK — ký: DEV
+P6  PASS — PR #2 (giới hạn gửi model 24.000 byte, đánh số tiêu đề) review trong phiên riêng, Owner merge — ký: DEV
+P7  PASS — fake-tool test: test_request_budget, pipeline live, batch — ký: DEV
+P8  WAIVED — chưa chạy lại corpus model thật với giới hạn 24.000 byte — ký: OWNER, AlexChu
+P9  PASS — config máy chạy không đổi (SHA trước/sau giống nhau), source_reactions=false — ký: OPERATOR
+P10 PASS — bản trước lưu ở backup của lần deploy 2026-11-06 01:10; rollback thật đã thử 2026-11-05 — ký: OPERATOR
+P11 PASS — deploy e49c215, restart 01:10:41, fingerprint trong log khớp P3, 0 lỗi — ký: OPERATOR
+P12 UNCHECKED — group nguồn là PROD, không gửi tin thử; theo dõi tin thật: review PR ra F1, ticket mới đúng đánh số tiêu đề — ký: OPERATOR
+P13 PASS — Owner: GO · 2026-11-06
+Kết luận: GO
+```
+
+Owner 2026-11-06: “Ký GO” (P8 WAIVED, P12 theo dõi tin thật).
+
+Phiếu 2eae517 (thay thế bởi phiếu e49c215):
 
 ```
 Phiếu bật · release main 2eae517 · ngày 2026-11-05
@@ -92,7 +140,7 @@ Kết luận: GO
 
 Owner 2026-11-05: “Ký GO” (P8 WAIVED, P12 theo dõi tin thật).
 
-Phiếu trước (thay thế bởi phiếu trên):
+Phiếu 2026-11-04 (thay thế bởi phiếu 2eae517):
 
 ```
 Phiếu bật · release main 7ba210b · ngày 2026-11-04
