@@ -1612,6 +1612,143 @@ class RulesPrefilterTests(RulesBootstrapTests):
         self.assertEqual({41:('CHAT','F1'),42:('READY','R9')},{m.message_id:(d.state,d.rule) for ms,d in groups for m in ms})
 
 
+class RulesTeamRequestTests(RulesBootstrapTests):
+    """Owner 2026-11-06 ("Có, là CHAT"): a task handed to or asked of a teammate is CHAT (#112, #113)."""
+    ASSIGN = '@teamlead01 e qua phụ @devmember02 làm ticket chỉnh sửa sidebar nha'
+    ASK = 'anh @leaddev01 check giúp em key MAPS_API_KEY ở staging có chưa anh'
+    TASK_FACTS = RulesPrefilterTests.TASK_FACTS
+    QUESTION_FACTS = ('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"question","source_ids":[42]},'
+                      '"object":{"value":"key MAPS_API_KEY ở staging","source_ids":[42]},"work":{"value":"check key MAPS_API_KEY","source_ids":[42]}}}]}')
+    PLAIN = dict(mentions_listener=False)  # tests.helpers.message tags the listener by default
+
+    def run_live(self, text, *, extensions, facts=None, **extra):
+        extra.setdefault('mentions_listener', False)
+        return RulesPrefilterTests.run_live(self, text, extensions=extensions, facts=facts, **extra)
+
+    @staticmethod
+    def task(ids, intent_ids, work_ids):
+        import json
+        return json.dumps({'groups':[{'message_ids':ids,'facts':{'intent':{'value':'task','source_ids':intent_ids},
+            'object':{'value':'sidebar','source_ids':intent_ids},'work':{'value':'chỉnh sửa sidebar','source_ids':work_ids}}}]})
+
+    def batch(self, sources, raw):
+        from tg_triage.rules_intake import _process_batch
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False; calls=0
+            def _ask(self,body,parse,attempts): Provider.calls+=1; return parse(raw)
+        class GitHub:
+            calls=[]
+            def create_issue(self,issue): GitHub.calls.append(issue); return 1,None
+        store=Store(':memory:'); self.addCleanup(store.close)
+        settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
+                         telegram=replace(config().telegram,ops_chat_id=-1009876543210))
+        notices=[]
+        pipeline=Pipeline(settings,store,Provider(),GitHub(),rules_snapshot=self.snapshot(),notice_sender=lambda *a:notices.append(a) or 77)
+        for source in sources: store.enqueue(source)
+        _process_batch(pipeline,sources)
+        rows={tuple(r) for r in store.connection.execute('SELECT decision,reason FROM messages WHERE message_id IN (%s)'%','.join(str(m.message_id) for m in sources))}
+        return Provider.calls,GitHub.calls,notices,rows
+
+    def test_live_team_task_is_chat_f2_without_ticket_or_notice(self):
+        for extensions in (False,True):
+            for text,facts,intent_rule in ((self.ASSIGN,self.TASK_FACTS,'I2'),(self.ASK,self.QUESTION_FACTS,'I1')):
+                with self.subTest(extensions=extensions,text=text):
+                    result,provider,github,notices,row=self.run_live(text,extensions=extensions,facts=facts)
+                    self.assertEqual(('chat','F2'),(result.decision,result.reason))
+                    self.assertEqual(1,provider.calls)
+                    self.assertEqual([],github.calls)
+                    self.assertEqual([],notices)
+                    self.assertEqual(('CHAT','F2',intent_rule),tuple(row))
+
+    def test_live_case_two_grouped_messages_is_chat_f2(self):
+        # Live #112: two messages of one sender, both tagging teammates, grouped into one topic.
+        sources=[message(41,text=self.ASSIGN,**self.PLAIN),message(42,text='@devmember02 e tạo ticket con rồi assign cho @devmember03',**self.PLAIN)]
+        calls,github,notices,rows=self.batch(sources,self.task([41,42],[41],[42]))
+        self.assertEqual((1,[],[]),(calls,github,notices))
+        self.assertEqual({('chat','F2')},rows)
+
+    def test_teammate_tag_outside_the_cited_message_keeps_the_ticket(self):
+        # Review B4: a requester's untagged message grouped with a PM's "@dev nhận nha" stays a ticket.
+        sources=[message(41,text='báo cáo doanh thu cần thêm cột phí giao dịch',**self.PLAIN),
+                 message(42,text='@devmember02 em nhận cái này nha',**self.PLAIN)]
+        for intent_ids in ([41],[41,42]):  # however the model cites intent, the untagged request keeps the ticket
+            with self.subTest(intent_ids=intent_ids):
+                calls,github,_,rows=self.batch(sources,self.task([41,42],intent_ids,[41]))
+                self.assertEqual(1,len(github))
+                self.assertEqual({('issue','R10')},rows)
+
+    def test_forwarded_tag_is_the_requester_speaking_and_keeps_the_ticket(self):
+        # Review B2: a forwarded customer message that tags a sales contact is not internal assignment.
+        _,_,github,_,row=self.run_live('Chị @sales_lan ơi bên chị cần thêm nút xuất Excel ở báo cáo',extensions=True,
+                                       facts=self.task([42],[42],[42]),is_forward=True)
+        self.assertEqual(1,len(github.calls))
+        self.assertEqual(('READY','R10'),tuple(row)[:2])
+
+    def test_pending_answer_merge_never_applies_team_request(self):
+        # Review B1: an answer merged into a NEED_INFO topic keeps the open question's topic.
+        from tg_triage.rules_intake import evaluate_batch
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False
+            # Model cites only the tagged answer: a fresh topic would be F2, so R10 proves the merge guard.
+            def _ask(self,body,parse,attempts): return parse(RulesTeamRequestTests.task([41,42],[42],[42]))
+        sources=[message(41,text='màn báo cáo cần thêm 1 nút',**self.PLAIN),message(42,text='@devmember02 thêm nút xuất Excel nhé em',**self.PLAIN)]
+        merged=evaluate_batch(self.snapshot(),Provider(),sources,allow_mixed=True)
+        self.assertEqual([('READY','R10')],[(d.state,d.rule) for _,d in merged])
+        fresh=evaluate_batch(self.snapshot(),Provider(),sources)
+        self.assertEqual([('CHAT','F2')],[(d.state,d.rule) for _,d in fresh])
+
+    def test_tagging_the_bot_still_creates_the_ticket(self):
+        _,_,github,_,row=self.run_live(self.ASSIGN,extensions=True,facts=self.TASK_FACTS,mentions_listener=True)
+        self.assertEqual(1,len(github.calls))
+        self.assertEqual(('READY','R10'),tuple(row)[:2])
+
+    def test_bug_addressed_to_teammate_still_creates_the_ticket(self):
+        bug=('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+             '"object":{"value":"màn Queue","source_ids":[42]},"observed":{"value":"bị trắng","source_ids":[42]}}}]}')
+        _,_,github,_,row=self.run_live('@devmember02 màn Queue bị trắng khi mở',extensions=True,facts=bug)
+        self.assertEqual(1,len(github.calls))
+        self.assertEqual(('READY','R9'),tuple(row)[:2])
+
+    def test_task_without_teammate_tag_or_with_command_still_creates_the_ticket(self):
+        for text in ('thêm nút xuất Excel ở báo cáo','/task @devmember02 thêm nút xuất Excel ở báo cáo',
+                     'thêm nút xuất Excel, gửi file cho ngan@example.com',
+                     'cập nhật link https://www.tiktok.com/@shopofficial ở footer trang chủ'):
+            with self.subTest(text=text):
+                _,_,github,_,row=self.run_live(text,extensions=True,facts=self.TASK_FACTS)
+                self.assertEqual(1,len(github.calls))
+                self.assertEqual(('READY','R10'),tuple(row)[:2])
+
+    def test_code_fact_scope(self):
+        from tg_triage.rules_intake import code_facts
+        p=self.PLAIN
+        self.assertEqual(frozenset({42}),code_facts([message(41,text='làm sidebar',**p),message(42,text='@devmember02 nhận nha',**p)]).team_mention_ids)
+        self.assertEqual(frozenset(),code_facts([message(41,text=self.ASSIGN,**p),message(42,text='tạo ticket',mentions_listener=True)]).team_mention_ids)
+        self.assertEqual(frozenset(),code_facts([message(42,text=self.ASSIGN,is_forward=True,**p)]).team_mention_ids)
+        self.assertEqual(frozenset(),code_facts([message(42,text=self.ASSIGN,**p)],team=False).team_mention_ids)  # merge / recurrence
+
+    def test_mention_tokenizer_edges(self):
+        from tg_triage.decision_rules import has_team_mention
+        self.assertTrue(has_team_mention('anh @​PmqQuan check giúp'))  # zero-width inside is removed first
+        self.assertTrue(has_team_mention('(@devmember02) nhận nha'))
+        for text in ('gửi cho ngan@example.com','@dev1 làm','@1abcdef làm',None,'xem https://medium.com/@johnsmith/post',
+                     'youtube.com/@kenhchinh','nâng @angular/core lên 17','sửa `@Transactional` ở PaymentService'):
+            with self.subTest(text=text): self.assertFalse(has_team_mention(text))
+
+    def test_reply_into_ticket_or_bot_question_is_out_of_scope(self):
+        from tg_triage.decision_rules import CodeFacts
+        snapshot=self.snapshot()
+        model={'intent':{'value':'task','source_ids':[42]},'object':{'value':'sidebar','source_ids':[42]},'work':{'value':'sửa','source_ids':[42]}}
+        def facts(**kw):
+            base=dict(command='∅',command_payload='none',text='có',extraction_ok='true',reply_target='none',topic_ids=frozenset({42}),
+                      image_ids=frozenset(),seen_image_ids=frozenset(),text_source_ids=frozenset({42}),document_ids=frozenset(),team_mention_ids=frozenset({42}))
+            base.update(kw); return CodeFacts(**base)
+        self.assertEqual(('CHAT','F2'),(lambda d:(d.state,d.rule))(snapshot.evaluate(model,facts())))
+        self.assertEqual('R6',snapshot.evaluate(model,facts(reply_target='ticket_open')).rule)
+        self.assertEqual('R10',snapshot.evaluate(model,facts(reply_target='bot_question')).rule)
+        self.assertEqual('R10',snapshot.evaluate(model,facts(team_mention_ids=frozenset())).rule)
+        with self.assertRaises(ValueError): snapshot.evaluate(model,facts(team_mention_ids=frozenset({43})))
+
+
 class RulesReadyTicketBodyTests(RulesBootstrapTests):
     """Live 2026-11-05 (#95-#99): READY facts must fill the type template, not raise false questions."""
 

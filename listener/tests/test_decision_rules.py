@@ -51,6 +51,15 @@ class DecisionRulesTest(unittest.TestCase):
         self.mutate('readiness', '| `đệm` | `nha` |\n', '')
         with self.assertRaisesRegex(RulesError, 'prefilter self-check failed'): self.load()
 
+    def test_team_request_definition_is_hash_locked(self):
+        self.mutate('readiness', '| T2 | `intent` sau bảng', '| T2 | `intent` (bất kỳ) sau bảng')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported team_request definition'): self.load()
+
+    def test_team_cases_execute_on_load(self):
+        self.mutate('examples', 'màn thanh toán bị trắng khi bấm Pay | `không` | `bug` | R9 |',
+                    'màn thanh toán bị trắng khi bấm Pay | `không` | `bug` | F2 |')
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*team_request self-check'): self.load()
+
     def test_draft_fails_closed(self):
         self.mutate('facts', 'status ACTIVE', 'status DRAFT')
         with self.assertRaisesRegex(RulesError, r'facts.md:1:.*ACTIVE'): self.load()

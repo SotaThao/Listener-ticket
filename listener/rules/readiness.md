@@ -1,7 +1,9 @@
-<!-- rule-file: readiness · version 4 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 5 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
+
+Owner 2026-11-06: “Có, là CHAT” — giao việc hoặc nhờ/hỏi đồng nghiệp trong team (tag `@tên`) không phải ticket.
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -66,6 +68,18 @@ Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ x
 | `đệm` | `issue` |
 | `đệm` | `please` |
 | `đệm` | `pls` |
+
+## Bảng: team_request
+
+Xét **sau model**, sau bảng `intent_resolve`, **trước** bảng `decision`. Chỉ dựa vào dữ kiện code tính và `intent`; model không biết luật này. Khớp ⇒ `CHAT` với luật `F2`: không ticket, không hỏi. Không khớp ⇒ đi tiếp bảng `decision` như cũ.
+
+| # | Bước |
+|---|---|
+| T1 | Chủ đề mới: không có command, `extraction_ok` = `true`, `reply_target` = `none`; không phải tin nối vào chủ đề đang chờ trả lời câu hỏi của bot, không phải bước kiểm lại ticket liên quan (recurrence) |
+| T2 | `intent` sau bảng `intent_resolve` là `task` (gồm `question` có `work` ở I1) |
+| T3 | **Mọi** tin model lấy làm nguồn cho `intent` hoặc `work` đều là tin **không forward** có `@tên` Telegram: `@` + chữ cái Latin + 4–31 chữ cái Latin, số hoặc `_`; không dính sau chữ, số, `@` hay `.` (email không tính). Trước khi tìm: bỏ ký tự vô hình, bỏ đoạn trong backtick, bỏ mọi cụm không khoảng trắng có `/` (link như `tiktok.com/@shop`, gói như `@org/pkg`) |
+| T4 | Không tin nào của chủ đề tag tài khoản bot (cờ `mentioned` của Telegram) |
+| T5 | Khớp T1–T4 ⇒ `CHAT` (luật `F2`). `bug`, `feedback`, lệnh `/task` và tin có tag bot vẫn đi bảng `decision` |
 
 ## Bảng: intent_resolve
 

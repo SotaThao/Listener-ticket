@@ -13,10 +13,10 @@ FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
-    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
+    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
 }
 PREFILTER_RULE = "F1"
 PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
@@ -28,6 +28,14 @@ _URL = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+|\b[A-Za-z0-9.-]+\.[A-Za-z
 _MENTION = re.compile(r"@\w+")
 _INVISIBLE = re.compile("[​-‍⁠﻿]")
 _NUMBER = re.compile(r"#?[0-9]+")
+TEAM_RULE = "F2"
+TEAM_SHA256 = "fa5f17ba389bf8b55f636a8b77889de1a0325284933585034d40afad59458f5a"
+# readiness.md · team_request T3: a Telegram @username (letter first, 5–32 of letter/digit/_),
+# not glued after a letter, digit, `@` or `.` (e-mail addresses are not mentions). Code spans and
+# any space-free run containing `/` (links such as tiktok.com/@shop, packages such as @org/pkg) go first.
+_TEAM_MENTION = re.compile(r"(?<![\w@.])@[A-Za-z][A-Za-z0-9_]{4,31}(?![\w])")
+_CODE_SPAN = re.compile(r"`[^`]*`")
+_SLASH_RUN = re.compile(r"\S*/\S*")
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
 TICKS = re.compile(r"`([^`]+)`")
@@ -137,6 +145,17 @@ class CodeFacts:
     seen_image_ids: frozenset[int]
     text_source_ids: frozenset[int]
     document_ids: frozenset[int]
+    # readiness.md · team_request T3+T4: own (non-forwarded) messages with a teammate @username;
+    # empty when any source tags the bot or the topic is a pending-answer merge.
+    team_mention_ids: frozenset[int] = frozenset()
+
+
+def has_team_mention(text) -> bool:
+    """readiness.md · team_request T3 on one message text."""
+    if not isinstance(text, str): return False
+    value = unicodedata.normalize('NFC', _INVISIBLE.sub('', text))
+    value = _SLASH_RUN.sub(' ', _CODE_SPAN.sub(' ', value))
+    return bool(_TEAM_MENTION.search(value))
 
 
 @dataclass(frozen=True)
@@ -298,6 +317,10 @@ class RulesSnapshot:
         if [r.cells['#'] for r in steps] != ['P1', 'P2', 'P3', 'P4']: steps[0].fail('unsupported prefilter sequence')
         encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in steps).encode('utf8')
         if hashlib.sha256(encoded).hexdigest() != PREFILTER_SHA256: steps[0].fail('unsupported prefilter definition')
+        steps = t['readiness']['team_request']
+        if [r.cells['#'] for r in steps] != ['T1', 'T2', 'T3', 'T4', 'T5']: steps[0].fail('unsupported team_request sequence')
+        encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in steps).encode('utf8')
+        if hashlib.sha256(encoded).hexdigest() != TEAM_SHA256: steps[0].fail('unsupported team_request definition')
         words = {'việc': set(), 'đệm': set()}
         for r in t['readiness']['prefilter_words']:
             kind, word = r.one('Loại'), r.one('Từ')
@@ -355,9 +378,10 @@ class RulesSnapshot:
 
     def evaluate(self, model: Mapping, facts: CodeFacts, asked_counts: Mapping[str, int] | None = None) -> Decision:
         if not isinstance(model, Mapping) or not isinstance(facts, CodeFacts): raise ValueError('invalid input')
-        for ids in (facts.topic_ids, facts.image_ids, facts.seen_image_ids, facts.text_source_ids, facts.document_ids):
+        for ids in (facts.topic_ids, facts.image_ids, facts.seen_image_ids, facts.text_source_ids, facts.document_ids, facts.team_mention_ids):
             if not isinstance(ids, frozenset) or any(type(i) is not int or i <= 0 for i in ids): raise ValueError('invalid source IDs')
         if not facts.seen_image_ids <= facts.image_ids <= facts.topic_ids or not facts.text_source_ids <= facts.topic_ids or not facts.document_ids <= facts.topic_ids: raise ValueError('invalid source boundaries')
+        if not facts.team_mention_ids <= facts.text_source_ids: raise ValueError('invalid team mention sources')
         code = {'command': facts.command, 'command_payload': facts.command_payload, 'text': facts.text,
                 'media': 'có' if facts.image_ids or facts.document_ids else 'không', 'extraction_ok': facts.extraction_ok, 'reply_target': facts.reply_target}
         for key, value in code.items():
@@ -365,7 +389,7 @@ class RulesSnapshot:
         if (facts.command == '∅') != (facts.command_payload == 'none'): raise ValueError('inconsistent command payload')
         counts = {} if asked_counts is None else asked_counts
         if not isinstance(counts, Mapping) or any(k not in self.text_fields or type(v) is not int or v < 0 for k,v in counts.items()): raise ValueError('invalid asked counts')
-        parsed = {}
+        parsed, intent_ids = {}, ()
         for key in self.text_fields | {'intent', 'media_ids'}:
             if key not in model: continue
             item = model[key]
@@ -377,7 +401,7 @@ class RulesSnapshot:
             if not isinstance(value, str): raise ValueError(f'invalid model value {key}')
             # An unrelated source invalidates the entire field; unseen image-only evidence cannot establish it.
             if not ids or not set(ids) <= facts.topic_ids or not (set(ids) & (facts.text_source_ids | facts.seen_image_ids)): continue
-            if key == 'intent': parsed[key] = value if value in self.intents else 'unknown'; continue
+            if key == 'intent': parsed[key] = value if value in self.intents else 'unknown'; intent_ids = ids; continue
             value = value[:self.limits['max_value_chars']]
             normal = normalize(value)
             if normal and normal not in self.generic[key]: parsed[key] = Field(value, ids)
@@ -391,6 +415,14 @@ class RulesSnapshot:
             intent_rule = r.cells['#']; break
         if intent not in self.intents: raise ValueError('no valid intent resolution')
         code['intent'] = intent
+        # readiness.md · team_request T1–T5 (Owner 2026-11-06 "Có, là CHAT"): a task handed to or asked
+        # of a teammate is team conversation, not a ticket. bug/feedback and explicit commands are unaffected.
+        # T3: EVERY message the model cited for intent or work must carry the tag, so a teammate's tag in
+        # one message of a grouped topic never silences a requester's untagged message.
+        cited = set(intent_ids) | (set(parsed['work'].source_ids) if 'work' in parsed else set())
+        if (facts.command == '∅' and facts.reply_target == 'none' and facts.extraction_ok == 'true'
+                and intent == 'task' and cited and cited <= facts.team_mention_ids):
+            return Decision('CHAT', intent, intent_rule, TEAM_RULE, MappingProxyType({k:parsed[k] for k in present}), (), (), self.fingerprint)
         for r in self.tables['readiness']['decision']:
             if not all(self._matches(r, k, v) for k,v in code.items()): continue
             if not self._all(r, 'cần CÓ tất cả', present): continue
@@ -452,6 +484,23 @@ class RulesSnapshot:
             if self.prefilter_text(row.cells['Tin']) != (expected == 'CHAT'): row.fail('prefilter self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['prefilter_cases'][0].fail('prefilter cases need both outcomes')
+        team = set()
+        for row in self.tables['examples']['team_cases']:
+            try:
+                text, tagged = row.cells['Tin'], row.one('tag bot')
+                if tagged not in {'có', 'không'}: raise ValueError('invalid tag bot')
+                match = re.match(r'/([A-Za-z]+)\s*', text)
+                command = '/' + match[1].lower() if match else '∅'
+                facts = CodeFacts(command, 'text' if match else 'none', 'có', 'true', 'none', frozenset({1}), frozenset(), frozenset(),
+                                  frozenset({1}), frozenset(), frozenset({1}) if has_team_mention(text) and tagged == 'không' else frozenset())
+                model = {'intent': {'value': row.one('intent (model)'), 'source_ids': [1]}}
+                for key, value in (('object', 'màn hình báo cáo'), ('work', 'thêm nút xuất'), ('observed', 'bị trắng'), ('problem', 'khó đọc')):
+                    model[key] = {'value': value, 'source_ids': [1]}
+                decision = self.evaluate(model, facts)
+                if decision.rule != row.cells['Luật']: raise ValueError(f'expected {row.cells["Luật"]}, got {decision.rule}')
+                team.add(decision.rule == TEAM_RULE)
+            except (ValueError, TypeError) as exc: row.fail(f'team_request self-check: {exc}')
+        if team != {True, False}: self.tables['examples']['team_cases'][0].fail('team cases need both outcomes')
         for row in self.tables['examples']['normalize_cases']:
             field, value, expected = row.one('Trường'), row.one('Giá trị'), row.one('Chung chung')
             if field not in self.text_fields or expected not in {'có','không'} or (normalize(value) in self.generic[field]) != (expected == 'có'): row.fail('normalization self-check failed')

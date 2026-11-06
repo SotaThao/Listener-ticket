@@ -48,6 +48,7 @@ REQUIRED = {
     "readiness": {
         "prefilter": ["#", "Bước"],
         "prefilter_words": ["Loại", "Từ"],
+        "team_request": ["#", "Bước"],
         "intent_resolve": ["#", "command", "intent (model)", "cần CÓ", "intent dùng"],
         "decision": [
             "#", "command", "command_payload", "text", "media", "extraction_ok", "reply_target",
@@ -75,6 +76,7 @@ REQUIRED = {
             "extraction_ok", "reply_target", "intent (model)", "Dữ kiện", "Kết quả", "Luật", "Hỏi",
         ],
         "prefilter_cases": ["#", "Tin", "Kết quả"],
+        "team_cases": ["#", "Tin", "tag bot", "intent (model)", "Luật"],
         "normalize_cases": ["#", "Trường", "Giá trị", "Chung chung"],
     },
     "roles": {

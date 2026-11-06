@@ -1,6 +1,6 @@
 """Trusted code facts for the rules-based intake path."""
 from . import rules
-from .decision_rules import CodeFacts
+from .decision_rules import CodeFacts, has_team_mention
 
 
 def _direct_closed_evidence(snapshot, members):
@@ -68,7 +68,7 @@ def _task_grounded(task, members, read_context=(), documents=()):
     return False
 
 
-def code_facts(sources, *, seen_image_ids=frozenset(), extraction_ok=True, reply_target='none', document_text_ids=frozenset()):
+def code_facts(sources, *, seen_image_ids=frozenset(), extraction_ok=True, reply_target='none', document_text_ids=frozenset(), team=True):
     sources = list(sources)
     if not sources or len({m.message_id for m in sources}) != len(sources): raise ValueError('invalid source refs')
     first = sources[0]
@@ -83,8 +83,12 @@ def code_facts(sources, *, seen_image_ids=frozenset(), extraction_ok=True, reply
     images = frozenset(m.message_id for m in sources if m.has_image)
     text_ids = frozenset(m.message_id for m in sources if m.text.strip()) | frozenset(document_text_ids)
     documents = frozenset(m.message_id for m in sources if m.has_document)
+    # readiness.md · team_request T1+T3+T4: own (non-forwarded) messages with a teammate @username;
+    # none when any source tags the bot, or for a pending-answer merge / recurrence (team=False).
+    mentions = frozenset(m.message_id for m in sources if not m.is_forward and m.text.strip() and has_team_mention(m.text))
+    if not team or any(m.mentions_listener for m in sources): mentions = frozenset()
     return CodeFacts(command,payload,'có' if has_text else 'không','true' if extraction_ok else 'false',
-                     reply_target,ids,images,frozenset(seen_image_ids),text_ids,documents)
+                     reply_target,ids,images,frozenset(seen_image_ids),text_ids,documents,mentions)
 
 
 def _prefilter_source(snapshot, message):
@@ -103,7 +107,8 @@ def early_decision(snapshot, sources, *, prefilter=True):
         return snapshot.prefilter_decision()
     if len(sources) != 1: return None
     result = snapshot.evaluate({}, code_facts(sources, extraction_ok=False))
-    row = next(row for row in snapshot.tables['readiness']['decision'] if row.cells['#'] == result.rule)
+    row = next((row for row in snapshot.tables['readiness']['decision'] if row.cells['#'] == result.rule), None)
+    if row is None: return None
     independent = (row.cells['extraction_ok'] == '*' and row.cells['intent'] == '*'
                    and row.cells['cần CÓ tất cả'] == '—' and row.cells['cần CÓ ít nhất một'] == '—')
     if sources[0].reply_to_id is not None and row.cells['reply_target'] != '*': independent = False
@@ -188,7 +193,8 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
                                     not any(m.message_id in selected_images for m in cited))
                 if not (ambiguous or ambiguous_document) or (normalize(field['value']) and normalize(field['value']) in normalize(' '.join([m.text for m in cited] + [row.get('text','') for row in documents or () if row.get('read_status')=='read' and row.get('message_id') in {m.message_id for m in cited}]))):
                     grounded[name]=field
-            evaluated = snapshot.evaluate(grounded,code_facts(members,seen_image_ids=selected_images,reply_target='ticket_open' if target=='ticket_closed' else target,document_text_ids=doc_ids),asked_counts)
+            # A pending-answer merge (allow_mixed) keeps the open question's topic: team_request never applies.
+            evaluated = snapshot.evaluate(grounded,code_facts(members,seen_image_ids=selected_images,reply_target='ticket_open' if target=='ticket_closed' else target,document_text_ids=doc_ids,team=not allow_mixed),asked_counts)
             if target == 'ticket_closed' and snapshot.extensions and evaluated.state != 'CHAT':
                 from dataclasses import replace
                 if (lifecycle['kind']=='evidence' and _direct_closed_evidence(snapshot,members)
@@ -1002,7 +1008,8 @@ def _create_related_episode_inner(pipeline,q,source,answer,proof,plan,*,direct=F
     try:
         facts={name:field for name,field in plan['present'].items() if set(field['source_ids'])<=recurrence_ids}
         facts['intent']={'value':plan['intent'],'source_ids':[anchor.message_id]}
-        readiness_facts=code_facts(recurrence,reply_target='none',
+        # The recurrence re-check is a ticket_open-scoped decision: team_request (T1) never applies.
+        readiness_facts=code_facts(recurrence,reply_target='none',team=False,
             seen_image_ids=frozenset(int(mid) for mid in (plan.get('lifecycle_pixels') or {}) if int(mid) in recurrence_ids),
             document_text_ids=frozenset(row['message_id'] for row in plan.get('document_reads',()) if row.get('read_status')=='read' and row['message_id'] in recurrence_ids))
         # A bound B is an explicit textual confirmation, but its ops message ID

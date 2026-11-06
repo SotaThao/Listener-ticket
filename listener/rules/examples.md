@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 4 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 5 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -69,6 +69,25 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `prefilter`). 
 | PF21 | [PR](https://github.com/org/repo/pull/12) review giúp em | `CHAT` |
 | PF22 | review giúp em https://github.com/org/repo/pull/12/files | `CHAT` |
 | PF23 | PR#12 review giúp em https://github.com/org/repo/pull/12 | `CHAT` |
+
+## Bảng: team_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `team_request`). Mỗi ca coi như model đã trả `intent` ở cột "intent (model)" và đủ `object`, `work`, `observed`, `problem`; cột "Luật" là luật phải ra. TC1, TC2 là dạng ẩn danh của tin live đã thành ticket #112, #113. Bảng này **không** gửi cho model.
+
+| # | Tin | tag bot | intent (model) | Luật |
+|---|---|---|---|---|
+| TC1 | @teamlead01 e qua phụ @devmember02 làm ticket chỉnh sửa sidebar nha | `không` | `task` | F2 |
+| TC2 | anh @leaddev01 check giúp em key MAPS_API_KEY ở staging có chưa anh | `không` | `question` | F2 |
+| TC3 | @devmember02 thêm nút xuất Excel ở báo cáo | `không` | `task` | F2 |
+| TC4 | @devmember02 màn thanh toán bị trắng khi bấm Pay | `không` | `bug` | R9 |
+| TC5 | @devmember02 khách góp ý màn báo cáo khó đọc | `không` | `feedback` | R11 |
+| TC6 | @botaccount01 thêm nút xuất Excel ở báo cáo | `có` | `task` | R10 |
+| TC7 | /task @devmember02 thêm nút xuất Excel ở báo cáo | `không` | `task` | R10 |
+| TC8 | thêm nút xuất Excel, gửi file cho ngan@example.com | `không` | `task` | R10 |
+| TC9 | @dev1 thêm nút xuất Excel ở báo cáo | `không` | `task` | R10 |
+| TC10 | thêm nút xuất Excel ở báo cáo | `không` | `task` | R10 |
+| TC11 | cập nhật link https://www.tiktok.com/@shopofficial ở footer trang chủ | `không` | `task` | R10 |
+| TC12 | nâng @angular/core lên 17 và sửa `@Transactional` ở PaymentService | `không` | `task` | R10 |
 
 ## Bảng: normalize_cases
 
