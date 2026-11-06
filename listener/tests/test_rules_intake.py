@@ -84,7 +84,8 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
             def _ask(self,body,parse,attempts): self.calls+=1; return parse(self.payload)
         provider=Provider('{"groups":[{"message_ids":[1],"facts":{"intent":{"value":"chat","source_ids":[1]},"object":{"value":"POS","source_ids":[1]},"observed":{"value":"kẹt giấy","source_ids":[1]},"confidence":0}},{"message_ids":[2],"facts":{"intent":{"value":"chat","source_ids":[2]}}}]}')
         result=evaluate_batch(snapshot,provider,[message(1,text='/bug POS kẹt giấy'),message(2,text='cảm ơn')])
-        self.assertEqual([(d.state,d.rule) for _,d in result],[('READY','R9'),('CHAT','R7')])
+        # "cảm ơn" is small talk: the local rule F4 decides it before the model's chat/R7 (Owner 2026-11-06).
+        self.assertEqual([(d.state,d.rule) for _,d in result],[('READY','R9'),('CHAT','F4')])
         provider.payload='{"groups":[{"message_ids":[1],"facts":{}},{"message_ids":[2],"facts":{"expected":null}}]}'
         self.assertIsNone(evaluate_batch(snapshot,provider,[message(1),message(2)]))
         provider.calls=0
@@ -1805,6 +1806,86 @@ class RulesLinkOnlyTests(RulesBootstrapTests):
     def test_pending_answer_merge_is_never_short_circuited(self):
         from tg_triage.rules_intake import early_decision
         self.assertIsNone(early_decision(self.snapshot(),[message(42,text=self.LINK)],prefilter=False))
+
+
+class RulesChatOnlyTests(RulesBootstrapTests):
+    """Owner 2026-11-06 ("Duyệt cả ba"): small talk made only of chat_words is CHAT before any model call."""
+
+    def run_live(self, text, *, extensions, facts=None, **extra):
+        extra.setdefault('mentions_listener', False)
+        return RulesPrefilterTests.run_live(self, text, extensions=extensions, facts=facts or RulesPrefilterTests.TASK_FACTS, **extra)
+
+    def test_live_small_talk_is_chat_f4_without_model_ticket_or_notice(self):
+        for extensions in (False,True):
+            for text in ('ok anh','Dạ em cảm ơn ạ!','👍'):
+                with self.subTest(extensions=extensions,text=text):
+                    result,provider,github,notices,row=self.run_live(text,extensions=extensions)
+                    self.assertEqual(('chat','F4'),(result.decision,result.reason))
+                    self.assertEqual((0,[],[]),(provider.calls,github.calls,notices))
+                    self.assertEqual(('CHAT','F4','prefilter'),tuple(row))
+
+    def test_problem_words_still_reach_the_model(self):
+        for text in ('vẫn không được','ok anh, lỗi rồi'):
+            with self.subTest(text=text):
+                _,provider,_,_,_=self.run_live(text,extensions=True)
+                self.assertEqual(1,provider.calls)
+
+    def test_scope_excludes_reply_forward_attachment_and_command(self):
+        from tg_triage.rules_intake import _local_rule
+        snapshot=self.snapshot()
+        self.assertEqual('F4',_local_rule(snapshot,[message(42,text='ok anh')]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text='ok anh',reply_to_id=7)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text='ok anh',is_forward=True)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text='ok anh',has_image=True)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text='/task ok anh')]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text='   ')]))
+
+    def test_batch_all_small_talk_skips_model_and_mixed_batch_keeps_model(self):
+        from tg_triage.rules_intake import evaluate_batch
+        snapshot=self.snapshot()
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False
+            def __init__(self,raw): self.raw=raw; self.calls=0
+            def _ask(self,body,parse,attempts): self.calls+=1; return parse(self.raw)
+        provider=Provider('{}')
+        groups=evaluate_batch(snapshot,provider,[message(41,text='ok anh'),message(42,text='thanks team 🙏')])
+        self.assertEqual(0,provider.calls)
+        self.assertEqual([('CHAT','F4')],[(d.state,d.rule) for _,d in groups])
+        provider=Provider('{"groups":[{"message_ids":[41],"facts":{"intent":{"value":"chat","source_ids":[41]}}},'
+                          '{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+                          '"object":{"value":"màn Queue","source_ids":[42]},"observed":{"value":"bị trắng","source_ids":[42]}}}]}')
+        groups=evaluate_batch(snapshot,provider,[message(41,text='ok anh'),message(42,text='màn Queue bị trắng khi mở')])
+        self.assertEqual(1,provider.calls)
+        self.assertEqual({41:('CHAT','F4'),42:('READY','R9')},{m.message_id:(d.state,d.rule) for ms,d in groups for m in ms})
+
+    def test_pending_answer_merge_is_never_short_circuited(self):
+        from tg_triage.rules_intake import early_decision, evaluate_batch
+        self.assertIsNone(early_decision(self.snapshot(),[message(42,text='ok anh')],prefilter=False))
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False; calls=0
+            def _ask(self,body,parse,attempts):
+                Provider.calls+=1
+                return parse('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"chat","source_ids":[42]}}}]}')
+        groups=evaluate_batch(self.snapshot(),Provider(),[message(42,text='ok anh')],allow_mixed=True)
+        self.assertEqual(1,Provider.calls)
+        self.assertEqual([('CHAT','R7')],[(d.state,d.rule) for _,d in groups])
+
+    def test_status_question_is_never_small_talk(self):
+        from tg_triage.rules_intake import _local_rule
+        for text in ('xong rồi à anh?','ok?','rồi à？'):
+            with self.subTest(text=text): self.assertIsNone(_local_rule(self.snapshot(),[message(42,text=text)]))
+
+    def test_report_back_with_particles_is_not_work(self):
+        # N6 + generic work: #115 with a trailing particle no longer turns a question into a ticket.
+        from tg_triage.decision_rules import CodeFacts
+        snapshot=self.snapshot()
+        facts=CodeFacts('∅','none','có','true','none',frozenset({1}),frozenset(),frozenset(),frozenset({1}),frozenset())
+        for intent,state,rule in (('question','CHAT','R8'),('task','NEED_INFO','R12')):
+            for work in ('báo giùm em nha','cho mình biết với','báo dùm ạ'):
+                with self.subTest(intent=intent,work=work):
+                    d=snapshot.evaluate({'intent':{'value':intent,'source_ids':[1]},'object':{'value':'link zoom daily','source_ids':[1]},
+                                         'work':{'value':work,'source_ids':[1]}},facts)
+                    self.assertEqual((state,rule),(d.state,d.rule))
 
 
 class RulesReadyTicketBodyTests(RulesBootstrapTests):

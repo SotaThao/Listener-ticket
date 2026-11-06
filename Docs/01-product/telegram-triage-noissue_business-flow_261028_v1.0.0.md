@@ -181,9 +181,9 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- |
 | 0 | Nạp + kiểm quy tắc, template, prompt; tính fingerprint (sai ⇒ không khởi động) | Code | `rules/*.md`, `templates/`, `prompts/` |
 | 1 | Gom tin theo nhịp hội thoại (30s yên lặng, tối đa 60s) | Code | config |
-| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only` |
+| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words` |
 | 3 | Chia chủ đề + trích dữ kiện kèm `source_ids` (không kết luận) | Model | `facts.md` · `fields`, 9 ví dụ cố định |
-| 4 | Tính trường CÓ (bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `generic_values`, `readiness.md` |
+| 4 | Tính trường CÓ (chuẩn hóa N1–N6 bỏ chữ đệm cuối; bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `normalize`, `generic_values`, `readiness.md` |
 | 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `intent`/`work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |
 | 6 | Bảng `decision` R1–R13 ⇒ `READY` / `NEED_INFO` / `MEDIA_ONLY` / `CHAT` / `HOLD` / `APPEND` | Code | `readiness.md` · `decision` |
 | 7 | `READY`: chọn template, tạo issue một lần, đọc lại; `NEED_INFO`: hỏi trường thiếu | Code | `templates/`, `questions.md` |
@@ -206,7 +206,7 @@ sequenceDiagram
     Note over Bot: 1. Gom tin (30s yên lặng, tối đa 60s)
 
     Note over Bot,R: 2. Lọc local trước model
-    alt Mọi tin là nhờ review PR (F1) hoặc chỉ có link (F3)
+    alt Mọi tin là nhờ review PR (F1), chỉ có link (F3) hoặc chỉ từ xã giao (F4)
         Note over Bot: CHAT — không gọi model, không ticket, không báo
     else Còn lại
         Bot->>M: 3. Gói tin + danh sách trường cần trích
@@ -235,6 +235,7 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- |
 | `F1` | Trước model | #95, #111: "anh review giúp em PR …/pull/1427" | `CHAT` |
 | `F3` | Trước model | 6435: chỉ gửi `https://www.onorca.dev/` | `CHAT` (ảnh xem trước của link không tính là ảnh người gửi) |
+| `F4` | Trước model | "ok anh", "dạ em cảm ơn ạ", "👍" | `CHAT` |
 | `F2` | Sau model | #112, #113: "@A qua phụ @B làm ticket…", "anh @A check giúp key staging" | `CHAT` |
 | cụm chung chung | Sau model | #115: "các anh có dùng link zoom không? báo giùm em nha" | `CHAT` (R8) hoặc `NEED_INFO` (R12) |
 

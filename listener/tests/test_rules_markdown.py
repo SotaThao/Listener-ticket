@@ -26,6 +26,7 @@ ANY = "*"
 NONE = "∅"
 EMPTY = "—"
 PRONOUNS = {"em", "anh", "chị", "mình", "bạn"}
+PARTICLES = {"nha", "nhé", "nhe", "nhá", "với", "ạ", "đi", "nè"}
 EDGE_PUNCT = ".,!?;:…\"'“”‘’()[]-"
 MARK = re.compile(r"\s*\[(?P<mark>[a-zà-ỹ-]+)\]\s*$")
 INVALID_MARKS = {"ảnh-chưa-xem", "ngoài-chủ-đề"}
@@ -50,6 +51,8 @@ REQUIRED = {
         "prefilter_words": ["Loại", "Từ"],
         "team_request": ["#", "Bước"],
         "link_only": ["#", "Bước"],
+        "chat_only": ["#", "Bước"],
+        "chat_words": ["Nhóm", "Từ"],
         "intent_resolve": ["#", "command", "intent (model)", "cần CÓ", "intent dùng"],
         "decision": [
             "#", "command", "command_payload", "text", "media", "extraction_ok", "reply_target",
@@ -79,6 +82,7 @@ REQUIRED = {
         "prefilter_cases": ["#", "Tin", "Kết quả"],
         "team_cases": ["#", "Tin", "tag bot", "intent (model)", "Luật"],
         "link_cases": ["#", "Tin", "Kết quả"],
+        "chat_cases": ["#", "Tin", "Kết quả"],
         "normalize_cases": ["#", "Trường", "Giá trị", "Chung chung"],
     },
     "roles": {
@@ -154,8 +158,12 @@ def normalize(value):
     text = text.strip(EDGE_PUNCT).strip()
     words = text.split(" ")
     if len(words) > 1 and words[0] in PRONOUNS:
-        text = " ".join(words[1:])
-    return text
+        words = words[1:]
+    trimmed = False
+    while len(words) > 1 and words[-1].strip(EDGE_PUNCT) in PARTICLES:  # N6
+        words, trimmed = words[:-1], True
+    text = " ".join(words)
+    return text.strip(EDGE_PUNCT).strip() if trimmed else text
 
 
 class RulesMarkdown(unittest.TestCase):
@@ -270,7 +278,7 @@ class RulesMarkdown(unittest.TestCase):
 
     def test_normalize_cases(self):
         rows = records(self.tables["facts"]["normalize"])
-        self.assertEqual([r["#"] for r in rows], ["N1", "N2", "N3", "N4", "N5"])
+        self.assertEqual([r["#"] for r in rows], ["N1", "N2", "N3", "N4", "N5", "N6"])
         for row in records(self.tables["examples"]["normalize_cases"]):
             field = one(row["Trường"])
             generic = normalize(one(row["Giá trị"])) in self.generic.get(field, set())

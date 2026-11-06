@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 7 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 8 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -92,6 +92,27 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `link_only`). 
 | LC13 | https://example.com/lỗi | `không` |
 | LC14 | https://example.com/a;bị trắng | `không` |
 
+## Bảng: chat_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `chat_only`). `CHAT` = chỉ có từ xã giao, không gọi model; `không` = đi tiếp như cũ. Bảng này **không** gửi cho model.
+
+| # | Tin | Kết quả |
+|---|---|---|
+| CC1 | ok anh | `CHAT` |
+| CC2 | Dạ em cảm ơn ạ! | `CHAT` |
+| CC3 | 👍 | `CHAT` |
+| CC4 | xong rồi nha @devmember02 | `CHAT` |
+| CC5 | haha | `CHAT` |
+| CC6 | Oke team, thanks nhiều 🙏 | `CHAT` |
+| CC7 | vẫn không được | `không` |
+| CC8 | ok anh, lỗi rồi | `không` |
+| CC9 | ok 2 | `không` |
+| CC10 | ok https://example.com | `không` |
+| CC11 | được chưa anh | `không` |
+| CC12 | xong rồi, nhưng màn Queue bị trắng | `không` |
+| CC13 | xong rồi à anh? | `không` |
+| CC14 | ok? | `không` |
+
 ## Bảng: team_cases
 
 Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `team_request`). Mỗi ca coi như model đã trả `intent` ở cột "intent (model)" và đủ `object`, `work`, `observed`, `problem`; cột "Luật" là luật phải ra. TC1, TC2 là dạng ẩn danh của tin live đã thành ticket #112, #113. Bảng này **không** gửi cho model.
@@ -127,6 +148,10 @@ Kiểm `facts.md` · `normalize` + `generic_values` (V3).
 | G8 | `problem` | `Chưa ổn…` | `có` |
 | G9 | `work` | `Báo giùm em!` | `có` |
 | G10 | `work` | `anh cho em biết` | `có` |
-| G11 | `work` | `báo giùm em nha` | `không` |
+| G11 | `work` | `báo giùm em nha` | `có` |
+| G12 | `work` | `check giúp với nha!` | `có` |
+| G13 | `work` | `cho mình biết ạ` | `có` |
+| G14 | `observed` | `không đi` | `không` |
+| G15 | `work` | `nha` | `không` |
 
 G5: cả cụm không bằng cụm chung chung nào ⇒ tính là CÓ. Vì vậy model phải ghi **cụm ngắn nhất** (`facts.md`, cách ghi giá trị 1): "Check giúp em cái này" ⇒ `work`=check giúp, `object`=cái này (X7).

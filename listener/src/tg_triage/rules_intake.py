@@ -102,13 +102,15 @@ def _prefilter_source(snapshot, message):
 
 
 def _local_rule(snapshot, members):
-    """F1 when every member is a review request, F3 when every member is only a link; else None."""
-    from .decision_rules import PREFILTER_RULE, LINK_RULE, is_link_only
+    """F1 when every member is a review request, F3 when every member is only a link,
+    F4 when every member is only small talk (chat_words); else None."""
+    from .decision_rules import PREFILTER_RULE, LINK_RULE, CHAT_RULE, is_link_only
     members = list(members)
     if not members: return None
     if all(_prefilter_source(snapshot, m) for m in members): return PREFILTER_RULE
-    # W1: a forwarded link is someone else's content (often a customer's), never dismissed unread.
+    # W1/C1: a forwarded message is someone else's content (often a customer's), never dismissed unread.
     if all(_prefilter_scope(m) and not m.is_forward and is_link_only(m.text) for m in members): return LINK_RULE
+    if all(_prefilter_scope(m) and not m.is_forward and snapshot.chat_only_text(m.text) for m in members): return CHAT_RULE
     return None
 
 

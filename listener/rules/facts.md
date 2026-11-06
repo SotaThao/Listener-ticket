@@ -1,4 +1,4 @@
-<!-- rule-file: facts · version 4 · status ACTIVE · audience: model + code -->
+<!-- rule-file: facts · version 5 · status ACTIVE · audience: model + code -->
 # Dữ kiện
 
 Hai loại dữ kiện, không lẫn nhau:
@@ -77,12 +77,13 @@ Trường thừa ngoài bảng `fields` ⇒ bỏ. Trường thiếu ⇒ trống.
 | N3 | Gộp mọi khoảng trắng liên tiếp thành một dấu cách, cắt khoảng trắng đầu/cuối |
 | N4 | Bỏ dấu câu ở đầu và cuối: `. , ! ? ; : … " ' “ ” ‘ ’ ( ) [ ] -` |
 | N5 | Nếu từ đầu tiên là `em` `anh` `chị` `mình` `bạn` và còn từ khác phía sau ⇒ bỏ từ đó (một lần) |
+| N6 | Lặp lại khi còn hơn một từ: nếu từ cuối (bỏ dấu câu dính kèm) là chữ đệm `nha` `nhé` `nhe` `nhá` `với` `ạ` `đi` `nè` ⇒ bỏ từ đó; có bỏ thì bỏ tiếp dấu câu ở cuối như N4 |
 
 ## Bảng: generic_values
 
 Giá trị chung chung: bằng nguyên cụm (sau `normalize`) ⇒ **không** tính là CÓ. Chứa cụm nhưng còn chữ khác (vd "nút Thanh toán") ⇒ không phải chung chung.
 
-Owner 2026-11-06 (live #115): “Duyệt + thêm ví dụ” — lời nhờ báo lại thông tin ("báo giùm em", "cho em biết") không phải việc cần làm.
+Owner 2026-11-06 (live #115): “Duyệt + thêm ví dụ” — lời nhờ báo lại thông tin ("báo giùm em", "cho em biết") không phải việc cần làm. Owner 2026-11-06: “Duyệt cả ba” — thêm biến thể (báo dùm/hộ, cho mình/anh/chị biết, trả lời/xác nhận giúp) và bước N6 bỏ chữ đệm cuối ("báo giùm em nha" ⇒ "báo giùm em").
 
 | Trường | Cụm |
 |---|---|
@@ -115,6 +116,18 @@ Owner 2026-11-06 (live #115): “Duyệt + thêm ví dụ” — lời nhờ bá
 | `work` | `báo giúp em` |
 | `work` | `cho em biết` |
 | `work` | `báo em biết` |
+| `work` | `báo dùm` |
+| `work` | `báo hộ` |
+| `work` | `báo giùm e` |
+| `work` | `cho e biết` |
+| `work` | `cho mình biết` |
+| `work` | `cho anh biết` |
+| `work` | `cho chị biết` |
+| `work` | `nói em biết` |
+| `work` | `báo lại` |
+| `work` | `báo lại giùm` |
+| `work` | `trả lời giúp` |
+| `work` | `xác nhận giúp` |
 | `problem` | `có vấn đề` |
 | `problem` | `không ổn` |
 | `problem` | `chưa ổn` |

@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 6 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 7 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
@@ -6,6 +6,8 @@ Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR
 Owner 2026-11-06: “Có, là CHAT” — giao việc hoặc nhờ/hỏi đồng nghiệp trong team (tag `@tên`) không phải ticket.
 
 Owner 2026-11-06: “Duyệt F3” — tin chỉ có link, không kèm chữ, là chia sẻ, không phải ticket hay câu hỏi.
+
+Owner 2026-11-06: “Duyệt cả ba” — tin chỉ có từ xã giao (`chat_words`) là CHAT (luật `F4`); kèm bước chuẩn hóa N6 và cụm `work` chung chung trong `facts.md`.
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -81,6 +83,76 @@ Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilte
 | W2 | Tin có ít nhất một link: bắt đầu bằng `http://`, `https://` hoặc `www.`; đuôi link dừng ở `,` `;`, khoảng trắng và chữ có dấu (chữ dính sau link như "…/checkout,lỗi" vẫn là chữ) |
 | W3 | Bỏ ký tự vô hình và mọi link ở W2; phần còn lại không có chữ cái hay chữ số nào (chỉ dấu câu, ký hiệu, emoji hoặc khoảng trắng) |
 | W4 | Khớp W1–W3 ⇒ `CHAT` (luật `F3`); có thêm bất kỳ chữ nào (vd "lỗi", "check", "xem") ⇒ không khớp, đi tiếp như cũ |
+
+## Bảng: chat_only
+
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `link_only`. Khớp ⇒ `CHAT` ngay với luật `F4`, không gọi model, không ticket, không hỏi. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp. Xét sau `prefilter` (F1) và `link_only` (F3).
+
+| # | Bước |
+|---|---|
+| C1 | Tin mới: không phải Reply, không forward, không command, người gửi không đính kèm ảnh hay tài liệu, có chữ (không rỗng) |
+| C2 | Bỏ ký tự vô hình; bỏ mọi `@tên`; đổi dấu câu, emoji, ký hiệu và `_` thành khoảng trắng; chữ thường; tách theo khoảng trắng |
+| C3 | Tin không có dấu `?` (câu hỏi như "xong rồi à anh?" đi tiếp như cũ); mọi từ còn lại thuộc bảng `chat_words`, hoặc không còn từ nào (tin chỉ có emoji/dấu câu); một chữ số hay từ ngoài bảng ⇒ không khớp |
+| C4 | Khớp C1–C3 ⇒ `CHAT` (luật `F4`); `không`, `được`, `chưa`, `lỗi` không có trong bảng nên "vẫn không được" đi tiếp như cũ |
+
+## Bảng: chat_words
+
+Từ xã giao (Owner duyệt 2026-11-06). Thêm từ: một dòng mới, đúng nhóm, chữ thường, chỉ chữ cái. Không thêm từ phủ định hay từ mô tả lỗi.
+
+| Nhóm | Từ |
+|---|---|
+| `đồng ý` | `ok` |
+| `đồng ý` | `oke` |
+| `đồng ý` | `okie` |
+| `đồng ý` | `oki` |
+| `đồng ý` | `okay` |
+| `đồng ý` | `dạ` |
+| `đồng ý` | `vâng` |
+| `đồng ý` | `ừ` |
+| `đồng ý` | `ừm` |
+| `đồng ý` | `uh` |
+| `đồng ý` | `ờ` |
+| `đồng ý` | `yes` |
+| `đồng ý` | `yep` |
+| `đồng ý` | `đúng` |
+| `đồng ý` | `chuẩn` |
+| `cảm ơn` | `cảm` |
+| `cảm ơn` | `cám` |
+| `cảm ơn` | `ơn` |
+| `cảm ơn` | `thanks` |
+| `cảm ơn` | `thank` |
+| `cảm ơn` | `thx` |
+| `cảm ơn` | `tks` |
+| `cảm ơn` | `ty` |
+| `xong` | `rồi` |
+| `xong` | `xong` |
+| `xong` | `ổn` |
+| `xong` | `tốt` |
+| `xong` | `good` |
+| `xong` | `nice` |
+| `cười` | `haha` |
+| `cười` | `hihi` |
+| `cười` | `hehe` |
+| `cười` | `kk` |
+| `cười` | `kkk` |
+| `cười` | `lol` |
+| `đệm` | `anh` |
+| `đệm` | `em` |
+| `đệm` | `chị` |
+| `đệm` | `mình` |
+| `đệm` | `bạn` |
+| `đệm` | `team` |
+| `đệm` | `ạ` |
+| `đệm` | `nha` |
+| `đệm` | `nhé` |
+| `đệm` | `nhe` |
+| `đệm` | `nhá` |
+| `đệm` | `à` |
+| `đệm` | `ơi` |
+| `đệm` | `luôn` |
+| `đệm` | `nhiều` |
+| `đệm` | `lắm` |
+| `đệm` | `nè` |
 
 ## Bảng: team_request
 

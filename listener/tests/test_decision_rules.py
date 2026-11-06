@@ -55,6 +55,36 @@ class DecisionRulesTest(unittest.TestCase):
         self.mutate('readiness', '| T2 | `intent` sau bảng', '| T2 | `intent` (bất kỳ) sau bảng')
         with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported team_request definition'): self.load()
 
+    def test_chat_only_definition_is_hash_locked(self):
+        self.mutate('readiness', '| C4 | Khớp C1–C3', '| C4 | Khớp C1–C2')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported chat_only definition'): self.load()
+
+    def test_chat_cases_execute_on_load(self):
+        self.mutate('examples', '| CC7 | vẫn không được | `không` |', '| CC7 | vẫn không được | `CHAT` |')
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*chat_only self-check failed'): self.load()
+
+    def test_chat_words_are_validated_and_are_data(self):
+        self.mutate('readiness', '| `đồng ý` | `oke` |', '| `đồng ý` | `ok` |')
+        with self.assertRaisesRegex(RulesError, 'invalid or duplicate chat word'): self.load()
+
+    def test_chat_word_list_is_data(self):
+        # Removing "cảm" turns CC2 ("Dạ em cảm ơn ạ!") into a non-match, which the self-check catches.
+        self.mutate('readiness', '| `cảm ơn` | `cảm` |\n', '')
+        with self.assertRaisesRegex(RulesError, 'chat_only self-check failed'): self.load()
+
+    def test_normalize_n6_is_hash_locked(self):
+        self.mutate('facts', '`với` `ạ` `đi` `nè`', '`với` `ạ` `đi`')
+        with self.assertRaisesRegex(RulesError, r'facts.md:\d+:.*unsupported algorithm definition'): self.load()
+
+    def test_normalize_trailing_particles(self):
+        from tg_triage.decision_rules import normalize
+        self.assertEqual('báo giùm em', normalize('Báo giùm em nha!'))
+        self.assertEqual('check giúp', normalize('em check giúp, với nha'))
+        self.assertEqual('nha', normalize('nha'))          # a lone particle stays
+        # Only compared, never rendered: "không đi" -> "không", still not a generic value (G14).
+        self.assertEqual('không', normalize('không đi'))
+        self.assertEqual('màn queue bị trắng', normalize('Màn Queue bị trắng'))  # no particle: unchanged
+
     def test_link_only_definition_is_hash_locked(self):
         self.mutate('readiness', '| W3 | Bỏ ký tự vô hình', '| W3 | Bỏ ký tự vô hình, bỏ chữ đệm')
         with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported link_only definition'): self.load()

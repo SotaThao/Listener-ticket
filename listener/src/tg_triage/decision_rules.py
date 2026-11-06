@@ -13,10 +13,10 @@ FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
-    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
+    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
 }
 PREFILTER_RULE = "F1"
 PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
@@ -41,6 +41,9 @@ LINK_SHA256 = "e4958c652a540f0cdb09c7da27e246bf07749edfe8c5f5f804b713f450bff701"
 # readiness.md · link_only W2: http(s):// or www. followed by the same ASCII tail as the prefilter (stops at
 # `,` `;`, whitespace and accented letters), so a word glued after a link ("…/checkout,lỗi") stays a word.
 _LINK = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+", re.I)
+CHAT_RULE = "F4"
+CHAT_SHA256 = "4b5941df28cc30fafa58d973dd7cfe3d4aac3b3a3a61f109ecf7428ba2a615ee"
+CHAT_GROUPS = frozenset({"đồng ý", "cảm ơn", "xong", "cười", "đệm"})
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
 TICKS = re.compile(r"`([^`]+)`")
@@ -51,10 +54,19 @@ class RulesError(ValueError):
     """Rule file error, including source location."""
 
 
+# facts.md · normalize N6 (Owner 2026-11-06 "Duyệt cả ba"): trailing particles that never change what is asked.
+TRAILING_PARTICLES = frozenset({"nha", "nhé", "nhe", "nhá", "với", "ạ", "đi", "nè"})
+
+
 def normalize(value: str) -> str:
     value = " ".join(unicodedata.normalize("NFC", value).casefold().split()).strip(EDGE).strip()
     words = value.split(" ")
-    return " ".join(words[1:]) if len(words) > 1 and words[0] in {"em", "anh", "chị", "mình", "bạn"} else value
+    if len(words) > 1 and words[0] in {"em", "anh", "chị", "mình", "bạn"}: words = words[1:]
+    trimmed = False
+    while len(words) > 1 and words[-1].strip(EDGE) in TRAILING_PARTICLES:
+        words = words[:-1]; trimmed = True
+    value = " ".join(words)
+    return value.strip(EDGE).strip() if trimmed else value
 
 
 @dataclass(frozen=True)
@@ -191,7 +203,7 @@ class RulesSnapshot:
     """Load once; never mutate or read rule files during evaluation."""
     __slots__ = ('tables','fingerprint','_instructions','text_fields','intents','commands',
                  'domains','generic','limits','model_fields','model_instructions','extensions',
-                 'prefilter_work','prefilter_filler','_frozen')
+                 'prefilter_work','prefilter_filler','chat_words','_frozen')
     def __init__(self, rules_dir: Path, templates_dir: Path, *, extensions=False):
         tables, texts = {}, {}
         for name in FILES:
@@ -263,11 +275,11 @@ class RulesSnapshot:
             if f not in generic or not v or v in generic[f]: r.fail('invalid or duplicate generic value')
             generic[f].add(v)
         self.generic = MappingProxyType({k: frozenset(v) for k,v in generic.items()})
-        for name, codes in [('field_valid', ['V1','V2','V3','V4']), ('normalize', ['N1','N2','N3','N4','N5'])]:
+        for name, codes in [('field_valid', ['V1','V2','V3','V4']), ('normalize', ['N1','N2','N3','N4','N5','N6'])]:
             if [r.cells['#'] for r in t['facts'][name]] != codes: t['facts'][name][0].fail('unsupported algorithm sequence')
             # These prose algorithms are implemented explicitly, not interpreted as code.
             # Reject edits until their semantics have been implemented and reviewed.
-            supported = {'field_valid': 'b3d848a75ece489b46112480bef7f61bfd0d38a5acf5756d6796d49b7dc0dad7', 'normalize': '2be762e508c7820cb7f60f3ed7619f19485c68a867f7506d3300f91ccc428c53'}
+            supported = {'field_valid': 'b3d848a75ece489b46112480bef7f61bfd0d38a5acf5756d6796d49b7dc0dad7', 'normalize': '3c6b04060b43ba29ab2e89a003fb3c0568c18f6cd0ded34f2ef48178067e087d'}
             encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in t['facts'][name]).encode('utf8')
             if hashlib.sha256(encoded).hexdigest() != supported[name]: t['facts'][name][0].fail('unsupported algorithm definition')
         limits = {}
@@ -339,6 +351,19 @@ class RulesSnapshot:
         if [r.cells['#'] for r in steps] != ['W1', 'W2', 'W3', 'W4']: steps[0].fail('unsupported link_only sequence')
         encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in steps).encode('utf8')
         if hashlib.sha256(encoded).hexdigest() != LINK_SHA256: steps[0].fail('unsupported link_only definition')
+        steps = t['readiness']['chat_only']
+        if [r.cells['#'] for r in steps] != ['C1', 'C2', 'C3', 'C4']: steps[0].fail('unsupported chat_only sequence')
+        encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in steps).encode('utf8')
+        if hashlib.sha256(encoded).hexdigest() != CHAT_SHA256: steps[0].fail('unsupported chat_only definition')
+        chat = set()
+        for r in t['readiness']['chat_words']:
+            group, word = r.one('Nhóm'), r.one('Từ')
+            if (group not in CHAT_GROUPS or word != unicodedata.normalize('NFC', word).casefold()
+                    or not re.fullmatch(r'[^\W\d_]+', word) or word in chat):
+                r.fail('invalid or duplicate chat word')
+            chat.add(word)
+        if not chat: t['readiness']['chat_words'][0].fail('chat_words is empty')
+        self.chat_words = frozenset(chat)
         words = {'việc': set(), 'đệm': set()}
         for r in t['readiness']['prefilter_words']:
             kind, word = r.one('Loại'), r.one('Từ')
@@ -366,8 +391,16 @@ class RulesSnapshot:
         return (bool(tokens) and all(w in self.prefilter_work or w in self.prefilter_filler for w in tokens)
                 and any(w in self.prefilter_work for w in tokens))
 
+    def chat_only_text(self, text) -> bool:
+        """readiness.md · chat_only C2–C3 on one message text: only words from chat_words (or none left)."""
+        if not isinstance(text, str): return False
+        value = unicodedata.normalize('NFC', _INVISIBLE.sub('', text))
+        if not value.strip() or '?' in value or '？' in value: return False  # C3: a question is never small talk
+        value = _MENTION.sub(' ', value).casefold()
+        return all(w in self.chat_words for w in re.sub(r'[^\w]+|_', ' ', value).split())
+
     def prefilter_decision(self, rule=PREFILTER_RULE) -> Decision:
-        if rule not in (PREFILTER_RULE, LINK_RULE): raise ValueError('unknown prefilter rule')
+        if rule not in (PREFILTER_RULE, LINK_RULE, CHAT_RULE): raise ValueError('unknown prefilter rule')
         return Decision('CHAT', 'chat', 'prefilter', rule, MappingProxyType({}), (), (), self.fingerprint)
 
     def model_context(self):
@@ -527,6 +560,13 @@ class RulesSnapshot:
             if is_link_only(row.cells['Tin']) != (expected == 'CHAT'): row.fail('link_only self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['link_cases'][0].fail('link cases need both outcomes')
+        outcomes = set()
+        for row in self.tables['examples']['chat_cases']:
+            expected = row.one('Kết quả')
+            if expected not in {'CHAT', 'không'}: row.fail('invalid chat_only outcome')
+            if self.chat_only_text(row.cells['Tin']) != (expected == 'CHAT'): row.fail('chat_only self-check failed')
+            outcomes.add(expected)
+        if outcomes != {'CHAT', 'không'}: self.tables['examples']['chat_cases'][0].fail('chat cases need both outcomes')
         for row in self.tables['examples']['normalize_cases']:
             field, value, expected = row.one('Trường'), row.one('Giá trị'), row.one('Chung chung')
             if field not in self.text_fields or expected not in {'có','không'} or (normalize(value) in self.generic[field]) != (expected == 'có'): row.fail('normalization self-check failed')
