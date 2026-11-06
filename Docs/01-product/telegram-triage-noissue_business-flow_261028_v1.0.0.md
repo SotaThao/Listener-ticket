@@ -1,6 +1,6 @@
 ## Telegram Triage → GitHub Ticket (sau PR #81: ticket theo template)
 
-**Last Updated:** 2026-10-29
+**Last Updated:** 2026-11-06
 **Audience:** Owner, team dev/QA, operator, Agent tiếp nhận
 **Status:** Review
 
@@ -157,7 +157,7 @@ flowchart TD
 | Khối "Tin gốc", footer "Phân loại…" | `_common.md` |
 | Câu bot trả lời trong group | `group-replies.md` |
 
-**Sequence hiện tại (PR #81, đang chạy):** model phán đủ rõ; GitHub là nền tảng duy nhất.
+**Sequence chế độ cũ (legacy, PR #81):** model phán đủ rõ; GitHub là nền tảng duy nhất. Trên máy chạy, chế độ này đã được thay bằng rules mode bên dưới (GO 2026-11-04).
 
 ```mermaid
 sequenceDiagram
@@ -175,57 +175,68 @@ sequenceDiagram
     Bot->>TG: Reply link vào tin đầu
 ```
 
-**Sequence đích (Owner chốt 2026-10-29, CHƯA triển khai):** mọi quyết định theo file markdown quy tắc; model chỉ trích dữ kiện; nền tảng ticket đổi được bằng cấu hình. Thiết kế chi tiết: [Kế hoạch §0](../04-tasks/telegram-triage-noissue_tasks_261029_v1.0.0.md) · bảng quy tắc nháp: [listener/rules/README.md](../../listener/rules/README.md).
+**Sequence rules mode (đang chạy, release `ba8f5b0`, GO 2026-11-06):** mọi quyết định theo file markdown trong [`listener/rules/`](../../listener/rules/README.md); model chỉ trích dữ kiện. Ba luật local chặn chat trước khi thành ticket: `F1` và `F3` chạy **trước** model, `F2` chạy **sau** model và trước bảng R1–R13. Group nguồn không nhận tin chữ nào của bot (`source_reactions=false` nên cũng không có reaction); mọi câu bot nói nằm ở group xử lý. Nền tảng ticket hiện chỉ có GitHub (adapter nhiều nền tảng vẫn là thiết kế đích, chưa làm).
 
 | Bước | Việc | Ai làm | Dựa vào file |
 | :--- | :--- | :--- | :--- |
-| 0 | Nạp + kiểm quy tắc, template, prompt, cấu hình nền tảng (sai ⇒ không khởi động) | Code | `rules/`, `templates/`, `prompts/`, `platforms/`, config |
-| 1 | Tổng hợp tin theo quy tắc gom (Reply thật, gói context) | Code | `rules/` |
-| 2 | Trích dữ kiện + tin nguồn (không kết luận) | Model | `prompts/` (danh sách trường sinh từ `rules/`) |
-| 3 | Áp bảng quy tắc → READY / NEED_INFO / MEDIA_ONLY / CHAT | Code | `rules/README.md` |
-| 4 | Chọn template theo loại + trạng thái + nền tảng | Code | `templates/` |
-| 5 | Tạo / bổ sung ticket qua adapter nền tảng | Code | `platforms/<nền tảng>.md`, config |
-| 6 | Reply group | Code | `templates/group-replies.md` |
+| 0 | Nạp + kiểm quy tắc, template, prompt; tính fingerprint (sai ⇒ không khởi động) | Code | `rules/*.md`, `templates/`, `prompts/` |
+| 1 | Gom tin theo nhịp hội thoại (30s yên lặng, tối đa 60s) | Code | config |
+| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only` |
+| 3 | Chia chủ đề + trích dữ kiện kèm `source_ids` (không kết luận) | Model | `facts.md` · `fields`, 9 ví dụ cố định |
+| 4 | Tính trường CÓ (bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `generic_values`, `readiness.md` |
+| 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `intent`/`work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |
+| 6 | Bảng `decision` R1–R13 ⇒ `READY` / `NEED_INFO` / `MEDIA_ONLY` / `CHAT` / `HOLD` / `APPEND` | Code | `readiness.md` · `decision` |
+| 7 | `READY`: chọn template, tạo issue một lần, đọc lại; `NEED_INFO`: hỏi trường thiếu | Code | `templates/`, `questions.md` |
+| 8 | Báo vào group xử lý (link ticket hoặc câu hỏi) | Code | `channels.md`, `group-replies.md` |
 
 ```mermaid
 sequenceDiagram
-    participant R as Quy tắc (rules/*.md)
+    participant TG as Group nguồn
     participant Bot as Bot (code)
-    participant TG as Group Telegram
+    participant R as Quy tắc (rules/*.md)
     participant M as Model
-    participant T as Template
-    participant A as Adapter nền tảng
-    participant X as GitHub / Jira / Azure
+    participant GH as GitHub
+    participant OPS as Group xử lý
 
     Note over Bot,R: 0. Khởi động
-    Bot->>R: Nạp + kiểm quy tắc, template, prompt, nền tảng
-    R-->>Bot: Hợp lệ (fingerprint) — sai thì không chạy
+    Bot->>R: Nạp + kiểm quy tắc, template, prompt
+    R-->>Bot: Hợp lệ + fingerprint (sai thì không chạy)
 
     TG->>Bot: Tin, ảnh, caption
-    Note over Bot: 1. Tổng hợp theo quy tắc gom
+    Note over Bot: 1. Gom tin (30s yên lặng, tối đa 60s)
 
-    Bot->>M: 2. Gói tin + danh sách dữ kiện cần trích
-    M-->>Bot: Dữ kiện + source_ids (không kết luận)
-
-    Note over Bot,R: 3. Code áp bảng quy tắc
-    Bot->>R: Dữ kiện → R1…R8
-    R-->>Bot: READY / NEED_INFO / MEDIA_ONLY / CHAT
-
-    alt READY
-        Bot->>T: 4. Chọn template theo loại + nền tảng
-        T-->>Bot: Nội dung ticket
-        Bot->>A: 5. Tạo / bổ sung ticket
-        A->>X: API nền tảng (một lần, đọc lại xác nhận)
-        X-->>A: Mã ticket + link
-        Bot->>T: Lấy câu reply
-        Bot->>TG: 6. Reply link vào tin đầu
-    else NEED_INFO / MEDIA_ONLY
-        Bot->>T: Câu hỏi theo trường thiếu
-        Bot->>TG: Hỏi, không tạo ticket
-    else CHAT
-        Note over Bot: Không làm gì
+    Note over Bot,R: 2. Lọc local trước model
+    alt Mọi tin là nhờ review PR (F1) hoặc chỉ có link (F3)
+        Note over Bot: CHAT — không gọi model, không ticket, không báo
+    else Còn lại
+        Bot->>M: 3. Gói tin + danh sách trường cần trích
+        M-->>Bot: Chủ đề + dữ kiện + source_ids
+        Note over Bot,R: 4. Trường CÓ (bỏ cụm chung chung) + intent I1–I3
+        Note over Bot,R: 5. F2 — task giao/hỏi đồng nghiệp có @tên
+        alt F2 khớp
+            Note over Bot: CHAT — không ticket, không hỏi
+        else Không khớp
+            Bot->>R: 6. Bảng decision R1–R13
+            R-->>Bot: READY / NEED_INFO / MEDIA_ONLY / CHAT / HOLD / APPEND
+            alt READY
+                Bot->>GH: 7. Tạo issue (một lần, đọc lại xác nhận)
+                GH-->>Bot: Số issue + link
+                Bot->>OPS: 8. Báo link ticket
+            else NEED_INFO
+                Bot->>OPS: Hỏi trường còn thiếu (không tạo ticket)
+            else CHAT / MEDIA_ONLY
+                Note over Bot: Không gửi gì
+            end
+        end
     end
 ```
+
+| Luật local | Chạy khi | Ví dụ live | Kết quả |
+| :--- | :--- | :--- | :--- |
+| `F1` | Trước model | #95, #111: "anh review giúp em PR …/pull/1427" | `CHAT` |
+| `F3` | Trước model | 6435: chỉ gửi `https://www.onorca.dev/` | `CHAT` (ảnh xem trước của link không tính là ảnh người gửi) |
+| `F2` | Sau model | #112, #113: "@A qua phụ @B làm ticket…", "anh @A check giúp key staging" | `CHAT` |
+| cụm chung chung | Sau model | #115: "các anh có dùng link zoom không? báo giùm em nha" | `CHAT` (R8) hoặc `NEED_INFO` (R12) |
 
 #### Workflow 2: Bổ sung, tách, tái diễn ticket đã có
 
