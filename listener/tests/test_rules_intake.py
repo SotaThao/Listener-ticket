@@ -1749,6 +1749,64 @@ class RulesTeamRequestTests(RulesBootstrapTests):
         with self.assertRaises(ValueError): snapshot.evaluate(model,facts(team_mention_ids=frozenset({43})))
 
 
+class RulesLinkOnlyTests(RulesBootstrapTests):
+    """Owner 2026-11-06 ("Duyệt F3", live 6435): a message that is only a link is CHAT before any model call."""
+    LINK = 'https://www.onorca.dev/'
+
+    def run_live(self, text, *, extensions, facts=None, **extra):
+        extra.setdefault('mentions_listener', False)
+        return RulesPrefilterTests.run_live(self, text, extensions=extensions, facts=facts or RulesPrefilterTests.TASK_FACTS, **extra)
+
+    def test_live_link_only_is_chat_f3_without_model_ticket_or_notice(self):
+        for extensions in (False,True):
+            with self.subTest(extensions=extensions):
+                result,provider,github,notices,row=self.run_live(self.LINK,extensions=extensions)
+                self.assertEqual(('chat','F3'),(result.decision,result.reason))
+                self.assertEqual((0,[],[]),(provider.calls,github.calls,notices))
+                self.assertEqual(('CHAT','F3','prefilter'),tuple(row))
+
+    def test_link_with_any_word_still_reaches_the_model(self):
+        _,provider,github,_,row=self.run_live('lỗi '+self.LINK,extensions=True)
+        self.assertEqual(1,provider.calls)
+        self.assertEqual(1,len(github.calls))
+        self.assertEqual(('READY','R10'),tuple(row)[:2])
+
+    def test_scope_excludes_reply_attachment_and_command(self):
+        from tg_triage.rules_intake import _local_rule
+        snapshot=self.snapshot()
+        self.assertEqual('F3',_local_rule(snapshot,[message(42,text=self.LINK)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text=self.LINK,reply_to_id=7)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text=self.LINK,has_image=True)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text=self.LINK,has_document=True)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text=self.LINK,is_forward=True)]))  # W1: customer content
+        self.assertIsNone(_local_rule(snapshot,[message(42,text='/task '+self.LINK)]))
+        self.assertIsNone(_local_rule(snapshot,[message(42,text=self.LINK+'\nlỗi')]))
+        self.assertEqual('F3',_local_rule(snapshot,[message(42,text=self.LINK+'\nhttps://example.com/b')]))
+        self.assertIsNone(_local_rule(snapshot,[]))
+
+    def test_batch_all_links_skip_model_and_mixed_batch_keeps_model(self):
+        from tg_triage.rules_intake import evaluate_batch
+        snapshot=self.snapshot()
+        class Provider:
+            settings=SimpleNamespace(model='test'); think=False; supports_vision=False
+            def __init__(self,raw): self.raw=raw; self.calls=0
+            def _ask(self,body,parse,attempts): self.calls+=1; return parse(self.raw)
+        provider=Provider('{}')
+        groups=evaluate_batch(snapshot,provider,[message(41,text=self.LINK),message(42,text='www.example.com/tools 👍')])
+        self.assertEqual(0,provider.calls)
+        self.assertEqual([('CHAT','F3')],[(d.state,d.rule) for _,d in groups])
+        provider=Provider('{"groups":[{"message_ids":[41],"facts":{"intent":{"value":"chat","source_ids":[41]}}},'
+                          '{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
+                          '"object":{"value":"màn Queue","source_ids":[42]},"observed":{"value":"bị trắng","source_ids":[42]}}}]}')
+        groups=evaluate_batch(snapshot,provider,[message(41,text=self.LINK),message(42,text='màn Queue bị trắng khi mở')])
+        self.assertEqual(1,provider.calls)
+        self.assertEqual({41:('CHAT','F3'),42:('READY','R9')},{m.message_id:(d.state,d.rule) for ms,d in groups for m in ms})
+
+    def test_pending_answer_merge_is_never_short_circuited(self):
+        from tg_triage.rules_intake import early_decision
+        self.assertIsNone(early_decision(self.snapshot(),[message(42,text=self.LINK)],prefilter=False))
+
+
 class RulesReadyTicketBodyTests(RulesBootstrapTests):
     """Live 2026-11-05 (#95-#99): READY facts must fill the type template, not raise false questions."""
 

@@ -91,20 +91,37 @@ def code_facts(sources, *, seen_image_ids=frozenset(), extraction_ok=True, reply
                      reply_target,ids,images,frozenset(seen_image_ids),text_ids,documents,mentions)
 
 
+def _prefilter_scope(message):
+    """readiness.md · prefilter / link_only scope: a new, non-reply, non-command message with no attachment."""
+    return message.reply_to_id is None and not message.has_attachment and not rules.COMMAND.match(message.text or '')
+
+
 def _prefilter_source(snapshot, message):
-    """readiness.md · prefilter scope: a new, non-reply, text-only, non-command message."""
-    return (message.reply_to_id is None and not message.has_attachment
-            and not rules.COMMAND.match(message.text or '') and snapshot.prefilter_text(message.text))
+    """readiness.md · prefilter P1–P4 on an in-scope message."""
+    return _prefilter_scope(message) and snapshot.prefilter_text(message.text)
+
+
+def _local_rule(snapshot, members):
+    """F1 when every member is a review request, F3 when every member is only a link; else None."""
+    from .decision_rules import PREFILTER_RULE, LINK_RULE, is_link_only
+    members = list(members)
+    if not members: return None
+    if all(_prefilter_source(snapshot, m) for m in members): return PREFILTER_RULE
+    # W1: a forwarded link is someone else's content (often a customer's), never dismissed unread.
+    if all(_prefilter_scope(m) and not m.is_forward and is_link_only(m.text) for m in members): return LINK_RULE
+    return None
 
 
 def early_decision(snapshot, sources, *, prefilter=True):
     """Only table-prioritized outcomes independent of extraction, for a single new source.
 
     Owner 2026-11-05 ("Duyệt lọc trước"): when every source matches the local prefilter
-    (PR/issue review request), decide CHAT (F1) before any model call."""
+    (PR/issue review request), decide CHAT (F1) before any model call. Owner 2026-11-06
+    ("Duyệt F3"): when every source is only a link, decide CHAT (F3) the same way."""
     sources = list(sources)
-    if prefilter and sources and all(_prefilter_source(snapshot, m) for m in sources):
-        return snapshot.prefilter_decision()
+    local = _local_rule(snapshot, sources) if prefilter else None
+    if local is not None:
+        return snapshot.prefilter_decision(local)
     if len(sources) != 1: return None
     result = snapshot.evaluate({}, code_facts(sources, extraction_ok=False))
     row = next((row for row in snapshot.tables['readiness']['decision'] if row.cells['#'] == result.rule), None)
@@ -138,9 +155,11 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         for group_index,(ids, facts) in enumerate(groups):
             members = tuple(source for source in sources if source.message_id in ids)
             if len(members) != len(ids): return None
-            if not allow_mixed and all(_prefilter_source(snapshot, m) for m in members):
-                # Local rule wins over the model's intent for a group made only of review requests.
-                outcomes.append((members, snapshot.prefilter_decision()))
+            local = None if allow_mixed else _local_rule(snapshot, members)
+            if local is not None:
+                # Local rule wins over the model's intent for a group made only of review requests (F1)
+                # or only of bare links (F3).
+                outcomes.append((members, snapshot.prefilter_decision(local)))
                 continue
             if snapshot.extensions:
                 from .decision_rules import Decision

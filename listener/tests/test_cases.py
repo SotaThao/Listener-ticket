@@ -664,6 +664,37 @@ class TransportMetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((replay.sender_id, replay.reply_to_id, replay.is_forward, replay.has_image),
                          (555, 41, True, True))
 
+    async def test_link_preview_is_neither_an_image_nor_a_document(self):
+        # readiness.md · link_only W1 (live 6435): Telegram's own preview of a link is not an attachment.
+        MessageMediaWebPage = type("MessageMediaWebPage", (), {})
+        preview = SimpleNamespace(message=SimpleNamespace(media=MessageMediaWebPage()), sticker=None,
+                                  photo=object(), document=object(),
+                                  file=SimpleNamespace(size=2048, mime_type="image/jpeg", name="page.jpg"))
+        self.assertEqual(telegram_io._image_info(preview), (False, None, None))
+        self.assertEqual(telegram_io._document_info(preview), (False, None, None, None))
+        MessageMediaPhoto = type("MessageMediaPhoto", (), {})
+        photo = SimpleNamespace(message=SimpleNamespace(media=MessageMediaPhoto()), sticker=None, photo=object(),
+                                file=SimpleNamespace(size=2048, mime_type="image/jpeg"))
+        self.assertEqual(telegram_io._image_info(photo), (True, 2048, None))
+
+    async def test_real_telethon_link_preview_exposes_a_photo_that_is_not_the_senders(self):
+        # Live 6435 with real Telethon types: Message.photo returns the preview's photo, _image_info must not.
+        try:
+            from telethon import events
+            from telethon.tl import types
+            from telethon.tl.custom import Message
+        except ImportError:
+            self.skipTest("telethon not installed")
+        photo = types.Photo(id=1, access_hash=2, file_reference=b"", date=None,
+                            sizes=[types.PhotoSize(type="x", w=10, h=10, size=2048)], dc_id=1)
+        page = types.WebPage(id=3, url="https://www.onorca.dev/", display_url="onorca.dev", hash=0, photo=photo)
+        message = Message(id=6435, peer_id=types.PeerChannel(1), date=None, message="https://www.onorca.dev/",
+                          media=types.MessageMediaWebPage(webpage=page))
+        event = events.NewMessage.Event(message)
+        self.assertIsNotNone(event.photo)  # the source of the bug: Telethon surfaces the preview photo
+        self.assertEqual(telegram_io._image_info(event), (False, None, None))
+        self.assertEqual(telegram_io._document_info(event), (False, None, None, None))
+
     async def test_sticker_and_non_image_documents_are_not_images_and_plain_event_is_unflagged(self):
         info = telegram_io._image_info
         self.assertEqual(info(SimpleNamespace(sticker=object(), photo=None, document=object(),

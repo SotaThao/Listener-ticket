@@ -212,9 +212,19 @@ def _mentions_listener(event) -> bool:
     return getattr(getattr(event, "message", None), "mentioned", False) is True
 
 
+def _is_link_preview(event) -> bool:
+    """True when the media is Telegram's own preview of a link in the text (MessageMediaWebPage).
+
+    Telethon's `photo`/`document` also expose a preview's thumbnail or file, but the sender attached
+    nothing: the pixels are the linked page's, never evidence from the sender (readiness.md · link_only).
+    """
+    media = getattr(getattr(event, "message", None), "media", None)
+    return type(media).__name__ == "MessageMediaWebPage"
+
+
 def _image_info(event):
-    """(has_image, declared size, mime) for a photo or an image document; stickers excluded."""
-    if getattr(event, "sticker", None):
+    """(has_image, declared size, mime) for a photo or an image document; stickers and link previews excluded."""
+    if getattr(event, "sticker", None) or _is_link_preview(event):
         return False, None, None
     file = getattr(event, "file", None)
     size = getattr(file, "size", None)
@@ -233,7 +243,7 @@ def _document_info(event):
     Photos, image files (the image path), stickers and audio/video/voice/GIF media are not documents.
     Only declared metadata is read: the file is neither opened nor inspected here.
     """
-    if not getattr(event, "document", None):
+    if not getattr(event, "document", None) or _is_link_preview(event):
         return False, None, None, None
     if getattr(event, "photo", None):
         return False, None, None, None

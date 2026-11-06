@@ -55,6 +55,15 @@ class DecisionRulesTest(unittest.TestCase):
         self.mutate('readiness', '| T2 | `intent` sau bảng', '| T2 | `intent` (bất kỳ) sau bảng')
         with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported team_request definition'): self.load()
 
+    def test_link_only_definition_is_hash_locked(self):
+        self.mutate('readiness', '| W3 | Bỏ ký tự vô hình', '| W3 | Bỏ ký tự vô hình, bỏ chữ đệm')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported link_only definition'): self.load()
+
+    def test_link_cases_execute_on_load(self):
+        self.mutate('examples', '| LC6 | lỗi https://app.example.com/checkout | `không` |',
+                    '| LC6 | lỗi https://app.example.com/checkout | `CHAT` |')
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*link_only self-check failed'): self.load()
+
     def test_team_cases_execute_on_load(self):
         self.mutate('examples', 'màn thanh toán bị trắng khi bấm Pay | `không` | `bug` | R9 |',
                     'màn thanh toán bị trắng khi bấm Pay | `không` | `bug` | F2 |')

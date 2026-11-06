@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 6 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 7 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -70,6 +70,27 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `prefilter`). 
 | PF21 | [PR](https://github.com/org/repo/pull/12) review giúp em | `CHAT` |
 | PF22 | review giúp em https://github.com/org/repo/pull/12/files | `CHAT` |
 | PF23 | PR#12 review giúp em https://github.com/org/repo/pull/12 | `CHAT` |
+
+## Bảng: link_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `link_only`). `CHAT` = chỉ có link, không gọi model; `không` = đi tiếp như cũ. LC1 là tin live 6435. Bảng này **không** gửi cho model.
+
+| # | Tin | Kết quả |
+|---|---|---|
+| LC1 | https://www.onorca.dev/ | `CHAT` |
+| LC2 | www.example.com/tools 👍 | `CHAT` |
+| LC3 | https://a.example.com/x https://b.example.com/y | `CHAT` |
+| LC4 | ​https://example.com/blog​ | `CHAT` |
+| LC5 | (https://example.com/a), https://example.com/b! | `CHAT` |
+| LC6 | lỗi https://app.example.com/checkout | `không` |
+| LC7 | https://app.example.com/checkout bị trắng | `không` |
+| LC8 | check https://example.com | `không` |
+| LC9 | example.com/pricing | `không` |
+| LC10 | https://example.com/a 2 | `không` |
+| LC11 | xem | `không` |
+| LC12 | https://pay.example.vn/checkout,lỗi | `không` |
+| LC13 | https://example.com/lỗi | `không` |
+| LC14 | https://example.com/a;bị trắng | `không` |
 
 ## Bảng: team_cases
 

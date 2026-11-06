@@ -1,9 +1,11 @@
-<!-- rule-file: readiness · version 5 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 6 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
 
 Owner 2026-11-06: “Có, là CHAT” — giao việc hoặc nhờ/hỏi đồng nghiệp trong team (tag `@tên`) không phải ticket.
+
+Owner 2026-11-06: “Duyệt F3” — tin chỉ có link, không kèm chữ, là chia sẻ, không phải ticket hay câu hỏi.
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -68,6 +70,17 @@ Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ x
 | `đệm` | `issue` |
 | `đệm` | `please` |
 | `đệm` | `pls` |
+
+## Bảng: link_only
+
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Khớp ⇒ `CHAT` ngay với luật `F3`, không gọi model, không ticket, không hỏi. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp.
+
+| # | Bước |
+|---|---|
+| W1 | Tin mới: không phải Reply, không forward, không command, người gửi không đính kèm ảnh hay tài liệu (ảnh/tệp xem trước mà Telegram tự tạo cho link không tính là đính kèm) |
+| W2 | Tin có ít nhất một link: bắt đầu bằng `http://`, `https://` hoặc `www.`; đuôi link dừng ở `,` `;`, khoảng trắng và chữ có dấu (chữ dính sau link như "…/checkout,lỗi" vẫn là chữ) |
+| W3 | Bỏ ký tự vô hình và mọi link ở W2; phần còn lại không có chữ cái hay chữ số nào (chỉ dấu câu, ký hiệu, emoji hoặc khoảng trắng) |
+| W4 | Khớp W1–W3 ⇒ `CHAT` (luật `F3`); có thêm bất kỳ chữ nào (vd "lỗi", "check", "xem") ⇒ không khớp, đi tiếp như cũ |
 
 ## Bảng: team_request
 
