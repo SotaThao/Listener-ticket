@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 5 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 6 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -39,6 +39,7 @@ Cách ghi cột "Dữ kiện": `trường=giá trị` cách nhau bằng `;`; `�
 | X22 | Trả lời câu hỏi của bot ở group xử lý: "nút Thanh toán, bấm không phản hồi" | `∅` | `none` | `có` | 0 | 0 | `true` | `bot_question` | `bug` | object=nút Thanh toán; observed=bấm không phản hồi | `READY` | R9 | — |
 | X23 | "Màn giao dịch không ổn" | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `feedback` | object=màn giao dịch; problem=không ổn | `NEED_INFO` | R12 | `ask.problem` |
 | X24 | "Không in được" — đối tượng model lấy từ tin của chủ đề khác | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `bug` | object=máy in POS [ngoài-chủ-đề]; observed=không in được | `NEED_INFO` | R12 | `ask.object` |
+| X25 | "Mấy anh ơi, link zoom daily 10h-11h các anh có dùng không? Báo giùm em nha" — hỏi ý cả team, người khác trả lời ngay trong group (#115) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `question` | object=link zoom daily 10h-11h; work=báo giùm em | `CHAT` | R8 | — |
 
 ## Bảng: prefilter_cases
 
@@ -103,5 +104,8 @@ Kiểm `facts.md` · `normalize` + `generic_values` (V3).
 | G6 | `object` | `  CÁI   NÀY. ` | `có` |
 | G7 | `observed` | `không in được` | `không` |
 | G8 | `problem` | `Chưa ổn…` | `có` |
+| G9 | `work` | `Báo giùm em!` | `có` |
+| G10 | `work` | `anh cho em biết` | `có` |
+| G11 | `work` | `báo giùm em nha` | `không` |
 
 G5: cả cụm không bằng cụm chung chung nào ⇒ tính là CÓ. Vì vậy model phải ghi **cụm ngắn nhất** (`facts.md`, cách ghi giá trị 1): "Check giúp em cái này" ⇒ `work`=check giúp, `object`=cái này (X7).

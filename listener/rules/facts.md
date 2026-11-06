@@ -1,4 +1,4 @@
-<!-- rule-file: facts · version 3 · status ACTIVE · audience: model + code -->
+<!-- rule-file: facts · version 4 · status ACTIVE · audience: model + code -->
 # Dữ kiện
 
 Hai loại dữ kiện, không lẫn nhau:
@@ -82,6 +82,8 @@ Trường thừa ngoài bảng `fields` ⇒ bỏ. Trường thiếu ⇒ trống.
 
 Giá trị chung chung: bằng nguyên cụm (sau `normalize`) ⇒ **không** tính là CÓ. Chứa cụm nhưng còn chữ khác (vd "nút Thanh toán") ⇒ không phải chung chung.
 
+Owner 2026-11-06 (live #115): “Duyệt + thêm ví dụ” — lời nhờ báo lại thông tin ("báo giùm em", "cho em biết") không phải việc cần làm.
+
 | Trường | Cụm |
 |---|---|
 | `object` | `nút này` |
@@ -107,6 +109,12 @@ Giá trị chung chung: bằng nguyên cụm (sau `normalize`) ⇒ **không** t�
 | `work` | `kiểm tra giúp` |
 | `work` | `làm giúp` |
 | `work` | `sửa giúp` |
+| `work` | `báo giùm` |
+| `work` | `báo giúp` |
+| `work` | `báo giùm em` |
+| `work` | `báo giúp em` |
+| `work` | `cho em biết` |
+| `work` | `báo em biết` |
 | `problem` | `có vấn đề` |
 | `problem` | `không ổn` |
 | `problem` | `chưa ổn` |

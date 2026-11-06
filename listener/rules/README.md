@@ -17,7 +17,7 @@ File quyết định — bot nạp theo thứ tự:
 | [readiness.md](readiness.md) | Lọc local trước model `prefilter` P1–P4 + `prefilter_words` (nhờ review/merge PR ⇒ `CHAT`, luật `F1`), bảng `intent_resolve` I1–I3, `team_request` T1–T5 (task giao/hỏi đồng nghiệp có `@tên` ⇒ `CHAT`, luật `F2`) và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
 | [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4) | Code | 4 | ACTIVE |
 | [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | ACTIVE |
-| [examples.md](examples.md) | 24 ví dụ X1–X24 phủ mọi luật + 23 ca lọc trước PF1–PF23 + 10 ca việc nội bộ TC1–TC10 + 8 ca chuẩn hóa G1–G8 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
+| [examples.md](examples.md) | 25 ví dụ X1–X25 phủ mọi luật + 23 ca lọc trước PF1–PF23 + 12 ca việc nội bộ TC1–TC12 + 11 ca chuẩn hóa G1–G11 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
 
 
 File mở rộng — loader source nạp cùng sáu file trên khi bật rules; chỉ host áp dụng, không gửi bảng quyết định cho model:
