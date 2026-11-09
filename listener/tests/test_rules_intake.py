@@ -2034,3 +2034,71 @@ class RulesBanterTests(RulesBootstrapTests):
         self.assertIn('read_only_context', system)
         self.assertIn('đùa', system)
         self.assertIn('😂😂😂', user)
+
+
+class RulesGroupMoodPacketTests(RulesBootstrapTests):
+    """Owner 2026-11-09 (#118): the model packet carries code-counted joking signals, only while the group is joking."""
+
+    history = RulesBanterTests.history
+
+    def build(self, history, text='Thiếu tính năng fake mắt xem rồi', limit=24000):
+        from tg_triage.rules_extraction import partition_and_extract
+        from tg_triage.decision_rules import RulesSnapshot
+        root = Path(__file__).resolve().parents[1]
+        snapshot = RulesSnapshot(root/'rules', root/'templates/github-ticket', extensions=True)
+        provider = SimpleNamespace(settings=SimpleNamespace(model='test'), think=False, supports_vision=False)
+        out = []
+        partition_and_extract(provider, snapshot, [message(42, text=text, mentions_listener=False, sender_id=105, received_at=history[-1].received_at + timedelta(minutes=2))],
+                              read_context=history, limit=limit, body_out=out)
+        self.assertTrue(out, 'request must fit')
+        system = json.loads(out[0]['messages'][0]['content'].split('\n', 1)[1])
+        packet = json.loads(out[0]['messages'][1]['content'])
+        return snapshot, system, packet
+
+    def test_joking_group_gets_mood_flags_minutes_and_contrast_examples(self):
+        snapshot, system, packet = self.build(self.history())
+        self.assertEqual({'joking': True, 'laugh_messages': 2, 'laugh_senders': 2, 'window_minutes': 15, 'note': snapshot.mood_note}, packet['group_mood'])
+        context = {row['message_id']: row for row in packet['read_only_context']}
+        self.assertEqual({10, 11}, {mid for mid, row in context.items() if row.get('laugh')})
+        self.assertTrue(all(isinstance(row['min_ago'], int) and row['min_ago'] >= 0 for row in context.values()))
+        tails = [row['Tin (rút gọn)'] for row in system['examples'][-2:]]
+        self.assertTrue(tails[0].startswith('Nhóm đang đùa') and 'Thiếu nút xuất Excel' in tails[1])
+        self.assertEqual(['chat', 'feedback'], [row['intent (model)'].strip('`') for row in system['examples'][-2:]])
+
+    def test_quiet_group_gets_no_mood_no_flags_no_extra_examples(self):
+        quiet = [message(10 + i, text=t, sender_id=101 + i, mentions_listener=False) for i, t in enumerate(('ok anh', 'xem giúp em màn Queue', 'để em xem'))]
+        _, system, packet = self.build(quiet)
+        self.assertNotIn('group_mood', packet)
+        self.assertTrue(all('laugh' not in row and 'min_ago' not in row for row in packet['read_only_context']))
+        self.assertEqual(9, len(system['examples']))
+
+    def test_incident_laughter_is_not_flagged_and_does_not_make_mood(self):
+        talk = [message(10, text='prod sập rồi =))', sender_id=101, mentions_listener=False), message(11, text='lại lỗi 😂', sender_id=102, mentions_listener=False)]
+        _, _, packet = self.build(talk)
+        self.assertNotIn('group_mood', packet)
+
+    def test_mood_leaves_in_order_examples_then_context_then_mood_without_rejecting_the_request(self):
+        from tg_triage.thinking import request_text_bytes
+        from tg_triage.rules_extraction import partition_and_extract
+        from tg_triage.decision_rules import RulesSnapshot
+        root = Path(__file__).resolve().parents[1]
+        snapshot = RulesSnapshot(root/'rules', root/'templates/github-ticket', extensions=True)
+        provider = SimpleNamespace(settings=SimpleNamespace(model='test'), think=False, supports_vision=False)
+        history = self.history()
+        src = [message(42, text='Thiếu tính năng fake mắt xem rồi', mentions_listener=False, sender_id=105, received_at=history[-1].received_at + timedelta(minutes=2))]
+        sizes = {}
+        for limit in (24000, 8000, 3600, 3000):
+            out = []
+            partition_and_extract(provider, snapshot, src, read_context=history, limit=limit, body_out=out)
+            if not out:
+                sizes[limit] = None; continue
+            packet = json.loads(out[0]['messages'][1]['content'])
+            sizes[limit] = (len(json.loads(out[0]['messages'][0]['content'].split('\n', 1)[1])['examples']), len(packet['read_only_context']), 'group_mood' in packet)
+            self.assertLessEqual(request_text_bytes(out[0]), limit)
+        self.assertEqual((11, 4, True), sizes[24000])
+        self.assertLess(sizes[8000][0], 11)   # examples are trimmed first on the local budget
+        for limit, got in sizes.items():
+            if got is None: continue
+            examples, context, mood = got
+            if context < 4: self.assertEqual(0, examples, limit)     # context is only trimmed after every example is gone
+            if not mood: self.assertEqual((0, 0), (examples, context), limit)   # the mood is the very last thing to go

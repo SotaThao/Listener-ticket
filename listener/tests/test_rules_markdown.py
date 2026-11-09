@@ -38,6 +38,7 @@ REQUIRED = {
         "limits": ["Khóa", "Giá trị", "Nghĩa"],
     },
     "facts": {
+        "group_mood": ["Khóa", "Giá trị"],
         "fields": ["Trường", "Kiểu", "Ý nghĩa", "Ví dụ"],
         "code_facts": ["Trường", "Giá trị", "Cách tính"],
         "command_intent": ["Command", "intent"],

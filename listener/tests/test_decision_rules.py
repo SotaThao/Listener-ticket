@@ -90,6 +90,18 @@ class DecisionRulesTest(unittest.TestCase):
         self.mutate('readiness', '| `vấn đề` | `không` |\n', '')
         with self.assertRaisesRegex(RulesError, 'banter_only self-check failed'): self.load()
 
+    def test_group_mood_table_is_validated(self):
+        self.mutate('facts', '| `example` | `X27` |', '| `example` | `X99` |')
+        with self.assertRaisesRegex(RulesError, 'group_mood example is not in examples.md'): self.load()
+
+    def test_group_mood_needs_exactly_one_note(self):
+        self.mutate('facts', '| `example` | `X26` |', '| `note` | `Ghi chú thứ hai` |\n| `example` | `X26` |')
+        with self.assertRaisesRegex(RulesError, 'group_mood needs one note and distinct examples'): self.load()
+
+    def test_group_mood_examples_come_from_examples_md(self):
+        snapshot = self.load()
+        self.assertEqual(['chat', 'feedback'], [row['intent (model)'].strip('`') for row in snapshot.mood_examples])
+
     def test_normalize_n6_is_hash_locked(self):
         self.mutate('facts', '`với` `ạ` `đi` `nè`', '`với` `ạ` `đi`')
         with self.assertRaisesRegex(RulesError, r'facts.md:\d+:.*unsupported algorithm definition'): self.load()

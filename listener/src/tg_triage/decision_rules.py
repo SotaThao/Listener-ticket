@@ -12,7 +12,7 @@ from typing import Mapping
 FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
-    "facts": {"fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
+    "facts": {"group_mood": "Khóa|Giá trị", "fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
     "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
@@ -213,7 +213,7 @@ class RulesSnapshot:
     """Load once; never mutate or read rule files during evaluation."""
     __slots__ = ('tables','fingerprint','_instructions','text_fields','intents','commands',
                  'domains','generic','limits','model_fields','model_instructions','extensions',
-                 'prefilter_work','prefilter_filler','chat_words','banter_emoji','banter_problem','_laugh_words','_frozen')
+                 'prefilter_work','prefilter_filler','chat_words','banter_emoji','banter_problem','_laugh_words','mood_note','mood_examples','_frozen')
     def __init__(self, rules_dir: Path, templates_dir: Path, *, extensions=False):
         tables, texts = {}, {}
         for name in FILES:
@@ -403,6 +403,18 @@ class RulesSnapshot:
         self.prefilter_work = frozenset(words['việc'])
         self.prefilter_filler = frozenset(words['đệm'])
         self.model_fields = tuple(r.cells for r in t['facts']['fields'])
+        # facts.md · group_mood: model-facing note + contrast examples, sent only while the group is joking.
+        notes, wanted = [], []
+        for r in t['facts']['group_mood']:
+            key, value = r.one('Khóa'), r.one('Giá trị')
+            if key == 'note': notes.append(value)
+            elif key == 'example': wanted.append(value)
+            else: r.fail('unknown group_mood key')
+        if len(notes) != 1 or len(wanted) != len(set(wanted)) or not wanted: t['facts']['group_mood'][0].fail('group_mood needs one note and distinct examples')
+        by_id = {r.cells['#']: r for r in t['examples']['examples']}
+        if any(w not in by_id for w in wanted): t['facts']['group_mood'][0].fail('group_mood example is not in examples.md')
+        self.mood_note = notes[0]
+        self.mood_examples = tuple({k: by_id[w].cells[k] for k in ('Tin (rút gọn)', 'intent (model)', 'Dữ kiện')} for w in wanted)
         self.model_instructions = self._instructions
 
     def prefilter_text(self, text) -> bool:
@@ -458,15 +470,20 @@ class RulesSnapshot:
 
     def banter_context(self, message, context) -> bool:
         """readiness.md · banter_only B3+B4: the group is already joking before `message`."""
+        count, senders = self.banter_stats(message, context)
+        return count >= BANTER_MIN_MESSAGES and senders >= BANTER_MIN_SENDERS
+
+    def banter_stats(self, message, context) -> tuple[int, int]:
+        """readiness.md · banter_only B3: (joking messages, distinct senders) in the window before `message`."""
         from datetime import timedelta
         from .store import _aware
-        if message.message_id is None: return False
+        if message.message_id is None: return 0, 0
         floor = _aware(message.received_at) - timedelta(seconds=BANTER_WINDOW_SECONDS)
         recent = [m for m in context if m.chat_id == message.chat_id and m.message_id < message.message_id
                   and floor <= _aware(m.received_at) <= _aware(message.received_at)]
         recent = sorted(recent, key=lambda m: m.message_id)[-BANTER_CONTEXT_MESSAGES:]
         joking = [m for m in recent if type(m.sender_id) is int and self.banter_text(m.text)]
-        return len(joking) >= BANTER_MIN_MESSAGES and len({m.sender_id for m in joking}) >= BANTER_MIN_SENDERS
+        return len(joking), len({m.sender_id for m in joking})
 
     def prefilter_decision(self, rule=PREFILTER_RULE) -> Decision:
         if rule not in (PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE): raise ValueError('unknown prefilter rule')

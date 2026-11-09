@@ -1,7 +1,9 @@
-<!-- rule-file: examples · version 9 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 10 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
+
+X26, X27 chỉ gửi model khi nhóm đang đùa (`facts.md` · `group_mood`): X26 dạy câu nghe như góp ý nhưng nằm trong mạch đùa là `chat`, X27 là câu tương tự khi nhóm không đùa vẫn là `feedback`.
 
 Khi gửi model làm ví dụ trích dữ kiện, bot chỉ gửi cột "Tin (rút gọn)", "intent (model)" và "Dữ kiện" — **không** gửi các cột còn lại.
 
@@ -40,6 +42,8 @@ Cách ghi cột "Dữ kiện": `trường=giá trị` cách nhau bằng `;`; `�
 | X23 | "Màn giao dịch không ổn" | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `feedback` | object=màn giao dịch; problem=không ổn | `NEED_INFO` | R12 | `ask.problem` |
 | X24 | "Không in được" — đối tượng model lấy từ tin của chủ đề khác | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `bug` | object=máy in POS [ngoài-chủ-đề]; observed=không in được | `NEED_INFO` | R12 | `ask.object` |
 | X25 | "Mấy anh ơi, link zoom daily 10h-11h các anh có dùng không? Báo giùm em nha" — hỏi ý cả team, người khác trả lời ngay trong group (#115) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `question` | object=link zoom daily 10h-11h; work=báo giùm em | `CHAT` | R8 | — |
+| X26 | Nhóm đang đùa (nhiều tin 😂 😆 ngay trước, `group_mood`): "Thiếu tính năng fake mắt xem rồi" (#118) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `chat` | ∅ | `CHAT` | R7 | — |
+| X27 | Nhóm không đùa: "Thiếu nút xuất Excel ở màn báo cáo" | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `feedback` | object=màn báo cáo; proposal=thêm nút xuất Excel | `READY` | R11 | — |
 
 ## Bảng: prefilter_cases
 

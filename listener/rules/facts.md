@@ -1,4 +1,4 @@
-<!-- rule-file: facts · version 6 · status ACTIVE · audience: model + code -->
+<!-- rule-file: facts · version 7 · status ACTIVE · audience: model + code -->
 # Dữ kiện
 
 Hai loại dữ kiện, không lẫn nhau:
@@ -135,6 +135,16 @@ Owner 2026-11-06 (live #115): “Duyệt + thêm ví dụ” — lời nhờ bá
 | `proposal` | `sửa lại` |
 | `proposal` | `làm lại` |
 | `proposal` | `cải thiện` |
+
+## Bảng: group_mood
+
+Chỉ gửi model khi code đếm được nhóm đang đùa (`readiness.md` · `banter_only` B3–B4: ít nhất 2 tin cười của 2 người trong cửa sổ bối cảnh). Khi đó gói tin có thêm `group_mood` (số tin cười, số người, cửa sổ phút, kèm `note`), mỗi tin ở `read_only_context` có `min_ago` (số phút trước tin đang xét) và `laugh` = true nếu tin đó có dấu cười và không có từ báo lỗi, và hai ví dụ đối chiếu dưới đây được thêm vào cuối danh sách ví dụ. Không đủ điều kiện ⇒ không gửi `group_mood`, không thêm ví dụ. Model vẫn chỉ trích dữ kiện; code vẫn quyết bằng `readiness.md`. Ví dụ là thứ bị bỏ đầu tiên khi request quá lớn, rồi tới tin ở `read_only_context`, cuối cùng mới tới `group_mood`.
+
+| Khóa | Giá trị |
+|---|---|
+| `note` | `Code đếm: nhóm đang đùa (tin có laugh). Nếu tin cần phân loại cũng là câu đùa/trêu/nói quá, không phải báo lỗi hay nhờ việc thật ⇒ intent chat. Góp ý hoặc báo lỗi thật vẫn giữ nguyên loại.` |
+| `example` | `X26` |
+| `example` | `X27` |
 
 ## Bảng: limits
 
