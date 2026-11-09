@@ -72,6 +72,24 @@ class DecisionRulesTest(unittest.TestCase):
         self.mutate('readiness', '| `cảm ơn` | `cảm` |\n', '')
         with self.assertRaisesRegex(RulesError, 'chat_only self-check failed'): self.load()
 
+    def test_banter_only_definition_is_hash_locked(self):
+        self.mutate('readiness', '| B4 | Bối cảnh đang đùa khi có ít nhất 2 tin', '| B4 | Bối cảnh đang đùa khi có ít nhất 1 tin')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported banter_only definition'): self.load()
+
+    def test_banter_cases_execute_on_load(self):
+        old = '| BC3 | để e mở tab ẩn danh login 10 acc test vào xem live 😁 | Ngọc: 😆 ; Ngọc: haha ; Men: Thiếu tính năng fake mắt xem rồi | `không` |'
+        self.mutate('examples', old, old.replace('`không`', '`CHAT`'))
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*banter_only self-check failed'): self.load()
+
+    def test_banter_signals_are_data_and_validated(self):
+        self.mutate('readiness', '| `vấn đề` | `lỗi` |', '| `vấn đề` | `bug` |')
+        with self.assertRaisesRegex(RulesError, 'invalid or duplicate banter sign'): self.load()
+
+    def test_removing_a_problem_word_changes_the_self_check(self):
+        # "không" is a problem word: dropping it makes BC6 ("không in được bill 😅") match F5, which the self-check catches.
+        self.mutate('readiness', '| `vấn đề` | `không` |\n', '')
+        with self.assertRaisesRegex(RulesError, 'banter_only self-check failed'): self.load()
+
     def test_normalize_n6_is_hash_locked(self):
         self.mutate('facts', '`với` `ạ` `đi` `nè`', '`với` `ạ` `đi`')
         with self.assertRaisesRegex(RulesError, r'facts.md:\d+:.*unsupported algorithm definition'): self.load()

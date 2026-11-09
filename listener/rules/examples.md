@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 8 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 9 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -112,6 +112,25 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `chat_only`). 
 | CC12 | xong rồi, nhưng màn Queue bị trắng | `không` |
 | CC13 | xong rồi à anh? | `không` |
 | CC14 | ok? | `không` |
+
+## Bảng: banter_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `banter_only`). `Bối cảnh` là các tin ngay trước, cũ đến mới, mỗi tin cách nhau một phút, dạng `Tên: tin ; Tên: tin` (tên khác nhau là người gửi khác nhau); `—` là chưa có tin nào. BC1 là dạng ẩn danh của tin live đã thành ticket #119; BC5 là dạng của #118 — không có dấu cười trong tin nên **không** khớp luật cục bộ, model đọc bối cảnh theo `facts.md`. Bảng này **không** gửi cho model.
+
+| # | Tin | Bối cảnh | Kết quả |
+|---|---|---|---|
+| BC1 | để e mở tab ẩn danh login 10 acc test vào xem live 😁 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `CHAT` |
+| BC2 | để e mở tab ẩn danh login 10 acc test vào xem live 😁 | — | `không` |
+| BC3 | để e mở tab ẩn danh login 10 acc test vào xem live 😁 | Ngọc: 😆 ; Ngọc: haha ; Men: Thiếu tính năng fake mắt xem rồi | `không` |
+| BC4 | haha vậy là xong demo live luôn | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `CHAT` |
+| BC5 | Thiếu tính năng fake mắt xem rồi | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
+| BC6 | Màn Queue không in được bill 😄 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
+| BC7 | lỗi lắm 😂 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
+| BC8 | để e mở tab ẩn danh login 10 acc test vào xem live 😁 | Ngọc: 😆 ; LEO: ok anh ; Men: Thiếu tính năng fake mắt xem rồi | `không` |
+| BC9 | nạp tiền bị trừ 2 lần mà ví vẫn 0đ 😄 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
+| BC10 | app bi loi roi a 😄 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
+| BC11 | xem live nè 😄 | Ngọc: prod sập rồi =)) ; LEO: lại lỗi 😂 | `không` |
+| BC12 | Màn Queue k in được bill 😅 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
 
 ## Bảng: team_cases
 

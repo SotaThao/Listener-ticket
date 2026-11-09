@@ -13,11 +13,11 @@ File quyết định — bot nạp theo thứ tự:
 | File | Nội dung | Ai dùng | Thứ tự nạp | Trạng thái |
 |---|---|---|---|---|
 | [states.md](states.md) | 6 trạng thái kết quả, vòng đời pending, hạn 7 ngày, số lần thử `HOLD` | Code | 1 | ACTIVE |
-| [facts.md](facts.md) | Dữ kiện model trích (`fields`), dữ kiện code tính (`code_facts`), command → intent, điều kiện CÓ V1–V4, chuẩn hóa N1–N6 (N6 bỏ chữ đệm cuối), giá trị chung chung | **Model** (`fields`, cách ghi giá trị) + Code | 2 | ACTIVE |
-| [readiness.md](readiness.md) | Lọc local trước model `prefilter` P1–P4 + `prefilter_words` (nhờ review/merge PR ⇒ `CHAT`, luật `F1`), `link_only` W1–W4 (tin chỉ có link ⇒ `CHAT`, luật `F3`), `chat_only` C1–C4 + `chat_words` (tin chỉ có từ xã giao ⇒ `CHAT`, luật `F4`), bảng `intent_resolve` I1–I3, `team_request` T1–T5 (task giao/hỏi đồng nghiệp có `@tên` ⇒ `CHAT`, luật `F2`) và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
+| [facts.md](facts.md) | Dữ kiện model trích (`fields`), dữ kiện code tính (`code_facts`), command → intent, điều kiện CÓ V1–V4, chuẩn hóa N1–N6 (N6 bỏ chữ đệm cuối), giá trị chung chung; mục 5 "Cách model ghi giá trị": nhóm đang đùa ⇒ `chat` | **Model** (`fields`, cách ghi giá trị) + Code | 2 | ACTIVE |
+| [readiness.md](readiness.md) | Lọc local trước model `prefilter` P1–P4 + `prefilter_words` (nhờ review/merge PR ⇒ `CHAT`, luật `F1`), `link_only` W1–W4 (tin chỉ có link ⇒ `CHAT`, luật `F3`), `chat_only` C1–C4 + `chat_words` (tin chỉ có từ xã giao ⇒ `CHAT`, luật `F4`), `banter_only` B1–B5 + `banter_signals` (tin đùa giữa lúc nhóm đang cười ⇒ `CHAT`, luật `F5`), bảng `intent_resolve` I1–I3, `team_request` T1–T5 (task giao/hỏi đồng nghiệp có `@tên` ⇒ `CHAT`, luật `F2`) và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
 | [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4) | Code | 4 | ACTIVE |
 | [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | ACTIVE |
-| [examples.md](examples.md) | 25 ví dụ X1–X25 phủ mọi luật + 23 ca lọc trước PF1–PF23 + 14 ca chỉ có link LC1–LC14 + 12 ca xã giao CC1–CC12 + 12 ca việc nội bộ TC1–TC12 + 15 ca chuẩn hóa G1–G15 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
+| [examples.md](examples.md) | 25 ví dụ X1–X25 phủ mọi luật + 23 ca lọc trước PF1–PF23 + 14 ca chỉ có link LC1–LC14 + 12 ca xã giao CC1–CC12 + 8 ca đùa BC1–BC8 + 12 ca việc nội bộ TC1–TC12 + 15 ca chuẩn hóa G1–G15 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
 
 
 File mở rộng — loader source nạp cùng sáu file trên khi bật rules; chỉ host áp dụng, không gửi bảng quyết định cho model:
@@ -53,10 +53,10 @@ Chưa soạn: `topics.md` (TG-05/06) · `priority.md`.
  ┌─ đọc thư mục rules/ (source tree, nếu không có thì bản cài sys.prefix/share/tg-triage/rules)
  ├─ 1. states.md      → tập trạng thái hợp lệ, limits
  ├─ 2. facts.md       → trường, code_facts, command_intent, field_valid, normalize, generic_values
- ├─ 3. readiness.md   → prefilter (khóa hash) + prefilter_words, link_only (khóa hash), chat_only (khóa hash) + chat_words, team_request (khóa hash), intent_resolve + decision (chỉ dùng trạng thái ở 1, trường/giá trị ở 2)
+ ├─ 3. readiness.md   → prefilter (khóa hash) + prefilter_words, link_only (khóa hash), chat_only (khóa hash) + chat_words, banter_only (khóa hash) + banter_signals, team_request (khóa hash), intent_resolve + decision (chỉ dùng trạng thái ở 1, trường/giá trị ở 2)
  ├─ 4. questions.md   → ask_order, fallback, answer_link (chỉ dùng trường ở 2)
  ├─ 5. channels.md    → outputs (đủ mọi trạng thái ở 1), blocks (khối phải có trong template)
- ├─ 6. examples.md    → chạy TỰ KIỂM: mỗi ví dụ ra đúng Kết quả, Luật, Hỏi; mỗi ca PF ra đúng `CHAT`/`không`; mỗi ca LC, CC ra đúng `CHAT`/`không`; mỗi ca TC ra đúng luật
+ ├─ 6. examples.md    → chạy TỰ KIỂM: mỗi ví dụ ra đúng Kết quả, Luật, Hỏi; mỗi ca PF ra đúng `CHAT`/`không`; mỗi ca LC, CC, BC ra đúng `CHAT`/`không`; mỗi ca TC ra đúng luật
  ├─ 7. lifecycle.md + analysis-status.md → kiểm extension ACTIVE và các bảng mở rộng
  ├─ tính fingerprint SHA-256 (tên file + nội dung chuẩn hóa LF, theo thứ tự tên)
  └─ ghi log fingerprint; check-config in ra "rules": {"fingerprint": …}

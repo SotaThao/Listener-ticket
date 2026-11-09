@@ -6,6 +6,7 @@ from tests.helpers import message
 from tests.test_rules_bootstrap import RulesBootstrapTests
 from types import SimpleNamespace
 from dataclasses import replace
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 import asyncio
 from pathlib import Path
@@ -1542,7 +1543,7 @@ class RulesPrefilterTests(RulesBootstrapTests):
         self.assertFalse(snapshot.prefilter_text('anh Quân review giúp em https://github.com/org/repo/pull/12'))  # named teammate: residual, model decides
         self.assertFalse(snapshot.prefilter_text(None))
 
-    def run_live(self, text, *, extensions, facts=None, **extra):
+    def run_live(self, text, *, extensions, facts=None, history=(), **extra):
         from tg_triage.decision_rules import RulesSnapshot
         from pathlib import Path
         root=Path(__file__).resolve().parents[1]
@@ -1556,6 +1557,7 @@ class RulesPrefilterTests(RulesBootstrapTests):
             def __init__(self): self.calls=[]
             def create_issue(self,issue): self.calls.append(issue); return len(self.calls),None
         store=Store(':memory:'); self.addCleanup(store.close)
+        for earlier in history: store.enqueue(earlier)
         settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
                          telegram=replace(config().telegram,ops_chat_id=-1009876543210))
         provider,github,notices=Provider(),GitHub(),[]
@@ -1960,3 +1962,75 @@ class RulesReadyTicketBodyTests(RulesBootstrapTests):
         footer=issue.body.rsplit('---',1)[1]
         self.assertIn('luật R10 (rules/readiness.md)',footer)
         self.assertNotIn('tầng 1 lệnh',footer)
+
+
+class RulesBanterTests(RulesBootstrapTests):
+    """Owner 2026-11-09 (live #118, #119): a joke inside a group that is already joking is CHAT, not a ticket."""
+    JOKE = 'để e mở tab ẩn danh login 10 acc test vào xem live 😁'
+
+    def history(self):
+        talk = [(10, 101, 'em thấu hiểu tâm lý người dùng mà 😆'), (11, 102, '😂😂😂'),
+                (12, 103, 'Thiếu tính năng fake mắt xem rồi'), (13, 103, 'Kéo dòng họ vô xem live nè')]
+        return [message(mid, text=text, sender_id=sender, mentions_listener=False) for mid, sender, text in talk]
+
+    def run_live(self, text, *, extensions=True, history=None, **extra):
+        extra.setdefault('mentions_listener', False)
+        extra.setdefault('sender_id', 105)
+        return RulesPrefilterTests.run_live(self, text, extensions=extensions, facts=RulesPrefilterTests.TASK_FACTS,
+                                            history=self.history() if history is None else history, **extra)
+
+    def test_live_joke_in_a_joking_group_is_chat_f5_without_model_ticket_or_notice(self):
+        for extensions in (False, True):
+            with self.subTest(extensions=extensions):
+                result, provider, github, notices, row = self.run_live(self.JOKE, extensions=extensions)
+                self.assertEqual(('chat', 'F5'), (result.decision, result.reason))
+                self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
+                self.assertEqual(('CHAT', 'F5', 'prefilter'), tuple(row))
+
+    def test_same_joke_without_a_joking_group_reaches_the_model(self):
+        _, provider, _, _, _ = self.run_live(self.JOKE, history=[])
+        self.assertEqual(1, provider.calls)
+
+    def test_one_person_laughing_twice_is_not_a_joking_group(self):
+        talk = [message(10, text='haha', sender_id=101, mentions_listener=False), message(11, text='😂😂', sender_id=101, mentions_listener=False)]
+        _, provider, _, _, _ = self.run_live(self.JOKE, history=talk)
+        self.assertEqual(1, provider.calls)
+
+    def test_old_laughter_outside_the_window_does_not_count(self):
+        old = [replace(m, received_at=m.received_at - timedelta(minutes=45)) for m in self.history()]
+        _, provider, _, _, _ = self.run_live(self.JOKE, history=old)
+        self.assertEqual(1, provider.calls)
+
+    def test_problem_words_bot_tag_and_missing_laugh_sign_still_reach_the_model(self):
+        for text, extra in (('Màn Queue không in được bill 😅', {}), ('lỗi lắm 😂', {}), (self.JOKE, {'mentions_listener': True}),
+                            ('Thiếu tính năng fake mắt xem rồi', {})):
+            with self.subTest(text=text, extra=extra):
+                _, provider, _, _, _ = self.run_live(text, **extra)
+                self.assertEqual(1, provider.calls)
+
+    def test_scope_excludes_reply_forward_attachment_and_command(self):
+        from tg_triage.rules_intake import _local_rule
+        snapshot = self.snapshot()
+        history = self.history()
+        def at(text='haha xem live nè', **extra): return message(42, text=text, mentions_listener=False, sender_id=105, **extra)
+        self.assertEqual('F5', _local_rule(snapshot, [at()], history))
+        self.assertIsNone(_local_rule(snapshot, [at()]))   # no group history: never matches
+        for extra in ({'reply_to_id': 7}, {'is_forward': True}, {'has_image': True}):
+            self.assertIsNone(_local_rule(snapshot, [at(**extra)], history))
+        self.assertIsNone(_local_rule(snapshot, [at('/task haha xem live nè')], history))
+        self.assertIsNone(_local_rule(snapshot, [message(42, text='haha xem live nè', sender_id=105)], history))  # tags the bot
+
+    def test_model_sees_group_history_and_the_banter_instruction(self):
+        from tg_triage.rules_extraction import partition_and_extract
+        from tg_triage.decision_rules import RulesSnapshot
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        snapshot = RulesSnapshot(root/'rules', root/'templates/github-ticket', extensions=True)
+        provider = SimpleNamespace(settings=SimpleNamespace(model='test'), think=False, supports_vision=False)
+        out = []
+        partition_and_extract(provider, snapshot, [message(42, text='Thiếu tính năng fake mắt xem rồi', mentions_listener=False, sender_id=105)],
+                              read_context=self.history(), body_out=out)
+        system, user = out[0]['messages'][0]['content'], out[0]['messages'][1]['content']
+        self.assertIn('read_only_context', system)
+        self.assertIn('đùa', system)
+        self.assertIn('😂😂😂', user)

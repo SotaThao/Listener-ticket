@@ -1,4 +1,4 @@
-<!-- rule-file: facts · version 5 · status ACTIVE · audience: model + code -->
+<!-- rule-file: facts · version 6 · status ACTIVE · audience: model + code -->
 # Dữ kiện
 
 Hai loại dữ kiện, không lẫn nhau:
@@ -27,6 +27,7 @@ Cách model ghi giá trị:
 2. Không chắc ⇒ để trống. Không đoán thiết bị, môi trường, nguyên nhân, bước tái hiện.
 3. Giá trị đọc từ ảnh (heading panel, thông báo lỗi) được phép; `source_ids` phải là tin chứa ảnh đó.
 4. Một chủ đề chỉ có một `intent`. Gom/tách chủ đề theo TG-05/TG-06, trước bước này.
+5. Nhóm đang đùa (`read_only_context` có 😂 haha) mà tin này cũng đùa, không phải báo lỗi hay nhờ việc ⇒ `chat`.
 
 ## Bảng: code_facts
 

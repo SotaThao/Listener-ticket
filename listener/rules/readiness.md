@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 7 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 8 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
@@ -8,6 +8,8 @@ Owner 2026-11-06: “Có, là CHAT” — giao việc hoặc nhờ/hỏi đồng
 Owner 2026-11-06: “Duyệt F3” — tin chỉ có link, không kèm chữ, là chia sẻ, không phải ticket hay câu hỏi.
 
 Owner 2026-11-06: “Duyệt cả ba” — tin chỉ có từ xã giao (`chat_words`) là CHAT (luật `F4`); kèm bước chuẩn hóa N6 và cụm `work` chung chung trong `facts.md`.
+
+Owner 2026-11-09 (live #118, #119 trong group DEV - NEXORA): “cập nhật thêm context đùa giỡn dựa trên bối cảnh chung trên group để tránh log ticket sai” — tin đùa giữa lúc cả nhóm đang cười không thành ticket: luật `F5` (cục bộ, tin tự có dấu cười) và hướng dẫn model đọc `read_only_context` trong `facts.md`. Owner 2026-11-09: “Duyệt F5” — duyệt luật `F5` với ngưỡng 2 tin / 2 người / 15 phút / 8 tin và danh sách dấu hiện tại, kèm các đánh đổi ghi trong Business DOCS TG-09.
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -153,6 +155,82 @@ Từ xã giao (Owner duyệt 2026-11-06). Thêm từ: một dòng mới, đúng 
 | `đệm` | `nhiều` |
 | `đệm` | `lắm` |
 | `đệm` | `nè` |
+
+## Bảng: banter_only
+
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `chat_only`. Khớp ⇒ `CHAT` ngay với luật `F5`. Xét sau `prefilter` (F1), `link_only` (F3) và `chat_only` (F4). Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp. Bối cảnh lấy từ các tin đã lưu của chính group đó; không có bối cảnh (tin đầu tiên, bot mới chạy) ⇒ không khớp.
+
+| # | Bước |
+|---|---|
+| B1 | Tin mới: không phải Reply, không forward, không command, người gửi không đính kèm ảnh hay tài liệu, không tag bot, có chữ |
+| B2 | Bỏ ký tự vô hình và mọi `@tên`; chữ thường. Tin phải có ít nhất một dấu cười: một dấu loại `emoji` trong bảng `banter_signals` xuất hiện trong tin, hoặc một từ thuộc nhóm `cười` của bảng `chat_words`; và không có từ nào loại `vấn đề` của bảng `banter_signals` |
+| B3 | Bối cảnh: tối đa 8 tin ngay trước tin đầu tiên đang xét trong cùng group, gửi trong 15 phút trước tin đó. Một tin bối cảnh là "đang đùa" khi thỏa trọn B2 (có dấu cười và không có từ loại `vấn đề`; tin cười về sự cố không tính) và người gửi biết được |
+| B4 | Bối cảnh đang đùa khi có ít nhất 2 tin "đang đùa" do ít nhất 2 người gửi khác nhau |
+| B5 | Khớp B1–B4 ⇒ `CHAT` (luật `F5`), không gọi model, không ticket, không hỏi; thiếu một điều kiện ⇒ đi tiếp như cũ. Tin không có dấu cười (vd "Thiếu tính năng fake mắt xem rồi") không bao giờ khớp ở đây: model đọc `read_only_context` theo hướng dẫn trong `facts.md` |
+
+## Bảng: banter_signals
+
+Dấu hiệu cho `banter_only` (Owner 2026-11-09). Loại `emoji`: khớp nếu chuỗi này xuất hiện trong tin. Loại `vấn đề`: từ chữ thường; có một từ này trong tin thì tin không bao giờ bị F5 chặn (báo lỗi thật vẫn tới model). Không thêm từ tả tính năng (thiếu, thêm, cần) vào loại `vấn đề`.
+
+| Loại | Dấu |
+|---|---|
+| `emoji` | `😂` |
+| `emoji` | `🤣` |
+| `emoji` | `😆` |
+| `emoji` | `😁` |
+| `emoji` | `😄` |
+| `emoji` | `😜` |
+| `emoji` | `😝` |
+| `emoji` | `🤪` |
+| `emoji` | `😹` |
+| `emoji` | `=))` |
+| `emoji` | `:))` |
+| `vấn đề` | `lỗi` |
+| `vấn đề` | `bug` |
+| `vấn đề` | `crash` |
+| `vấn đề` | `treo` |
+| `vấn đề` | `đơ` |
+| `vấn đề` | `sập` |
+| `vấn đề` | `hỏng` |
+| `vấn đề` | `không` |
+| `vấn đề` | `ko` |
+| `vấn đề` | `chưa` |
+| `vấn đề` | `chậm` |
+| `vấn đề` | `sai` |
+| `vấn đề` | `fix` |
+| `vấn đề` | `sửa` |
+| `vấn đề` | `kẹt` |
+| `vấn đề` | `văng` |
+| `vấn đề` | `k` |
+| `vấn đề` | `hông` |
+| `vấn đề` | `hong` |
+| `vấn đề` | `khong` |
+| `vấn đề` | `loi` |
+| `vấn đề` | `chua` |
+| `vấn đề` | `cham` |
+| `vấn đề` | `mất` |
+| `vấn đề` | `trừ` |
+| `vấn đề` | `tiền` |
+| `vấn đề` | `ví` |
+| `vấn đề` | `nạp` |
+| `vấn đề` | `rút` |
+| `vấn đề` | `đơn` |
+| `vấn đề` | `dư` |
+| `vấn đề` | `âm` |
+| `vấn đề` | `thanh` |
+| `vấn đề` | `toán` |
+| `vấn đề` | `trắng` |
+| `vấn đề` | `lag` |
+| `vấn đề` | `error` |
+| `vấn đề` | `fail` |
+| `vấn đề` | `failed` |
+| `vấn đề` | `timeout` |
+| `vấn đề` | `die` |
+| `vấn đề` | `thất` |
+| `vấn đề` | `bại` |
+| `vấn đề` | `500` |
+| `vấn đề` | `404` |
+| `vấn đề` | `đứng` |
 
 ## Bảng: team_request
 
