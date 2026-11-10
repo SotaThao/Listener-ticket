@@ -29,7 +29,7 @@ _MENTION = re.compile(r"@\w+")
 _INVISIBLE = re.compile("[​-‍⁠﻿]")
 _NUMBER = re.compile(r"#?[0-9]+")
 TEAM_RULE = "F2"
-TEAM_SHA256 = "be1a5c528c4e9f3fc0c4c076933d0eca989dd5441b750881c16823b29a96097e"
+TEAM_SHA256 = "4ade031072ed8a9048677bbc3608efb221fbc522fb9b524039daaec2cdef8061"
 # readiness.md · team_request T3: a Telegram @username (letter first, 5–32 of letter/digit/_),
 # not glued after a letter, digit, `@` or `.` (e-mail addresses are not mentions). Code spans and
 # any space-free run containing `/` (links such as tiktok.com/@shop, packages such as @org/pkg) go first.
@@ -57,7 +57,7 @@ BANTER_KINDS = frozenset({"emoji", "vấn đề"})
 REPLY_CHAT_RULE = "F6"
 # readiness.md · reply_chat K2(a): only these rules settle a message as team talk, small talk or a joke.
 REPLY_CHAT_TARGET_RULES = frozenset({"F2", "F4", "F5"})
-REPLY_CHAT_SHA256 = "7314a311e5ece362df1cdd3bf6ce196b4e5f11a1c71e0b55a11fb7c1c60fd4b6"
+REPLY_CHAT_SHA256 = "620f52e03f6f08c63b95d3e551e6028ca98a9a4df64f3e0171ea213d51cf9866"
 IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
@@ -506,21 +506,19 @@ class RulesSnapshot:
         return not any(w in self.banter_problem for w in re.sub(r'[^\w]+|_', ' ', value).split())
 
     def reply_target_settled(self, decision, reason, target_sender, sender) -> bool:
-        """readiness.md · reply_chat K2: (a) the target was settled CHAT, or (b) the bot gave up on it and a different,
-        known person replies. Anything else (no ticket yet, ticket made, waiting for more info) is not settled."""
-        # N1: always a different, known person. K2(a) only for F2/F4/F5: read-only ANALYZE/STATUS, dry-run, system rows, and
+        """readiness.md · reply_chat K2: the target was settled CHAT by F2, F4 or F5 and a different, known person replies.
+        Anything else (no ticket yet, ticket made, waiting for more info, the bot gave up on it) is not settled."""
+        # N1: always a different, known person. Only F2/F4/F5 settle a message (Owner 2026-11-10 dropped the 'bot gave up' case): read-only ANALYZE/STATUS, dry-run, system rows, and
         # F1/F3/R7/R8 (review requests, links, questions) are also stored as chat but a reply to them may be a real request.
         if not (type(target_sender) is int and type(sender) is int and target_sender != sender): return False
-        if decision == 'chat': return reason in REPLY_CHAT_TARGET_RULES
-        return decision == 'pending_review' and reason == 'rules_hold_escalated'
+        return decision == 'chat' and reason in REPLY_CHAT_TARGET_RULES
 
     def _reply_chat_case(self, text, target) -> bool:
         from datetime import datetime, timezone
         from .models import IncomingMessage
         now = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
         message = IncomingMessage(1, 8, now, 'Người gửi', text, sender_id=99, reply_to_id=None if target == 'none' else 7)
-        decision, reason, same = {'CHAT': ('chat', 'F2', False), 'ticket': ('issue', None, False), 'CHAT-self': ('chat', 'F2', True), 'CHAT-F1': ('chat', 'F1', False), 'none': (None, None, False),
-                                  'giveup': ('pending_review', 'rules_hold_escalated', False), 'giveup-self': ('pending_review', 'rules_hold_escalated', True)}[target]
+        decision, reason, same = {'CHAT': ('chat', 'F2', False), 'ticket': ('issue', None, False), 'CHAT-self': ('chat', 'F2', True), 'CHAT-F1': ('chat', 'F1', False), 'none': (None, None, False)}[target]
         return self.reply_chat_match(message, self.reply_target_settled(decision, reason, 99 if same else 55, 99))
 
     def _split_case(self, group) -> str:
@@ -743,7 +741,7 @@ class RulesSnapshot:
         outcomes = set()
         for row in self.tables['examples']['reply_chat_cases']:
             target, expected = row.one('Reply vào'), row.one('Kết quả')
-            if target not in {'CHAT', 'CHAT-self', 'CHAT-F1', 'ticket', 'none', 'giveup', 'giveup-self'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
+            if target not in {'CHAT', 'CHAT-self', 'CHAT-F1', 'ticket', 'none'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
             if self._reply_chat_case(row.cells['Tin'], target) != (expected == 'CHAT'): row.fail('reply_chat self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['reply_chat_cases'][0].fail('reply_chat cases need both outcomes')

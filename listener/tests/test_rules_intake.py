@@ -1715,6 +1715,14 @@ class RulesTeamRequestTests(RulesBootstrapTests):
                 self.assertEqual(1, len(github))
                 self.assertEqual({('issue', 'R10')}, rows)
 
+    def test_forwarded_requester_message_is_never_the_same_sender_as_the_tagged_follow_up(self):
+        # Review round 2: A forwards a customer's request and then writes "@dev làm giúp chị": the customer's request stays a ticket.
+        sources = [message(41, text='Chị ơi bên chị cần thêm nút xuất Excel ở báo cáo', is_forward=True, sender_id=1, **self.PLAIN),
+                   message(42, text='@devmember02 em làm giúp chị cái này nha', sender_id=1, **self.PLAIN)]
+        calls, github, _, rows = self.batch(sources, self.task([41, 42], [41], [42]))
+        self.assertEqual(1, len(github))
+        self.assertEqual({('issue', 'R10')}, rows)
+
     def test_forwarded_tag_is_the_requester_speaking_and_keeps_the_ticket(self):
         # Review B2: a forwarded customer message that tags a sales contact is not internal assignment.
         _,_,github,_,row=self.run_live('Chị @sales_lan ơi bên chị cần thêm nút xuất Excel ở báo cáo',extensions=True,
@@ -2230,28 +2238,16 @@ class RulesReplyChatAndImageSplitTests(RulesBootstrapTests):
 
 
 class RulesReplyGaveUpTests(RulesBootstrapTests):
-    """Owner 2026-11-10 (live #125): a reply to a message the bot gave up on, from another person, is chat."""
+    """Owner 2026-11-10 ("Bỏ (b)"): a reply to a message the bot gave up on is NOT settled; the model decides."""
     TEXT = 'rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss'
     history = RulesReplyChatAndImageSplitTests.history
 
-    def live_gave_up(self, text, *, sender, **extra):
-        extra.setdefault('mentions_listener', False)
-        extra.setdefault('reply_to_id', 10)
-        return RulesPrefilterTests.run_live(self, text, extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
-                                            history=self.history(), gave_up=(10,), sender_id=sender, **extra)
+    def test_reply_to_a_given_up_message_reaches_the_model(self):
+        _, provider, _, _, _ = RulesPrefilterTests.run_live(self, self.TEXT, extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
+                                                         history=self.history(), gave_up=(10,), sender_id=202, reply_to_id=10, mentions_listener=False)
+        self.assertEqual(1, provider.calls)
 
-    def test_reply_by_another_person_to_a_given_up_message_is_chat_f6(self):
-        result, provider, github, notices, row = self.live_gave_up(self.TEXT, sender=202)
-        self.assertEqual(('chat', 'F6'), (result.decision, result.reason))
-        self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
-
-    def test_reply_by_the_same_person_or_with_a_problem_word_still_reaches_the_model(self):
-        for text, sender in ((self.TEXT, 201), ('file này treo hoài anh', 202)):
-            with self.subTest(text=text, sender=sender):
-                _, provider, _, _, _ = self.live_gave_up(text, sender=sender)
-                self.assertEqual(1, provider.calls)
-
-    def test_reply_to_a_message_still_waiting_for_more_information_is_not_settled(self):
+    def test_reply_target_settled_only_for_f2_f4_f5_by_a_different_known_person(self):
         snapshot = self.snapshot()
         self.assertTrue(snapshot.reply_target_settled('chat', 'F2', 1, 2))
         self.assertFalse(snapshot.reply_target_settled('chat', 'F2', 1, 1))   # N1: one's own message
@@ -2262,8 +2258,13 @@ class RulesReplyGaveUpTests(RulesBootstrapTests):
             self.assertFalse(snapshot.reply_target_settled('chat', rule, 1, 2), rule)
         for reason in ('semantic_analyze', 'semantic_status', 'dry_run_append', 'unbound_ops_reply', 'rules_reply_processed', None, ''):
             self.assertFalse(snapshot.reply_target_settled('chat', reason, 1, 2), reason)
-        self.assertTrue(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', 1, 2))
-        self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', 1, 1))
-        self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', None, 2))
-        self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_extract_pending', 1, 2))
+        for reason in ('rules_hold_escalated', 'rules_hold', 'rules_extract_pending'):   # (b) dropped
+            self.assertFalse(snapshot.reply_target_settled('pending_review', reason, 1, 2), reason)
         self.assertFalse(snapshot.reply_target_settled('issue', None, 1, 2))
+
+    def test_reply_to_an_f2_message_without_an_at_name_is_not_settled(self):
+        # Review round 2: a topic's other messages are also stored chat/F2; only the message that carries the @name settles replies.
+        history = [message(10, text='báo cáo doanh thu cần thêm cột phí giao dịch', sender_id=201, mentions_listener=False)]
+        _, provider, _, _, _ = RulesPrefilterTests.run_live(self, 'bên kế toán cũng cần cột này gấp', extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
+                                                         history=history, settled_chat=(10,), sender_id=202, reply_to_id=10, mentions_listener=False)
+        self.assertEqual(1, provider.calls)
