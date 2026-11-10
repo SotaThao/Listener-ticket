@@ -102,7 +102,8 @@ def _banter_history(pipeline, sources):
 
 
 def _chat_reply_ids(pipeline, sources):
-    """readiness.md · reply_chat K2: ids of sources that Reply to a stored message the bot already settled as CHAT."""
+    """readiness.md · reply_chat K2: ids of sources that Reply to a stored message the bot settled as CHAT, or gave up on
+    (rules_hold_escalated) when a different person replies."""
     found = set()
     for source in sources:
         if source.reply_to_id is None: continue
@@ -111,7 +112,8 @@ def _chat_reply_ids(pipeline, sources):
             import logging
             logging.getLogger(__name__).warning('reply_chat_lookup_failed', exc_info=True)
             continue
-        if row is not None and row['decision'] == 'chat': found.add(source.message_id)
+        if row is not None and pipeline.rules_snapshot.reply_target_settled(row['decision'], row['reason'], row['sender_id'], source.sender_id):
+            found.add(source.message_id)
     return frozenset(found)
 
 

@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 9 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 10 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
@@ -12,6 +12,8 @@ Owner 2026-11-06: “Duyệt cả ba” — tin chỉ có từ xã giao (`chat_w
 Owner 2026-11-09 (live #118, #119 trong group DEV - NEXORA): “cập nhật thêm context đùa giỡn dựa trên bối cảnh chung trên group để tránh log ticket sai” — tin đùa giữa lúc cả nhóm đang cười không thành ticket: luật `F5` (cục bộ, tin tự có dấu cười) và hướng dẫn model đọc `read_only_context` trong `facts.md`. Owner 2026-11-09: “Duyệt F5” — duyệt luật `F5` với ngưỡng 2 tin / 2 người / 15 phút / 8 tin và danh sách dấu hiện tại, kèm các đánh đổi ghi trong Business DOCS TG-09.
 
 Owner 2026-11-10 (live #121–#123): “Làm sửa 1 và 2” — một ảnh trần của người khác không bị model dán vào nhóm không liên quan (`image_split`), và tin Reply vào một tin đã quyết `CHAT` mà không có từ báo lỗi cũng là `CHAT` (luật `F6`, `reply_chat`).
+
+Owner 2026-11-10 (live #125, #126): “Làm 1 và 2” — luật `F2` chỉ xét tin nguồn của `work` (không còn đòi tin nguồn của `intent` cũng có `@tên`), và luật `F6` mở rộng sang tin Reply vào một tin mà bot đã bỏ cuộc không tạo ticket (`reply_chat` K2 b).
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -241,7 +243,7 @@ Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` 
 | # | Bước |
 |---|---|
 | K1 | Tin Reply (có `reply_to_id`), không forward, không command, người gửi không đính kèm ảnh hay tài liệu, không tag bot, có chữ |
-| K2 | Tin được Reply vào đã lưu trong cùng group và bot đã quyết `CHAT` cho nó (không tính tin chưa quyết, tin đã tạo ticket, tin chờ duyệt hay không tìm thấy) |
+| K2 | Tin được Reply vào đã lưu trong cùng group và là một trong hai: (a) bot đã quyết `CHAT` cho nó; (b) bot đã bỏ cuộc không tạo ticket cho nó (báo "chưa được phân tích thành công" ở group xử lý, lý do `rules_hold_escalated`) và người gửi hai tin đều biết và khác nhau. Không tính tin chưa quyết, tin đã tạo ticket, tin đang chờ bổ sung, tin của chính người gửi ở (b), hay không tìm thấy |
 | K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
 | K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
 
@@ -264,7 +266,7 @@ Xét **sau model**, sau bảng `intent_resolve`, **trước** bảng `decision`.
 |---|---|
 | T1 | Chủ đề mới: không có command, `extraction_ok` = `true`, `reply_target` = `none`; không phải tin nối vào chủ đề đang chờ trả lời câu hỏi của bot, không phải bước kiểm lại ticket liên quan (recurrence) |
 | T2 | `intent` sau bảng `intent_resolve` là `task` (gồm `question` có `work` ở I1) |
-| T3 | **Mọi** tin model lấy làm nguồn cho `intent` hoặc `work` đều là tin **không forward** có `@tên` Telegram: `@` + chữ cái Latin + 4–31 chữ cái Latin, số hoặc `_`; không dính sau chữ, số, `@` hay `.` (email không tính). Trước khi tìm: bỏ ký tự vô hình, bỏ đoạn trong backtick, bỏ mọi cụm không khoảng trắng có `/` (link như `tiktok.com/@shop`, gói như `@org/pkg`) |
+| T3 | **Mọi** tin model lấy làm nguồn cho `work` (không có `work` thì cho `intent`) đều là tin **không forward** có `@tên` Telegram: `@` + chữ cái Latin + 4–31 chữ cái Latin, số hoặc `_`; không dính sau chữ, số, `@` hay `.` (email không tính). Trước khi tìm: bỏ ký tự vô hình, bỏ đoạn trong backtick, bỏ mọi cụm không khoảng trắng có `/` (link như `tiktok.com/@shop`, gói như `@org/pkg`) |
 | T4 | Không tin nào của chủ đề tag tài khoản bot (cờ `mentioned` của Telegram) |
 | T5 | Khớp T1–T4 ⇒ `CHAT` (luật `F2`). `bug`, `feedback`, lệnh `/task` và tin có tag bot vẫn đi bảng `decision` |
 

@@ -184,7 +184,7 @@ sequenceDiagram
 | 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao; `F5` tin đùa (có dấu cười) giữa lúc nhóm đang cười; `F6` tin Reply vào một tin đã quyết `CHAT` mà không có từ báo lỗi. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words`, `banter_only` + `banter_signals`, `reply_chat` |
 | 3 | Chia chủ đề + trích dữ kiện kèm `source_ids` (không kết luận). Nhóm đang đùa: gói tin có thêm `group_mood`, `laugh`, `min_ago` và 2 ví dụ đối chiếu | Model | `facts.md` · `fields`, `group_mood`, 9 ví dụ cố định |
 | 4 | Tính trường CÓ (chuẩn hóa N1–N6 bỏ chữ đệm cuối; bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `normalize`, `generic_values`, `readiness.md` |
-| 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `intent`/`work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |
+| 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |
 | 6 | Bảng `decision` R1–R13 ⇒ `READY` / `NEED_INFO` / `MEDIA_ONLY` / `CHAT` / `HOLD` / `APPEND` | Code | `readiness.md` · `decision` |
 | 7 | `READY`: chọn template, tạo issue một lần, đọc lại; `NEED_INFO`: hỏi trường thiếu | Code | `templates/`, `questions.md` |
 | 8 | Báo vào group xử lý (link ticket hoặc câu hỏi) | Code | `channels.md`, `group-replies.md` |

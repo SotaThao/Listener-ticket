@@ -29,7 +29,7 @@ _MENTION = re.compile(r"@\w+")
 _INVISIBLE = re.compile("[​-‍⁠﻿]")
 _NUMBER = re.compile(r"#?[0-9]+")
 TEAM_RULE = "F2"
-TEAM_SHA256 = "fa5f17ba389bf8b55f636a8b77889de1a0325284933585034d40afad59458f5a"
+TEAM_SHA256 = "15bddfdba8c70afd54c3efe89b05e42eadb37087ce86d09e6d6b0d950061f1c4"
 # readiness.md · team_request T3: a Telegram @username (letter first, 5–32 of letter/digit/_),
 # not glued after a letter, digit, `@` or `.` (e-mail addresses are not mentions). Code spans and
 # any space-free run containing `/` (links such as tiktok.com/@shop, packages such as @org/pkg) go first.
@@ -55,7 +55,7 @@ BANTER_MIN_MESSAGES = 2
 BANTER_MIN_SENDERS = 2
 BANTER_KINDS = frozenset({"emoji", "vấn đề"})
 REPLY_CHAT_RULE = "F6"
-REPLY_CHAT_SHA256 = "62a5b48b5ce7d273be41c5201369a5966da25cb036121adaffb12162f40f95bd"
+REPLY_CHAT_SHA256 = "711bc6234a3f2146588f0b0950a5c78cba5138c2b7a2cdecf5083080a0628073"
 IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
@@ -501,12 +501,21 @@ class RulesSnapshot:
         value = _MENTION.sub(' ', unicodedata.normalize('NFC', _INVISIBLE.sub('', text))).casefold()
         return not any(w in self.banter_problem for w in re.sub(r'[^\w]+|_', ' ', value).split())
 
+    def reply_target_settled(self, decision, reason, target_sender, sender) -> bool:
+        """readiness.md · reply_chat K2: (a) the target was settled CHAT, or (b) the bot gave up on it and a different,
+        known person replies. Anything else (no ticket yet, ticket made, waiting for more info) is not settled."""
+        if decision == 'chat': return True
+        return (decision == 'pending_review' and reason == 'rules_hold_escalated'
+                and type(target_sender) is int and type(sender) is int and target_sender != sender)
+
     def _reply_chat_case(self, text, target) -> bool:
         from datetime import datetime, timezone
         from .models import IncomingMessage
         now = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
         message = IncomingMessage(1, 8, now, 'Người gửi', text, sender_id=99, reply_to_id=None if target == 'none' else 7)
-        return self.reply_chat_match(message, target == 'CHAT')
+        decision, reason, same = {'CHAT': ('chat', None, False), 'ticket': ('issue', None, False), 'none': (None, None, False),
+                                  'giveup': ('pending_review', 'rules_hold_escalated', False), 'giveup-self': ('pending_review', 'rules_hold_escalated', True)}[target]
+        return self.reply_chat_match(message, self.reply_target_settled(decision, reason, 99 if same else 55, 99))
 
     def _split_case(self, group) -> str:
         from datetime import datetime, timezone
@@ -610,9 +619,10 @@ class RulesSnapshot:
         code['intent'] = intent
         # readiness.md · team_request T1–T5 (Owner 2026-11-06 "Có, là CHAT"): a task handed to or asked
         # of a teammate is team conversation, not a ticket. bug/feedback and explicit commands are unaffected.
-        # T3: EVERY message the model cited for intent or work must carry the tag, so a teammate's tag in
-        # one message of a grouped topic never silences a requester's untagged message.
-        cited = set(intent_ids) | (set(parsed['work'].source_ids) if 'work' in parsed else set())
+        # T3 (Owner 2026-11-10 "Làm 1 và 2", live #125): EVERY message the model cited for `work` (for `intent` when
+        # there is no work) must carry the tag. A follow-up the model also cited for intent no longer lifts the
+        # tag; a requester's untagged message that carries the work still keeps the ticket.
+        cited = set(parsed['work'].source_ids) if 'work' in parsed else set(intent_ids)
         if (facts.command == '∅' and facts.reply_target == 'none' and facts.extraction_ok == 'true'
                 and intent == 'task' and cited and cited <= facts.team_mention_ids):
             return Decision('CHAT', intent, intent_rule, TEAM_RULE, MappingProxyType({k:parsed[k] for k in present}), (), (), self.fingerprint)
@@ -720,7 +730,7 @@ class RulesSnapshot:
         outcomes = set()
         for row in self.tables['examples']['reply_chat_cases']:
             target, expected = row.one('Reply vào'), row.one('Kết quả')
-            if target not in {'CHAT', 'ticket', 'none'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
+            if target not in {'CHAT', 'ticket', 'none', 'giveup', 'giveup-self'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
             if self._reply_chat_case(row.cells['Tin'], target) != (expected == 'CHAT'): row.fail('reply_chat self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['reply_chat_cases'][0].fail('reply_chat cases need both outcomes')

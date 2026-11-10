@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 11 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 12 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -138,7 +138,7 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `banter_only`)
 
 ## Bảng: reply_chat_cases
 
-Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào đã quyết `CHAT`; `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). Bảng này **không** gửi cho model.
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào đã quyết `CHAT`; `giveup` = đã bỏ cuộc không tạo ticket và do người khác gửi; `giveup-self` = như vậy nhưng do chính người gửi tin đang xét; `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). Bảng này **không** gửi cho model.
 
 | # | Tin | Reply vào | Kết quả |
 |---|---|---|---|
@@ -149,6 +149,8 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`).
 | RC5 | vẫn treo màn login nè anh | `CHAT` | `không` |
 | RC6 | mất tiền rồi anh | `CHAT` | `không` |
 | RC7 | /task cập nhật màn báo cáo | `CHAT` | `không` |
+| RC8 | rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =)) | `giveup` | `CHAT` |
+| RC9 | rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =)) | `giveup-self` | `không` |
 
 ## Bảng: image_split_cases
 
@@ -181,6 +183,7 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `team_request`
 | TC10 | thêm nút xuất Excel ở báo cáo | `không` | `task` | R10 |
 | TC11 | cập nhật link https://www.tiktok.com/@shopofficial ở footer trang chủ | `không` | `task` | R10 |
 | TC12 | nâng @angular/core lên 17 và sửa `@Transactional` ở PaymentService | `không` | `task` | R10 |
+| TC13 | rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =)) | `không` | `task` | F2 |
 
 ## Bảng: normalize_cases
 

@@ -1543,7 +1543,7 @@ class RulesPrefilterTests(RulesBootstrapTests):
         self.assertFalse(snapshot.prefilter_text('anh Quân review giúp em https://github.com/org/repo/pull/12'))  # named teammate: residual, model decides
         self.assertFalse(snapshot.prefilter_text(None))
 
-    def run_live(self, text, *, extensions, facts=None, history=(), settled_chat=(), **extra):
+    def run_live(self, text, *, extensions, facts=None, history=(), settled_chat=(), gave_up=(), **extra):
         from tg_triage.decision_rules import RulesSnapshot
         from pathlib import Path
         root=Path(__file__).resolve().parents[1]
@@ -1562,6 +1562,9 @@ class RulesPrefilterTests(RulesBootstrapTests):
             if earlier.message_id in settled_chat:
                 from tg_triage.models import Decision as Settled
                 store.finish(earlier, Settled('chat', 'rule', reason='F2'))
+            if earlier.message_id in gave_up:
+                from tg_triage.models import Decision as GaveUp
+                store.finish(earlier, GaveUp('pending_review', 'rule', case_key='batch:%s:%s' % (earlier.chat_id, earlier.message_id), reason='rules_hold_escalated'))
         settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
                          telegram=replace(config().telegram,ops_chat_id=-1009876543210))
         provider,github,notices=Provider(),GitHub(),[]
@@ -1683,6 +1686,23 @@ class RulesTeamRequestTests(RulesBootstrapTests):
                 calls,github,_,rows=self.batch(sources,self.task([41,42],intent_ids,[41]))
                 self.assertEqual(1,len(github))
                 self.assertEqual({('issue','R10')},rows)
+
+    def test_follow_up_cited_for_intent_does_not_lift_the_tag_from_the_work_message(self):
+        # Live #125: 6523 "... @Sellisloss =))" carries the work, 6524 "review xong mới đc đi ngủ" has no tag.
+        sources = [message(41, text='rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =))', **self.PLAIN),
+                   message(42, text='review xong mới đc đi ngủ', **self.PLAIN)]
+        for intent_ids in ([41], [41, 42], [42]):
+            with self.subTest(intent_ids=intent_ids):
+                calls, github, notices, rows = self.batch(sources, self.task([41, 42], intent_ids, [41]))
+                self.assertEqual((1, [], []), (calls, github, notices))
+                self.assertEqual({('chat', 'F2')}, rows)
+
+    def test_untagged_message_carrying_the_work_keeps_the_ticket_even_if_the_tag_is_cited_for_intent(self):
+        sources = [message(41, text='báo cáo doanh thu cần thêm cột phí giao dịch', **self.PLAIN),
+                   message(42, text='@devmember02 em nhận cái này nha', **self.PLAIN)]
+        calls, github, _, rows = self.batch(sources, self.task([41, 42], [42], [41]))
+        self.assertEqual(1, len(github))
+        self.assertEqual({('issue', 'R10')}, rows)
 
     def test_forwarded_tag_is_the_requester_speaking_and_keeps_the_ticket(self):
         # Review B2: a forwarded customer message that tags a sales contact is not internal assignment.
@@ -2196,3 +2216,35 @@ class RulesReplyChatAndImageSplitTests(RulesBootstrapTests):
         self.assertEqual((((41,), {}), ((42,), {})), _split_foreign_images((((41, 42), {}),), [one, two]))
         keep = (((41, 42), {'task': {'title': 'x'}}),)
         self.assertEqual(keep, _split_foreign_images(keep, [one, message(42, text='nói', sender_id=202)]))
+
+
+class RulesReplyGaveUpTests(RulesBootstrapTests):
+    """Owner 2026-11-10 (live #125): a reply to a message the bot gave up on, from another person, is chat."""
+    TEXT = 'rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss'
+    history = RulesReplyChatAndImageSplitTests.history
+
+    def live_gave_up(self, text, *, sender, **extra):
+        extra.setdefault('mentions_listener', False)
+        extra.setdefault('reply_to_id', 10)
+        return RulesPrefilterTests.run_live(self, text, extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
+                                            history=self.history(), gave_up=(10,), sender_id=sender, **extra)
+
+    def test_reply_by_another_person_to_a_given_up_message_is_chat_f6(self):
+        result, provider, github, notices, row = self.live_gave_up(self.TEXT, sender=202)
+        self.assertEqual(('chat', 'F6'), (result.decision, result.reason))
+        self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
+
+    def test_reply_by_the_same_person_or_with_a_problem_word_still_reaches_the_model(self):
+        for text, sender in ((self.TEXT, 201), ('file này treo hoài anh', 202)):
+            with self.subTest(text=text, sender=sender):
+                _, provider, _, _, _ = self.live_gave_up(text, sender=sender)
+                self.assertEqual(1, provider.calls)
+
+    def test_reply_to_a_message_still_waiting_for_more_information_is_not_settled(self):
+        snapshot = self.snapshot()
+        self.assertTrue(snapshot.reply_target_settled('chat', 'F2', 1, 2))
+        self.assertTrue(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', 1, 2))
+        self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', 1, 1))
+        self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', None, 2))
+        self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_extract_pending', 1, 2))
+        self.assertFalse(snapshot.reply_target_settled('issue', None, 1, 2))
