@@ -88,7 +88,8 @@ def code_facts(sources, *, seen_image_ids=frozenset(), extraction_ok=True, reply
     mentions = frozenset(m.message_id for m in sources if not m.is_forward and m.text.strip() and has_team_mention(m.text))
     if not team or any(m.mentions_listener for m in sources): mentions = frozenset()
     return CodeFacts(command,payload,'có' if has_text else 'không','true' if extraction_ok else 'false',
-                     reply_target,ids,images,frozenset(seen_image_ids),text_ids,documents,mentions)
+                     reply_target,ids,images,frozenset(seen_image_ids),text_ids,documents,mentions,
+                     sender_ids={m.message_id: m.sender_id for m in sources})
 
 
 def _banter_history(pipeline, sources):

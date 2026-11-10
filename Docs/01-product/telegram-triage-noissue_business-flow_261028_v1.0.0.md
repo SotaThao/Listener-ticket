@@ -181,7 +181,7 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- |
 | 0 | Nạp + kiểm quy tắc, template, prompt; tính fingerprint (sai ⇒ không khởi động) | Code | `rules/*.md`, `templates/`, `prompts/` |
 | 1 | Gom tin theo nhịp hội thoại (30s yên lặng, tối đa 60s) | Code | config |
-| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao; `F5` tin đùa (có dấu cười) giữa lúc nhóm đang cười; `F6` tin Reply vào một tin đã quyết `CHAT` mà không có từ báo lỗi. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words`, `banter_only` + `banter_signals`, `reply_chat` |
+| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao; `F5` tin đùa (có dấu cười) giữa lúc nhóm đang cười; `F6` tin Reply, do người khác gửi, vào một tin đã quyết `CHAT` bằng F2/F4/F5 mà không có từ báo lỗi. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words`, `banter_only` + `banter_signals`, `reply_chat` |
 | 3 | Chia chủ đề + trích dữ kiện kèm `source_ids` (không kết luận). Nhóm đang đùa: gói tin có thêm `group_mood`, `laugh`, `min_ago` và 2 ví dụ đối chiếu | Model | `facts.md` · `fields`, `group_mood`, 9 ví dụ cố định |
 | 4 | Tính trường CÓ (chuẩn hóa N1–N6 bỏ chữ đệm cuối; bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `normalize`, `generic_values`, `readiness.md` |
 | 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |

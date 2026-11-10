@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -29,7 +29,7 @@ _MENTION = re.compile(r"@\w+")
 _INVISIBLE = re.compile("[​-‍⁠﻿]")
 _NUMBER = re.compile(r"#?[0-9]+")
 TEAM_RULE = "F2"
-TEAM_SHA256 = "15bddfdba8c70afd54c3efe89b05e42eadb37087ce86d09e6d6b0d950061f1c4"
+TEAM_SHA256 = "be1a5c528c4e9f3fc0c4c076933d0eca989dd5441b750881c16823b29a96097e"
 # readiness.md · team_request T3: a Telegram @username (letter first, 5–32 of letter/digit/_),
 # not glued after a letter, digit, `@` or `.` (e-mail addresses are not mentions). Code spans and
 # any space-free run containing `/` (links such as tiktok.com/@shop, packages such as @org/pkg) go first.
@@ -55,7 +55,9 @@ BANTER_MIN_MESSAGES = 2
 BANTER_MIN_SENDERS = 2
 BANTER_KINDS = frozenset({"emoji", "vấn đề"})
 REPLY_CHAT_RULE = "F6"
-REPLY_CHAT_SHA256 = "711bc6234a3f2146588f0b0950a5c78cba5138c2b7a2cdecf5083080a0628073"
+# readiness.md · reply_chat K2(a): only these rules settle a message as team talk, small talk or a joke.
+REPLY_CHAT_TARGET_RULES = frozenset({"F2", "F4", "F5"})
+REPLY_CHAT_SHA256 = "7314a311e5ece362df1cdd3bf6ce196b4e5f11a1c71e0b55a11fb7c1c60fd4b6"
 IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
@@ -178,6 +180,8 @@ class CodeFacts:
     # readiness.md · team_request T3+T4: own (non-forwarded) messages with a teammate @username;
     # empty when any source tags the bot or the topic is a pending-answer merge.
     team_mention_ids: frozenset[int] = frozenset()
+    # readiness.md · team_request T3: sender of every message of the topic, to recognise a same-person follow-up.
+    sender_ids: Mapping[int, object] = field(default_factory=dict)
 
 
 def has_team_mention(text) -> bool:
@@ -504,16 +508,18 @@ class RulesSnapshot:
     def reply_target_settled(self, decision, reason, target_sender, sender) -> bool:
         """readiness.md · reply_chat K2: (a) the target was settled CHAT, or (b) the bot gave up on it and a different,
         known person replies. Anything else (no ticket yet, ticket made, waiting for more info) is not settled."""
-        if decision == 'chat': return True
-        return (decision == 'pending_review' and reason == 'rules_hold_escalated'
-                and type(target_sender) is int and type(sender) is int and target_sender != sender)
+        # N1: always a different, known person. K2(a) only for F2/F4/F5: read-only ANALYZE/STATUS, dry-run, system rows, and
+        # F1/F3/R7/R8 (review requests, links, questions) are also stored as chat but a reply to them may be a real request.
+        if not (type(target_sender) is int and type(sender) is int and target_sender != sender): return False
+        if decision == 'chat': return reason in REPLY_CHAT_TARGET_RULES
+        return decision == 'pending_review' and reason == 'rules_hold_escalated'
 
     def _reply_chat_case(self, text, target) -> bool:
         from datetime import datetime, timezone
         from .models import IncomingMessage
         now = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
         message = IncomingMessage(1, 8, now, 'Người gửi', text, sender_id=99, reply_to_id=None if target == 'none' else 7)
-        decision, reason, same = {'CHAT': ('chat', None, False), 'ticket': ('issue', None, False), 'none': (None, None, False),
+        decision, reason, same = {'CHAT': ('chat', 'F2', False), 'ticket': ('issue', None, False), 'CHAT-self': ('chat', 'F2', True), 'CHAT-F1': ('chat', 'F1', False), 'none': (None, None, False),
                                   'giveup': ('pending_review', 'rules_hold_escalated', False), 'giveup-self': ('pending_review', 'rules_hold_escalated', True)}[target]
         return self.reply_chat_match(message, self.reply_target_settled(decision, reason, 99 if same else 55, 99))
 
@@ -622,7 +628,14 @@ class RulesSnapshot:
         # T3 (Owner 2026-11-10 "Làm 1 và 2", live #125): EVERY message the model cited for `work` (for `intent` when
         # there is no work) must carry the tag. A follow-up the model also cited for intent no longer lifts the
         # tag; a requester's untagged message that carries the work still keeps the ticket.
-        cited = set(parsed['work'].source_ids) if 'work' in parsed else set(intent_ids)
+        work_ids = set(parsed['work'].source_ids) if 'work' in parsed else set()
+        cited = work_ids | set(intent_ids)
+        if work_ids and work_ids <= facts.team_mention_ids:
+            # Review N4: an untagged intent-cited message is waived only when the same (known) person wrote the tagged work,
+            # so a requester's untagged message never rides on someone else's tagged restatement.
+            work_senders = {facts.sender_ids.get(i) for i in work_ids}
+            extra = set(intent_ids) - facts.team_mention_ids
+            if all(type(facts.sender_ids.get(i)) is int and facts.sender_ids.get(i) in work_senders for i in extra): cited = work_ids
         if (facts.command == '∅' and facts.reply_target == 'none' and facts.extraction_ok == 'true'
                 and intent == 'task' and cited and cited <= facts.team_mention_ids):
             return Decision('CHAT', intent, intent_rule, TEAM_RULE, MappingProxyType({k:parsed[k] for k in present}), (), (), self.fingerprint)
@@ -730,7 +743,7 @@ class RulesSnapshot:
         outcomes = set()
         for row in self.tables['examples']['reply_chat_cases']:
             target, expected = row.one('Reply vào'), row.one('Kết quả')
-            if target not in {'CHAT', 'ticket', 'none', 'giveup', 'giveup-self'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
+            if target not in {'CHAT', 'CHAT-self', 'CHAT-F1', 'ticket', 'none', 'giveup', 'giveup-self'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
             if self._reply_chat_case(row.cells['Tin'], target) != (expected == 'CHAT'): row.fail('reply_chat self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['reply_chat_cases'][0].fail('reply_chat cases need both outcomes')

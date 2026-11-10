@@ -1689,8 +1689,8 @@ class RulesTeamRequestTests(RulesBootstrapTests):
 
     def test_follow_up_cited_for_intent_does_not_lift_the_tag_from_the_work_message(self):
         # Live #125: 6523 "... @Sellisloss =))" carries the work, 6524 "review xong mới đc đi ngủ" has no tag.
-        sources = [message(41, text='rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =))', **self.PLAIN),
-                   message(42, text='review xong mới đc đi ngủ', **self.PLAIN)]
+        sources = [message(41, text='rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =))', sender_id=10, **self.PLAIN),
+                   message(42, text='review xong mới đc đi ngủ', sender_id=10, **self.PLAIN)]
         for intent_ids in ([41], [41, 42], [42]):
             with self.subTest(intent_ids=intent_ids):
                 calls, github, notices, rows = self.batch(sources, self.task([41, 42], intent_ids, [41]))
@@ -1703,6 +1703,17 @@ class RulesTeamRequestTests(RulesBootstrapTests):
         calls, github, _, rows = self.batch(sources, self.task([41, 42], [42], [41]))
         self.assertEqual(1, len(github))
         self.assertEqual({('issue', 'R10')}, rows)
+
+    def test_requesters_untagged_intent_message_from_another_person_keeps_the_ticket(self):
+        # Review N4: the PM's tagged restatement of the work never silences a different person's untagged request.
+        sources = [message(41, text='báo cáo doanh thu cần thêm cột phí giao dịch', sender_id=1, **self.PLAIN),
+                   message(42, text='@devmember02 em làm giúp anh thêm cột phí giao dịch nha', sender_id=2, **self.PLAIN)]
+        for sender_of_41 in (1, None):
+            with self.subTest(sender_of_41=sender_of_41):
+                sources[0] = message(41, text=sources[0].text, sender_id=sender_of_41, **self.PLAIN)
+                calls, github, _, rows = self.batch(sources, self.task([41, 42], [41], [42]))
+                self.assertEqual(1, len(github))
+                self.assertEqual({('issue', 'R10')}, rows)
 
     def test_forwarded_tag_is_the_requester_speaking_and_keeps_the_ticket(self):
         # Review B2: a forwarded customer message that tags a sales contact is not internal assignment.
@@ -2243,6 +2254,14 @@ class RulesReplyGaveUpTests(RulesBootstrapTests):
     def test_reply_to_a_message_still_waiting_for_more_information_is_not_settled(self):
         snapshot = self.snapshot()
         self.assertTrue(snapshot.reply_target_settled('chat', 'F2', 1, 2))
+        self.assertFalse(snapshot.reply_target_settled('chat', 'F2', 1, 1))   # N1: one's own message
+        self.assertFalse(snapshot.reply_target_settled('chat', 'F2', None, 2))
+        self.assertTrue(snapshot.reply_target_settled('chat', 'F4', 1, 2))
+        self.assertTrue(snapshot.reply_target_settled('chat', 'F5', 1, 2))
+        for rule in ('F1', 'F3', 'F6', 'R1', 'R5', 'R7', 'R8'):   # B2: reply to a review request, link, question ... may be a real request
+            self.assertFalse(snapshot.reply_target_settled('chat', rule, 1, 2), rule)
+        for reason in ('semantic_analyze', 'semantic_status', 'dry_run_append', 'unbound_ops_reply', 'rules_reply_processed', None, ''):
+            self.assertFalse(snapshot.reply_target_settled('chat', reason, 1, 2), reason)
         self.assertTrue(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', 1, 2))
         self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', 1, 1))
         self.assertFalse(snapshot.reply_target_settled('pending_review', 'rules_hold_escalated', None, 2))
