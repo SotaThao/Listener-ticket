@@ -13,10 +13,10 @@ FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"group_mood": "Khóa|Giá trị", "fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
-    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
+    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "reply_chat": "#|Bước", "image_split": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
 }
 PREFILTER_RULE = "F1"
 PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
@@ -54,6 +54,9 @@ BANTER_WINDOW_SECONDS = 15 * 60
 BANTER_MIN_MESSAGES = 2
 BANTER_MIN_SENDERS = 2
 BANTER_KINDS = frozenset({"emoji", "vấn đề"})
+REPLY_CHAT_RULE = "F6"
+REPLY_CHAT_SHA256 = "62a5b48b5ce7d273be41c5201369a5966da25cb036121adaffb12162f40f95bd"
+IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
 TICKS = re.compile(r"`([^`]+)`")
@@ -192,6 +195,21 @@ def is_link_only(text) -> bool:
     if not _LINK.search(value): return False
     # Punctuation, symbols and emoji are not words; any letter or digit left is the sender speaking.
     return not re.search(r'[^\W_]', _LINK.sub(' ', value))
+
+
+def foreign_bare_images(members) -> list:
+    """readiness.md · image_split S1+S2: bare images (no text, no document) that share a group with other
+    messages but have no same-sender message and no Reply link in that group."""
+    members = list(members)
+    result = []
+    for m in members:
+        if not (m.has_image and not m.has_document and not _INVISIBLE.sub('', m.text or '').strip()): continue
+        others = [o for o in members if o is not m]
+        if not others: continue
+        same = type(m.sender_id) is int and any(o.sender_id == m.sender_id for o in others)
+        linked = any(o.reply_to_id == m.message_id or m.reply_to_id == o.message_id for o in others)
+        if not same and not linked: result.append(m)
+    return result
 
 
 @dataclass(frozen=True)
@@ -392,6 +410,12 @@ class RulesSnapshot:
         if not all(signals.values()): t['readiness']['banter_signals'][0].fail('banter_signals needs emoji and vấn đề signs')
         self.banter_emoji = tuple(signals['emoji'])
         self.banter_problem = frozenset(signals['vấn đề'])
+        for table, codes, digest, label in (('reply_chat', ['K1', 'K2', 'K3', 'K4'], REPLY_CHAT_SHA256, 'reply_chat'),
+                                            ('image_split', ['S1', 'S2', 'S3', 'S4'], IMAGE_SPLIT_SHA256, 'image_split')):
+            steps = t['readiness'][table]
+            if [r.cells['#'] for r in steps] != codes: steps[0].fail('unsupported %s sequence' % label)
+            encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in steps).encode('utf8')
+            if hashlib.sha256(encoded).hexdigest() != digest: steps[0].fail('unsupported %s definition' % label)
         words = {'việc': set(), 'đệm': set()}
         for r in t['readiness']['prefilter_words']:
             kind, word = r.one('Loại'), r.one('Từ')
@@ -468,6 +492,37 @@ class RulesSnapshot:
         message = IncomingMessage(1, len(entries) + 1, now, 'Người gửi', text, sender_id=99)
         return self.banter_text(text) and self.banter_context(message, context)
 
+    def reply_chat_match(self, message, target_is_chat) -> bool:
+        """readiness.md · reply_chat K1+K3 (K2 is `target_is_chat`, known only to the caller's store)."""
+        from . import rules
+        text = message.text or ''
+        if not target_is_chat or message.reply_to_id is None or message.is_forward or message.has_attachment or message.mentions_listener: return False
+        if rules.COMMAND.match(text) or not _INVISIBLE.sub('', text).strip(): return False
+        value = _MENTION.sub(' ', unicodedata.normalize('NFC', _INVISIBLE.sub('', text))).casefold()
+        return not any(w in self.banter_problem for w in re.sub(r'[^\w]+|_', ' ', value).split())
+
+    def _reply_chat_case(self, text, target) -> bool:
+        from datetime import datetime, timezone
+        from .models import IncomingMessage
+        now = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
+        message = IncomingMessage(1, 8, now, 'Người gửi', text, sender_id=99, reply_to_id=None if target == 'none' else 7)
+        return self.reply_chat_match(message, target == 'CHAT')
+
+    def _split_case(self, group) -> str:
+        from datetime import datetime, timezone
+        from .models import IncomingMessage
+        now, names, members = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc), {}, []
+        for n, entry in enumerate(group.split(' ; '), 1):
+            name, sep, said = entry.strip().partition(': ')
+            if not sep or not name: raise ValueError('invalid group entry')
+            reply = None
+            match = re.search(r'\s*↩(\d+)$', said)
+            if match: reply, said = 100 + int(match[1]), said[:match.start()]
+            image = said.startswith('[ảnh]')
+            if image: said = said[len('[ảnh]'):].strip()
+            members.append(IncomingMessage(1, 100 + n, now, name, said, sender_id=names.setdefault(name, len(names) + 1), reply_to_id=reply, has_image=image))
+        return ','.join(str(m.message_id - 100) for m in foreign_bare_images(members)) or 'không'
+
     def banter_context(self, message, context) -> bool:
         """readiness.md · banter_only B3+B4: the group is already joking before `message`."""
         count, senders = self.banter_stats(message, context)
@@ -486,7 +541,7 @@ class RulesSnapshot:
         return len(joking), len({m.sender_id for m in joking})
 
     def prefilter_decision(self, rule=PREFILTER_RULE) -> Decision:
-        if rule not in (PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE): raise ValueError('unknown prefilter rule')
+        if rule not in (PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE): raise ValueError('unknown prefilter rule')
         return Decision('CHAT', 'chat', 'prefilter', rule, MappingProxyType({}), (), (), self.fingerprint)
 
     def model_context(self):
@@ -662,6 +717,21 @@ class RulesSnapshot:
             if matched != (expected == 'CHAT'): row.fail('banter_only self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['banter_cases'][0].fail('banter cases need both outcomes')
+        outcomes = set()
+        for row in self.tables['examples']['reply_chat_cases']:
+            target, expected = row.one('Reply vào'), row.one('Kết quả')
+            if target not in {'CHAT', 'ticket', 'none'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
+            if self._reply_chat_case(row.cells['Tin'], target) != (expected == 'CHAT'): row.fail('reply_chat self-check failed')
+            outcomes.add(expected)
+        if outcomes != {'CHAT', 'không'}: self.tables['examples']['reply_chat_cases'][0].fail('reply_chat cases need both outcomes')
+        outcomes = set()
+        for row in self.tables['examples']['image_split_cases']:
+            expected = row.one('Kết quả')
+            try: got = self._split_case(row.cells['Nhóm'])
+            except (ValueError, TypeError) as exc: row.fail(f'image_split self-check: {exc}')
+            if got != expected: row.fail('image_split self-check failed')
+            outcomes.add(expected == 'không')
+        if outcomes != {True, False}: self.tables['examples']['image_split_cases'][0].fail('image_split cases need both outcomes')
         for row in self.tables['examples']['normalize_cases']:
             field, value, expected = row.one('Trường'), row.one('Giá trị'), row.one('Chung chung')
             if field not in self.text_fields or expected not in {'có','không'} or (normalize(value) in self.generic[field]) != (expected == 'có'): row.fail('normalization self-check failed')

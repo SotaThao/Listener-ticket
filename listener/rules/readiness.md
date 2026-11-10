@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 8 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 9 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
@@ -10,6 +10,8 @@ Owner 2026-11-06: “Duyệt F3” — tin chỉ có link, không kèm chữ, l�
 Owner 2026-11-06: “Duyệt cả ba” — tin chỉ có từ xã giao (`chat_words`) là CHAT (luật `F4`); kèm bước chuẩn hóa N6 và cụm `work` chung chung trong `facts.md`.
 
 Owner 2026-11-09 (live #118, #119 trong group DEV - NEXORA): “cập nhật thêm context đùa giỡn dựa trên bối cảnh chung trên group để tránh log ticket sai” — tin đùa giữa lúc cả nhóm đang cười không thành ticket: luật `F5` (cục bộ, tin tự có dấu cười) và hướng dẫn model đọc `read_only_context` trong `facts.md`. Owner 2026-11-09: “Duyệt F5” — duyệt luật `F5` với ngưỡng 2 tin / 2 người / 15 phút / 8 tin và danh sách dấu hiện tại, kèm các đánh đổi ghi trong Business DOCS TG-09.
+
+Owner 2026-11-10 (live #121–#123): “Làm sửa 1 và 2” — một ảnh trần của người khác không bị model dán vào nhóm không liên quan (`image_split`), và tin Reply vào một tin đã quyết `CHAT` mà không có từ báo lỗi cũng là `CHAT` (luật `F6`, `reply_chat`).
 
 Input: dữ kiện code tính + các trường CÓ theo `facts.md`. Output: một mã trong `states.md`. **Model không thấy file này.**
 
@@ -231,6 +233,28 @@ Dấu hiệu cho `banter_only` (Owner 2026-11-09). Loại `emoji`: khớp nếu 
 | `vấn đề` | `500` |
 | `vấn đề` | `404` |
 | `vấn đề` | `đứng` |
+
+## Bảng: reply_chat
+
+Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` ngay với luật `F6`. Xét sau `chat_only` (F4), trước `banter_only` (F5). Lý do (live #121): tin 6508 "lát họp xong nói qua v3 này nha anh Mến" Reply vào tin 6506 đã là `CHAT` (F2) nhưng vẫn ra ticket vì bản thân nó không có `@tên`.
+
+| # | Bước |
+|---|---|
+| K1 | Tin Reply (có `reply_to_id`), không forward, không command, người gửi không đính kèm ảnh hay tài liệu, không tag bot, có chữ |
+| K2 | Tin được Reply vào đã lưu trong cùng group và bot đã quyết `CHAT` cho nó (không tính tin chưa quyết, tin đã tạo ticket, tin chờ duyệt hay không tìm thấy) |
+| K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
+| K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
+
+## Bảng: image_split
+
+Chỉnh phân nhóm sau model, không đổi bảng `decision`. Lý do (live #121): ảnh chụp lỗi timeout của Ngọc bị model dán vào tin trả lời về v3 của Mai Vo, hai tin không có Reply nối và khác người gửi.
+
+| # | Bước |
+|---|---|
+| S1 | Xét sau khi model chia nhóm, trước bảng `decision`. "Ảnh trần" là tin có ảnh, không có tài liệu và không có chữ nào (sau khi bỏ ký tự vô hình và khoảng trắng) |
+| S2 | Một ảnh trần X bị tách khỏi nhóm G thành một nhóm riêng khi G còn tin khác và X không có tin cùng người gửi trong G (người gửi không biết thì không tính là cùng) và không có Reply nối X với tin nào trong G (X Reply vào tin đó hoặc tin đó Reply vào X) |
+| S3 | Trường dữ kiện của nhóm G có `source_ids` chứa X bị bỏ (thành không CÓ); X bị bỏ khỏi `media_ids`. Nhóm riêng của X không có dữ kiện nên ra `MEDIA_ONLY` theo R3. Nhóm có `task` hay `lifecycle`, hoặc lô đang có phân tích chỉ đọc, thì không tách |
+| S4 | Ảnh trần có tin cùng người gửi trong nhóm, hoặc có Reply nối, giữ nguyên nhóm model chia: một người gửi ảnh rồi viết chữ ngay sau đó là chuyện thường. Không chia ra ngoài trường hợp S2 |
 
 ## Bảng: team_request
 

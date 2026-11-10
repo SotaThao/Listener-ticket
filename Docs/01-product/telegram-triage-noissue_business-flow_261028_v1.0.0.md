@@ -181,7 +181,7 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- |
 | 0 | Nạp + kiểm quy tắc, template, prompt; tính fingerprint (sai ⇒ không khởi động) | Code | `rules/*.md`, `templates/`, `prompts/` |
 | 1 | Gom tin theo nhịp hội thoại (30s yên lặng, tối đa 60s) | Code | config |
-| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao; `F5` tin đùa (có dấu cười) giữa lúc nhóm đang cười. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words`, `banter_only` + `banter_signals` |
+| 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao; `F5` tin đùa (có dấu cười) giữa lúc nhóm đang cười; `F6` tin Reply vào một tin đã quyết `CHAT` mà không có từ báo lỗi. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words`, `banter_only` + `banter_signals`, `reply_chat` |
 | 3 | Chia chủ đề + trích dữ kiện kèm `source_ids` (không kết luận). Nhóm đang đùa: gói tin có thêm `group_mood`, `laugh`, `min_ago` và 2 ví dụ đối chiếu | Model | `facts.md` · `fields`, `group_mood`, 9 ví dụ cố định |
 | 4 | Tính trường CÓ (chuẩn hóa N1–N6 bỏ chữ đệm cuối; bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `normalize`, `generic_values`, `readiness.md` |
 | 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `intent`/`work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |
@@ -236,6 +236,7 @@ sequenceDiagram
 | `F1` | Trước model | #95, #111: "anh review giúp em PR …/pull/1427" | `CHAT` |
 | `F3` | Trước model | 6435: chỉ gửi `https://www.onorca.dev/` | `CHAT` (ảnh xem trước của link không tính là ảnh người gửi) |
 | `F4` | Trước model | "ok anh", "dạ em cảm ơn ạ", "👍" | `CHAT` |
+| `F6` | Trước model | #121: 6508 "lát họp xong nói qua v3 này nha anh Mến" Reply vào 6506 đã là `CHAT` | `CHAT` |
 | `F5` | Trước model | #119: "để e mở tab ẩn danh login 10 acc test vào xem live 😁" sau nhiều tin 😂 😆 | `CHAT` (#118 không có dấu cười: model quyết) |
 | `F2` | Sau model | #112, #113: "@A qua phụ @B làm ticket…", "anh @A check giúp key staging" | `CHAT` |
 | cụm chung chung | Sau model | #115: "các anh có dùng link zoom không? báo giùm em nha" | `CHAT` (R8) hoặc `NEED_INFO` (R12) |

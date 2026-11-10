@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 10 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 11 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
@@ -135,6 +135,33 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `banter_only`)
 | BC10 | app bi loi roi a 😄 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
 | BC11 | xem live nè 😄 | Ngọc: prod sập rồi =)) ; LEO: lại lỗi 😂 | `không` |
 | BC12 | Màn Queue k in được bill 😅 | Ngọc: em thấu hiểu tâm lý người dùng mà 😆 ; LEO: 😂😂😂 ; Men: Thiếu tính năng fake mắt xem rồi ; Men: Kéo dòng họ vô xem live nè | `không` |
+
+## Bảng: reply_chat_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào đã quyết `CHAT`; `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). Bảng này **không** gửi cho model.
+
+| # | Tin | Reply vào | Kết quả |
+|---|---|---|---|
+| RC1 | lát họp xong nói qua v3 này nha anh Mến | `CHAT` | `CHAT` |
+| RC2 | lát họp xong nói qua v3 này nha anh Mến | `ticket` | `không` |
+| RC3 | lát họp xong nói qua v3 này nha anh Mến | `none` | `không` |
+| RC4 | ok anh để em xem | `CHAT` | `CHAT` |
+| RC5 | vẫn treo màn login nè anh | `CHAT` | `không` |
+| RC6 | mất tiền rồi anh | `CHAT` | `không` |
+| RC7 | /task cập nhật màn báo cáo | `CHAT` | `không` |
+
+## Bảng: image_split_cases
+
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `image_split`). `Nhóm` là các tin model đã gộp, `Tên: tin ; Tên: tin`, `[ảnh]` = ảnh trần, `↩k` = Reply vào tin thứ k; `Kết quả` là số thứ tự các tin bị tách ra (`không` nếu giữ nguyên). IS1 là dạng ẩn danh của nhóm 6507 + 6508 (ticket #121). Bảng này **không** gửi cho model.
+
+| # | Nhóm | Kết quả |
+|---|---|---|
+| IS1 | Ngọc: [ảnh] ; Mai: lát họp xong nói qua v3 này nha anh Mến | `1` |
+| IS2 | Ngọc: [ảnh] ; Ngọc: staging lỗi timeout nè | `không` |
+| IS3 | Ngọc: [ảnh] ; Mai: đây là ảnh lỗi login ↩1 | `không` |
+| IS4 | Ngọc: [ảnh] ; Mai: ảnh nè ; Ngọc: xem giúp em | `không` |
+| IS5 | Ngọc: [ảnh] ; Mai: [ảnh] | `1,2` |
+| IS6 | Ngọc: [ảnh] | `không` |
 
 ## Bảng: team_cases
 

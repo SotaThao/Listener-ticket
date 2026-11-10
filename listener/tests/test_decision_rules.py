@@ -102,6 +102,29 @@ class DecisionRulesTest(unittest.TestCase):
         snapshot = self.load()
         self.assertEqual(['chat', 'feedback'], [row['intent (model)'].strip('`') for row in snapshot.mood_examples])
 
+    def test_reply_chat_definition_is_hash_locked(self):
+        self.mutate('readiness', '| K2 | Tin được Reply vào đã lưu', '| K2 | Tin được Reply vào đã đọc')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported reply_chat definition'): self.load()
+
+    def test_image_split_definition_is_hash_locked(self):
+        self.mutate('readiness', '| S4 | Ảnh trần có tin cùng người gửi', '| S4 | Ảnh trần luôn bị tách, kể cả tin cùng người gửi')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported image_split definition'): self.load()
+
+    def test_reply_chat_cases_execute_on_load(self):
+        old = '| RC2 | lát họp xong nói qua v3 này nha anh Mến | `ticket` | `không` |'
+        self.mutate('examples', old, old.replace('`không`', '`CHAT`'))
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*reply_chat self-check failed'): self.load()
+
+    def test_image_split_cases_execute_on_load(self):
+        old = '| IS1 | Ngọc: [ảnh] ; Mai: lát họp xong nói qua v3 này nha anh Mến | `1` |'
+        self.mutate('examples', old, old.replace('`1`', '`không`'))
+        with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*image_split self-check failed'): self.load()
+
+    def test_reply_chat_uses_the_problem_words_table(self):
+        # Dropping "treo" makes RC5 ("vẫn treo màn login nè anh") match F6, which the self-check catches.
+        self.mutate('readiness', '| `vấn đề` | `treo` |\n', '')
+        with self.assertRaisesRegex(RulesError, 'reply_chat self-check failed'): self.load()
+
     def test_normalize_n6_is_hash_locked(self):
         self.mutate('facts', '`với` `ạ` `đi` `nè`', '`với` `ạ` `đi`')
         with self.assertRaisesRegex(RulesError, r'facts.md:\d+:.*unsupported algorithm definition'): self.load()

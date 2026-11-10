@@ -56,6 +56,8 @@ REQUIRED = {
         "chat_words": ["Nhóm", "Từ"],
         "banter_only": ["#", "Bước"],
         "banter_signals": ["Loại", "Dấu"],
+        "reply_chat": ["#", "Bước"],
+        "image_split": ["#", "Bước"],
         "intent_resolve": ["#", "command", "intent (model)", "cần CÓ", "intent dùng"],
         "decision": [
             "#", "command", "command_payload", "text", "media", "extraction_ok", "reply_target",
@@ -87,6 +89,8 @@ REQUIRED = {
         "link_cases": ["#", "Tin", "Kết quả"],
         "chat_cases": ["#", "Tin", "Kết quả"],
         "banter_cases": ["#", "Tin", "Bối cảnh", "Kết quả"],
+        "reply_chat_cases": ["#", "Tin", "Reply vào", "Kết quả"],
+        "image_split_cases": ["#", "Nhóm", "Kết quả"],
         "normalize_cases": ["#", "Trường", "Giá trị", "Chung chung"],
     },
     "roles": {

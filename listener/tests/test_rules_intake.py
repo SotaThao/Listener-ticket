@@ -1543,7 +1543,7 @@ class RulesPrefilterTests(RulesBootstrapTests):
         self.assertFalse(snapshot.prefilter_text('anh Quân review giúp em https://github.com/org/repo/pull/12'))  # named teammate: residual, model decides
         self.assertFalse(snapshot.prefilter_text(None))
 
-    def run_live(self, text, *, extensions, facts=None, history=(), **extra):
+    def run_live(self, text, *, extensions, facts=None, history=(), settled_chat=(), **extra):
         from tg_triage.decision_rules import RulesSnapshot
         from pathlib import Path
         root=Path(__file__).resolve().parents[1]
@@ -1557,7 +1557,11 @@ class RulesPrefilterTests(RulesBootstrapTests):
             def __init__(self): self.calls=[]
             def create_issue(self,issue): self.calls.append(issue); return len(self.calls),None
         store=Store(':memory:'); self.addCleanup(store.close)
-        for earlier in history: store.enqueue(earlier)
+        for earlier in history:
+            store.enqueue(earlier)
+            if earlier.message_id in settled_chat:
+                from tg_triage.models import Decision as Settled
+                store.finish(earlier, Settled('chat', 'rule', reason='F2'))
         settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,
                          telegram=replace(config().telegram,ops_chat_id=-1009876543210))
         provider,github,notices=Provider(),GitHub(),[]
@@ -2102,3 +2106,93 @@ class RulesGroupMoodPacketTests(RulesBootstrapTests):
             examples, context, mood = got
             if context < 4: self.assertEqual(0, examples, limit)     # context is only trimmed after every example is gone
             if not mood: self.assertEqual((0, 0), (examples, context), limit)   # the mood is the very last thing to go
+
+
+class RulesReplyChatAndImageSplitTests(RulesBootstrapTests):
+    """Owner 2026-11-10 (live #121-#123): "Làm sửa 1 và 2"."""
+    REPLY = 'lát họp xong nói qua v3 này nha anh Mến'
+
+    def history(self):
+        return [message(10, text='@vomaingoc community v3 html xong chưa em', sender_id=201, mentions_listener=False)]
+
+    def live(self, text, *, settled=True, **extra):
+        extra.setdefault('mentions_listener', False)
+        extra.setdefault('sender_id', 202)
+        extra.setdefault('reply_to_id', 10)
+        return RulesPrefilterTests.run_live(self, text, extensions=True, facts=RulesPrefilterTests.TASK_FACTS, history=self.history(),
+                                            settled_chat=(10,) if settled else (), **extra)
+
+    def test_reply_to_a_chat_message_is_chat_f6_without_model_ticket_or_notice(self):
+        result, provider, github, notices, row = self.live(self.REPLY)
+        self.assertEqual(('chat', 'F6'), (result.decision, result.reason))
+        self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
+        self.assertEqual(('CHAT', 'F6', 'prefilter'), tuple(row))
+
+    def test_reply_to_something_not_settled_as_chat_still_reaches_the_model(self):
+        _, provider, _, _, _ = self.live(self.REPLY, settled=False)
+        self.assertEqual(1, provider.calls)
+
+    def test_problem_word_command_bot_tag_and_attachment_still_reach_the_model(self):
+        for text, extra in (('vẫn lỗi login nè anh', {}), ('/task cập nhật màn báo cáo', {}), (self.REPLY, {'mentions_listener': True}),
+                            (self.REPLY, {'has_image': True}), (self.REPLY, {'is_forward': True})):
+            with self.subTest(text=text, extra=extra):
+                _, provider, _, _, _ = self.live(text, **extra)
+                self.assertEqual(1, provider.calls)
+
+    def test_reply_chat_never_applies_to_a_non_reply(self):
+        from tg_triage.rules_intake import _local_rule
+        snapshot = self.snapshot()
+        self.assertEqual('F6', _local_rule(snapshot, [message(42, text=self.REPLY, reply_to_id=10, mentions_listener=False)], (), frozenset({42})))
+        self.assertIsNone(_local_rule(snapshot, [message(42, text=self.REPLY, mentions_listener=False)], (), frozenset({42})))
+        self.assertIsNone(_local_rule(snapshot, [message(42, text=self.REPLY, reply_to_id=10, mentions_listener=False)]))
+
+    def facts_json(self):
+        return ('{"groups":[{"message_ids":[41,42],"facts":{"intent":{"value":"task","source_ids":[42]},'
+                '"object":{"value":"v3","source_ids":[42]},"work":{"value":"nói qua v3","source_ids":[42]},'
+                '"observed":{"value":"Connection timed out","source_ids":[41]}}}]}')
+
+    def test_ticket_121_shape_splits_the_foreign_image_and_settles_the_reply_as_chat(self):
+        from tg_triage.rules_intake import evaluate_batch
+        class Provider:
+            settings = SimpleNamespace(model='test'); think = False; supports_vision = False
+            def __init__(self, raw): self.raw = raw; self.calls = 0
+            def _ask(self, body, parse, attempts): self.calls += 1; return parse(self.raw)
+        image = message(41, text='', has_image=True, sender_id=201, mentions_listener=False)
+        reply = message(42, text=self.REPLY, reply_to_id=10, sender_id=202, mentions_listener=False)
+        provider = Provider(self.facts_json())
+        groups = evaluate_batch(self.snapshot(), provider, [image, reply], chat_replies=frozenset({42}))
+        self.assertEqual(1, provider.calls)
+        self.assertEqual({41: ('MEDIA_ONLY', 'R3'), 42: ('CHAT', 'F6')}, {m.message_id: (d.state, d.rule) for ms, d in groups for m in ms})
+        # Without fix 2 the reply group would still be a task ticket, but never one that carries the image evidence.
+        groups = evaluate_batch(self.snapshot(), Provider(self.facts_json()), [image, reply])
+        by_id = {m.message_id: d for ms, d in groups for m in ms}
+        self.assertEqual(('MEDIA_ONLY', 'R3'), (by_id[41].state, by_id[41].rule))
+        self.assertEqual(('READY', 'R10'), (by_id[42].state, by_id[42].rule))
+        self.assertNotIn('observed', by_id[42].present)
+
+    def test_same_sender_or_reply_link_keeps_the_group(self):
+        from tg_triage.rules_intake import _split_foreign_images
+        image = message(41, text='', has_image=True, sender_id=201)
+        facts = {'observed': {'value': 'timeout', 'source_ids': [41]}}
+        text_same = message(42, text='xem giúp em', sender_id=201)
+        text_other = message(42, text='ảnh lỗi login', sender_id=202, reply_to_id=41)
+        for companion in (text_same, text_other):
+            groups = _split_foreign_images((((41, 42), facts),), [image, companion])
+            self.assertEqual((((41, 42), facts),), groups)
+
+    def test_split_drops_only_facts_that_cite_the_image_and_keeps_the_rest(self):
+        from tg_triage.rules_intake import _split_foreign_images
+        image = message(41, text='', has_image=True, sender_id=201)
+        other = message(42, text='nói qua v3', sender_id=202)
+        facts = {'intent': {'value': 'task', 'source_ids': [42]}, 'observed': {'value': 'timeout', 'source_ids': [41]},
+                 'media_ids': {'value': [41], 'source_ids': [41]}}
+        groups = _split_foreign_images((((41, 42), facts),), [image, other])
+        self.assertEqual((((42,), {'intent': facts['intent']}), ((41,), {})), groups)
+
+    def test_two_foreign_bare_images_both_split_and_a_task_fact_is_never_split(self):
+        from tg_triage.rules_intake import _split_foreign_images
+        one = message(41, text='', has_image=True, sender_id=201)
+        two = message(42, text='', has_image=True, sender_id=202)
+        self.assertEqual((((41,), {}), ((42,), {})), _split_foreign_images((((41, 42), {}),), [one, two]))
+        keep = (((41, 42), {'task': {'title': 'x'}}),)
+        self.assertEqual(keep, _split_foreign_images(keep, [one, message(42, text='nói', sender_id=202)]))

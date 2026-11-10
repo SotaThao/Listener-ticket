@@ -101,6 +101,43 @@ def _banter_history(pipeline, sources):
         return ()
 
 
+def _chat_reply_ids(pipeline, sources):
+    """readiness.md · reply_chat K2: ids of sources that Reply to a stored message the bot already settled as CHAT."""
+    found = set()
+    for source in sources:
+        if source.reply_to_id is None: continue
+        try: row = pipeline.store.get(source.chat_id, source.reply_to_id)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning('reply_chat_lookup_failed', exc_info=True)
+            continue
+        if row is not None and row['decision'] == 'chat': found.add(source.message_id)
+    return frozenset(found)
+
+
+def _split_foreign_images(groups, sources):
+    """readiness.md · image_split S1-S4: a bare image never rides along with another person's unrelated message."""
+    from .decision_rules import foreign_bare_images
+    by_id = {m.message_id: m for m in sources}
+    result = []
+    for ids, facts in groups:
+        members = [by_id[i] for i in ids]
+        moved = foreign_bare_images(members) if not ({'task', 'lifecycle'} & set(facts)) else []
+        if not moved:
+            result.append((ids, facts)); continue
+        moved_ids = {m.message_id for m in moved}
+        keep = tuple(i for i in ids if i not in moved_ids)
+        cleaned = {}
+        for name, field in facts.items():
+            if name == 'media_ids':
+                value = [i for i in field['value'] if i not in moved_ids]
+                if value: cleaned[name] = dict(field, value=value)
+            elif not set(field['source_ids']) & moved_ids: cleaned[name] = field
+        if keep: result.append((keep, cleaned))
+        result.extend(((m.message_id,), {}) for m in moved)
+    return tuple(result)
+
+
 def _prefilter_scope(message):
     """readiness.md · prefilter / link_only scope: a new, non-reply, non-command message with no attachment."""
     return message.reply_to_id is None and not message.has_attachment and not rules.COMMAND.match(message.text or '')
@@ -111,17 +148,19 @@ def _prefilter_source(snapshot, message):
     return _prefilter_scope(message) and snapshot.prefilter_text(message.text)
 
 
-def _local_rule(snapshot, members, banter_context=()):
+def _local_rule(snapshot, members, banter_context=(), chat_replies=frozenset()):
     """F1 when every member is a review request, F3 when every member is only a link,
     F4 when every member is only small talk (chat_words), F5 when every member is a joke inside
     a group that is already joking (readiness.md · banter_only); else None."""
-    from .decision_rules import PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, is_link_only
+    from .decision_rules import PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE, is_link_only
     members = list(members)
     if not members: return None
     if all(_prefilter_source(snapshot, m) for m in members): return PREFILTER_RULE
     # W1/C1: a forwarded message is someone else's content (often a customer's), never dismissed unread.
     if all(_prefilter_scope(m) and not m.is_forward and is_link_only(m.text) for m in members): return LINK_RULE
     if all(_prefilter_scope(m) and not m.is_forward and snapshot.chat_only_text(m.text) for m in members): return CHAT_RULE
+    # readiness.md · reply_chat K1-K4: a Reply to a message the bot already settled as CHAT, with no problem word.
+    if chat_replies and all(m.message_id in chat_replies and snapshot.reply_chat_match(m, True) for m in members): return REPLY_CHAT_RULE
     # B1: a message that tags the bot is a direct call, never a joke. B3+B4 look at the group before the first member.
     if (banter_context and all(_prefilter_scope(m) and not m.is_forward and not m.mentions_listener
                                and snapshot.banter_text(m.text) for m in members)
@@ -129,14 +168,14 @@ def _local_rule(snapshot, members, banter_context=()):
     return None
 
 
-def early_decision(snapshot, sources, *, prefilter=True, banter_context=()):
+def early_decision(snapshot, sources, *, prefilter=True, banter_context=(), chat_replies=frozenset()):
     """Only table-prioritized outcomes independent of extraction, for a single new source.
 
     Owner 2026-11-05 ("Duyệt lọc trước"): when every source matches the local prefilter
     (PR/issue review request), decide CHAT (F1) before any model call. Owner 2026-11-06
     ("Duyệt F3"): when every source is only a link, decide CHAT (F3) the same way."""
     sources = list(sources)
-    local = _local_rule(snapshot, sources, banter_context) if prefilter else None
+    local = _local_rule(snapshot, sources, banter_context, chat_replies) if prefilter else None
     if local is not None:
         return snapshot.prefilter_decision(local)
     if len(sources) != 1: return None
@@ -149,14 +188,14 @@ def early_decision(snapshot, sources, *, prefilter=True, banter_context=()):
     return result if independent else None
 
 
-def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None):
+def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset()):
     """Validate every group before returning decisions; None means the whole batch holds."""
     sources = list(sources)
     if not sources: return None
     # A pending-answer merge (allow_mixed) is never short-circuited by the prefilter.
     # banter_only reads the stored group history; callers without it fall back to the model's read context.
     banter_context = read_context if banter_context is None else banter_context
-    early = early_decision(snapshot, sources, prefilter=not allow_mixed, banter_context=banter_context)
+    early = early_decision(snapshot, sources, prefilter=not allow_mixed, banter_context=banter_context, chat_replies=chat_replies)
     if early is not None: return ((tuple(sources),early),)
     from .rules_extraction import split_and_extract
     reviews={}
@@ -164,6 +203,7 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         groups = split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=reviews)
         if groups is None: return None
         if allow_mixed and len(groups) != 1: return None
+        if not allow_mixed and not reviews: groups = _split_foreign_images(groups, sources)
         owner = {mid: n for n,(ids,_) in enumerate(groups) for mid in ids}
         by_id = {source.message_id:source for source in sources}
         for source in sources:
@@ -174,7 +214,7 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         for group_index,(ids, facts) in enumerate(groups):
             members = tuple(source for source in sources if source.message_id in ids)
             if len(members) != len(ids): return None
-            local = None if allow_mixed else _local_rule(snapshot, members, banter_context)
+            local = None if allow_mixed else _local_rule(snapshot, members, banter_context, chat_replies)
             if local is not None:
                 # Local rule wins over the model's intent for a group made only of review requests (F1)
                 # or only of bare links (F3).
@@ -311,7 +351,7 @@ def process(pipeline, message, start):
                 if pipeline.store.start_classifying(queued): sources.append(queued)
     sources.sort(key=lambda m:(m.received_at,m.message_id))
     if len(sources) > 1: return _process_batch(pipeline,sources)
-    decision = early_decision(pipeline.rules_snapshot, [message], banter_context=_banter_history(pipeline, [message]))
+    decision = early_decision(pipeline.rules_snapshot, [message], banter_context=_banter_history(pipeline, [message]), chat_replies=_chat_reply_ids(pipeline, [message]))
     if decision is None:
         if pipeline.rules_snapshot.extensions:
             return _process_batch(pipeline, [message])
@@ -363,7 +403,7 @@ def _process_single_with_images(pipeline, message):
         images=pipeline._prepared_images.for_messages([message]) if pipeline._prepared_images is not None else {}
         unread=any(document_reader.text_intent(message) and row.get('read_status')!='read' for row in documents)
         context=pipeline.store.autonomous_read_context([message]) if pipeline.rules_snapshot.extensions else ()
-        outcome = None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],images=images,documents=documents,read_context=context,banter_context=_banter_history(pipeline,[message]))
+        outcome = None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],images=images,documents=documents,read_context=context,banter_context=_banter_history(pipeline,[message]),chat_replies=_chat_reply_ids(pipeline,[message]))
         too_large = outcome is None and _too_large(turn)
     if outcome is None and too_large:
         result = _request_too_large(pipeline,message,topic,attempt)
@@ -1287,7 +1327,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             unread=any(document_reader.text_intent(by_id[row['message_id']]) and row.get('read_status')!='read' for row in documents)
             images=pipeline._prepared_images.for_messages(sources) if pipeline._prepared_images is not None else {}
             context=pipeline.store.autonomous_read_context(sources) if pipeline.rules_snapshot.extensions else ()
-            groups=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,sources,images=images,documents=documents,reply_target_for=reply_target,read_context=context,banter_context=_banter_history(pipeline,sources))
+            groups=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,sources,images=images,documents=documents,reply_target_for=reply_target,read_context=context,banter_context=_banter_history(pipeline,sources),chat_replies=_chat_reply_ids(pipeline,sources))
             too_large=groups is None and not unread and _too_large(turn)
             pending_groups={}
             if groups is not None:
