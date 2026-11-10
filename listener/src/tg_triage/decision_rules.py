@@ -57,7 +57,7 @@ BANTER_KINDS = frozenset({"emoji", "vấn đề"})
 REPLY_CHAT_RULE = "F6"
 # readiness.md · reply_chat K2(a): only these rules settle a message as team talk, small talk or a joke.
 REPLY_CHAT_TARGET_RULES = frozenset({"F2", "F4", "F5"})
-REPLY_CHAT_SHA256 = "620f52e03f6f08c63b95d3e551e6028ca98a9a4df64f3e0171ea213d51cf9866"
+REPLY_CHAT_SHA256 = "fac256da381f6efabd5c1629c5b4fdacfed6eed3772aa9f83ba9ed13060544f5"
 IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")

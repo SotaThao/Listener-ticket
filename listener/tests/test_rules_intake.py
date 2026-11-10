@@ -2268,3 +2268,10 @@ class RulesReplyGaveUpTests(RulesBootstrapTests):
         _, provider, _, _, _ = RulesPrefilterTests.run_live(self, 'bên kế toán cũng cần cột này gấp', extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
                                                          history=history, settled_chat=(10,), sender_id=202, reply_to_id=10, mentions_listener=False)
         self.assertEqual(1, provider.calls)
+
+    def test_reply_to_a_forwarded_f2_message_is_not_settled(self):
+        # Review round 3: A forwards a customer's tagged request; the whole topic is stored chat/F2, but a forward is not A's own content.
+        history = [message(10, text='Chị @sales_lan ơi bên chị cần thêm nút xuất Excel ở báo cáo', is_forward=True, sender_id=201, mentions_listener=False)]
+        _, provider, _, _, _ = RulesPrefilterTests.run_live(self, 'bên chị cần gấp trước thứ 6 nha', extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
+                                                         history=history, settled_chat=(10,), sender_id=202, reply_to_id=10, mentions_listener=False)
+        self.assertEqual(1, provider.calls)

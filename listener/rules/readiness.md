@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 14 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 15 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
@@ -245,7 +245,7 @@ Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` 
 | # | Bước |
 |---|---|
 | K1 | Tin Reply (có `reply_to_id`), không forward, không command, người gửi không đính kèm ảnh hay tài liệu, không tag bot, có chữ |
-| K2 | Tin được Reply vào đã lưu trong cùng group, do một người khác gửi (người gửi hai tin đều biết và khác nhau), và bot đã quyết `CHAT` cho nó bằng luật `F2` (giao việc hoặc hỏi đồng nghiệp, chỉ khi chính tin đó có `@tên`), `F4` (xã giao) hoặc `F5` (đùa) trong cột lý do; không tính `F1`, `F3`, luật `R`, tin chỉ đọc `semantic_analyze`/`semantic_status`, dry-run hay tin hệ thống cũng lưu là chat. Không tính tin bot đã bỏ cuộc (báo "chưa được phân tích thành công" ở group xử lý), tin chưa quyết, tin đã tạo ticket, tin đang chờ bổ sung, tin của chính người gửi, hay không tìm thấy |
+| K2 | Tin được Reply vào đã lưu trong cùng group, do một người khác gửi (người gửi hai tin đều biết và khác nhau), và bot đã quyết `CHAT` cho nó bằng luật `F2` (giao việc hoặc hỏi đồng nghiệp, chỉ khi chính tin đó không phải forward và có `@tên`), `F4` (xã giao) hoặc `F5` (đùa) trong cột lý do; không tính `F1`, `F3`, luật `R`, tin chỉ đọc `semantic_analyze`/`semantic_status`, dry-run hay tin hệ thống cũng lưu là chat. Không tính tin bot đã bỏ cuộc (báo "chưa được phân tích thành công" ở group xử lý), tin chưa quyết, tin đã tạo ticket, tin đang chờ bổ sung, tin của chính người gửi, hay không tìm thấy |
 | K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
 | K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
 

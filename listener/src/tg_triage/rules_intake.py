@@ -114,7 +114,7 @@ def _chat_reply_ids(pipeline, sources):
             import logging
             logging.getLogger(__name__).warning('reply_chat_lookup_failed', exc_info=True)
             continue
-        if row is None: continue
+        if row is None or row['is_forward']: continue   # a forwarded message is someone else's content, never settles replies
         reason = row['reason']
         if reason == 'F2' and not has_team_mention(row['text']): reason = None   # K2(a): F2 settles only a message that itself carries the @name
         if pipeline.rules_snapshot.reply_target_settled(row['decision'], reason, row['sender_id'], source.sender_id):
