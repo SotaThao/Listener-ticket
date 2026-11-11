@@ -229,6 +229,78 @@ def _recoverable_batch_groups(connection):
     return recover
 
 
+def _source_followup_blocker(connection, tables, *, before_recovery=False):
+    """Read only: reject unusable committed links, not clean PLANNED recovery.
+
+    A connection has no running RulesSnapshot; fingerprint comparison remains
+    in the worker/sweep. No other batch family is interpreted here.
+    """
+    if 'rules_batch_groups' not in tables: return None
+    rows=connection.execute("""SELECT batch_id,ordinal,CASE WHEN length(CAST(plan AS BLOB))<=262144 THEN plan ELSE NULL END
+        FROM rules_batch_groups WHERE batch_id LIKE 'source-followup:%' AND status='PLANNED' LIMIT 1001""").fetchall()
+    if not rows: return None
+    if len(rows)>1000: return 'source-followup validation incomplete; Owner inspection required'
+    used=0
+    for batch,ordinal,raw in rows:
+        def blocked(reason): return f'source-followup checkpoint {batch}: {reason}; Owner inspection required'
+        try:
+            if not {'rules_batches','rules_topics','rules_sources','rules_inflight_topics','messages'}<=tables:
+                return blocked('required ledger missing')
+            if not isinstance(raw,str): return blocked('plan cannot be inspected within validation budget')
+            used+=len(raw.encode('utf8'))
+            if used>8*1024*1024: return blocked('validation incomplete')
+            plan=json.loads(raw)
+            required={'topic','state','intent','intent_rule','rule','present','questions','asked_fields','sources'}
+            if not isinstance(plan,dict) or not required<=plan.keys(): return blocked('invalid replay plan')
+            topic=plan['topic']; sources=plan['sources']
+            if (ordinal!=0 or not isinstance(topic,str) or not topic or plan['state'] not in ('READY','NEED_INFO','CHAT','MEDIA_ONLY')
+                    or not isinstance(sources,list) or not sources
+                    or any(not isinstance(s,list) or len(s)!=3 or any(type(v) is not int for v in s) or s[0]<=0 or s[2]<=0 for s in sources)
+                    or len({s[0] for s in sources})!=len(sources) or len({tuple(s[1:]) for s in sources})!=len(sources)
+                    or batch!=f'source-followup:{sources[-1][1]}:{sources[-1][2]}'):
+                return blocked('invalid replay identity or state')
+            if (any(not isinstance(plan[k],str) for k in ('intent','intent_rule','rule'))
+                    or not isinstance(plan['present'],dict)
+                    or any(not isinstance(v,dict) or not isinstance(v.get('value'),str) or not isinstance(v.get('source_ids'),list)
+                           or any(type(i) is not int or i not in {s[0] for s in sources} for i in v['source_ids']) for v in plan['present'].values())
+                    or any(not isinstance(plan[k],list) or any(not isinstance(v,str) for v in plan[k]) for k in ('questions','asked_fields'))):
+                return blocked('invalid replay facts')
+            if not connection.execute('SELECT 1 FROM rules_batches WHERE batch_id=?',(batch,)).fetchone(): return blocked('header missing')
+            if not connection.execute('SELECT 1 FROM rules_topics WHERE topic_id=?',(topic,)).fetchone(): return blocked('topic missing')
+            current=[list(r) for r in connection.execute('SELECT ref,chat_id,message_id FROM rules_sources WHERE topic_id=? ORDER BY ref',(topic,))]
+            if current!=sources: return blocked('sources changed')
+            members=[]
+            for _,chat,mid in sources:
+                row=connection.execute('''SELECT chat_id,message_id,decision,attempts,github_called_at,case_key,issue_number,issue_url
+                    FROM messages WHERE chat_id=? AND message_id=?''',(chat,mid)).fetchone()
+                if row is None: return blocked('source message missing')
+                member=dict(zip(('chat','mid','decision','attempts','github','case','issue','url'),row))
+                if member['decision']=='error': return blocked(f'member {chat}:{mid} is quarantined')
+                if (type(member['attempts']) is not int or member['attempts']<0
+                        or member['attempts']>=2 and (member['decision']=='queued' or before_recovery and member['decision']=='classifying')):
+                    return blocked(f'member {chat}:{mid} cannot be recovered within the attempt limit')
+                members.append(member)
+            claim=connection.execute('SELECT batch_id FROM rules_inflight_topics WHERE topic_id=?',(topic,)).fetchone()
+            if claim and claim[0]!='single:'+topic: return blocked('effect claimed by another operation')
+            root=members[0]
+            if plan['state']=='READY' and not (root['decision']=='issue' and root['issue'] is not None):
+                local=[m for m in members if m['chat']==root['chat']]
+                keys={(m['chat'],m['mid']) for m in local}
+                cases={m['case'] for m in local if m['case'] is not None}
+                for case in cases:
+                    bound=connection.execute('SELECT chat_id,message_id,github_called_at FROM messages WHERE case_key=?',(case,)).fetchall()
+                    if {tuple(r)[:2] for r in bound}!=keys or any(r[2] is not None for r in bound):
+                        return blocked('case has unresolved reservation or different members')
+                    if 'groups' not in tables or connection.execute('SELECT 1 FROM groups WHERE case_key=? AND github_called_at IS NOT NULL',(case,)).fetchone():
+                        return blocked('group has unresolved reservation')
+                for m in local:
+                    if m['case'] is None and (m['github'] is not None or m['decision'] not in ('queued','classifying','pending_review')):
+                        return blocked(f"member {m['chat']}:{m['mid']} is no longer available for READY")
+        except (ValueError,TypeError,KeyError,sqlite3.Error):
+            return blocked('cannot inspect replay plan safely')
+    return None
+
+
 def check_before_recovery(db_path):
     """Inspect existing side-effect ledgers read-only before Store can recover anything."""
     import sqlite3
@@ -256,6 +328,8 @@ def check_connection_before_recovery(connection):
         assessment=_category(connection,table,spec,MAX_ROWS)
         if assessment['schema']!='SUPPORTED' or not assessment['validation_complete']:
             raise RulesHalt('unknown schema, identifier, state or record; Owner inspection required')
+    followup_blocker=_source_followup_blocker(connection,tables,before_recovery=True)
+    if followup_blocker: raise RulesHalt(followup_blocker)
     for table in ('messages','cases','groups'):
         if table in tables and not {'github_called_at','issue_number','issue_url'} <= {r[1] for r in connection.execute('PRAGMA table_info('+table+')')}:
             raise RulesHalt('reservation schema unknown; Owner inspection required')
@@ -482,7 +556,7 @@ class RulesPendingStore:
                           """SELECT 1 FROM rules_sources s JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
                              WHERE m.github_called_at IS NOT NULL AND m.decision IN ('pending','error') LIMIT 1"""):
                 if self.store.connection.execute(query).fetchone(): return True
-            return False
+            return _source_followup_blocker(self.store.connection,tables) is not None
 
     def reserve_comment(self, chat_id, message_id, repo, issue_number, topic=None):
         with self.store._lock,self.store.connection:
@@ -564,6 +638,164 @@ class RulesPendingStore:
                 WHERE s.chat_id=? AND s.message_id=? AND t.source_chat_id=? AND t.status='OPEN' AND t.topic_id NOT LIKE 'batch:%' ''',
                 (chat_id,reply_to_id,chat_id)).fetchall()
             return (rows[0]['topic_id'],json.loads(rows[0]['asked'])) if len(rows)==1 else None
+
+    def topic_for_source_followup(self, chat_id, sender_id, window_minutes, received_at=None):
+        """questions.source_followup SF1: read only; ambiguity never picks a winner."""
+        from datetime import datetime
+        from .store import _aware
+        if sender_id is None: return None
+        if type(window_minutes) is not int or window_minutes <= 0: raise ValueError('invalid followup window')
+        with self.store._lock:
+            rows = self.store.connection.execute('''SELECT t.topic_id,t.last_at FROM rules_topics t
+                WHERE t.source_chat_id=? AND t.status='OPEN' AND t.topic_id NOT LIKE 'batch:%'
+                AND t.phase NOT IN ('LEGACY_REVIEW','HOLD')
+                AND NOT EXISTS (SELECT 1 FROM rules_inflight_topics i WHERE i.topic_id=t.topic_id)
+                AND (SELECT d.state FROM rules_decisions d WHERE d.topic_id=t.topic_id ORDER BY d.id DESC LIMIT 1) IN ('NEED_INFO','MEDIA_ONLY')
+                AND NOT EXISTS (SELECT 1 FROM rules_sources s JOIN messages m
+                    ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+                    WHERE s.topic_id=t.topic_id AND m.has_document=1)
+                AND EXISTS (SELECT 1 FROM rules_sources s JOIN messages m
+                    ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+                    WHERE s.topic_id=t.topic_id AND s.chat_id=? AND m.sender_id=?)''',
+                (chat_id,chat_id,sender_id)).fetchall()
+            now = _aware(received_at or self.store.clock())
+            matches = []
+            for row in rows:
+                sources = self.store.connection.execute('''SELECT m.* FROM rules_sources s JOIN messages m
+                    ON m.chat_id=s.chat_id AND m.message_id=s.message_id WHERE s.topic_id=?''', (row['topic_id'],)).fetchall()
+                latest = max(_aware(datetime.fromisoformat(m['received_at'])) for m in sources)
+                if not timedelta(0) <= now - latest < timedelta(minutes=window_minutes): continue
+                state = self.store.connection.execute('SELECT state FROM rules_decisions WHERE topic_id=? ORDER BY id DESC LIMIT 1', (row['topic_id'],)).fetchone()[0]
+                if state == 'MEDIA_ONLY':
+                    if any(m['chat_id'] != chat_id or m['sender_id'] != sender_id or m['text'].strip()
+                           or not m['has_image'] or m['is_forward'] for m in sources): continue
+                matches.append(row['topic_id'])
+            return matches[0] if len(matches) == 1 else None
+
+    def prepare_source_followup(self, message, max_retries, fingerprint):
+        """Own HOLD checkpoint before speculative IO; never touches the candidate."""
+        topic = f'{message.chat_id}:{message.message_id}'
+        with self.store._lock, self.store.connection:
+            now = self.store.clock().isoformat()
+            self.store.connection.execute("INSERT OR IGNORE INTO rules_topics(topic_id,source_chat_id,last_at,status) VALUES(?,?,?,'OPEN')", (topic,message.chat_id,now))
+            self.store.connection.execute('INSERT OR IGNORE INTO rules_sources VALUES(?,1,?,?)', (topic,message.chat_id,message.message_id))
+            row = self.store.connection.execute('SELECT attempts,attempt_reserved FROM rules_topics WHERE topic_id=?', (topic,)).fetchone()
+            if row['attempt_reserved'] or row['attempts'] >= max_retries + 1: return None
+            attempt = row['attempts'] + 1
+            self.store.connection.execute("UPDATE rules_topics SET phase='HOLD',attempts=?,attempt_reserved=1 WHERE topic_id=?", (attempt,topic))
+            self.store.connection.execute("UPDATE messages SET decision='pending_review',reason='rules_extract_pending' WHERE chat_id=? AND message_id=?", (message.chat_id,message.message_id))
+            batch = 'source-followup-confirmation:' + topic
+            self.store.connection.execute('INSERT OR IGNORE INTO rules_batches VALUES(?,?,?)', (batch,fingerprint,now))
+            self.store.connection.execute("INSERT OR IGNORE INTO rules_batch_groups VALUES(?,0,?,'PLANNED')", (batch,json.dumps(dict(topic=topic))))
+            return attempt
+
+    def release_source_confirmation(self, message):
+        """Keep a replayable HOLD until the old path durably records its outcome."""
+        with self.store._lock, self.store.connection:
+            topic = f'{message.chat_id}:{message.message_id}'
+            batch = 'source-followup-confirmation:' + topic
+            row = self.store.connection.execute("SELECT plan FROM rules_batch_groups WHERE batch_id=? AND ordinal=0 AND status='PLANNED'", (batch,)).fetchone()
+            if row is None: return
+            plan = json.loads(row['plan'])
+            if plan.get('released'): return
+            self.store.connection.execute("UPDATE rules_topics SET phase='HOLD',attempts=0,attempt_reserved=0 WHERE topic_id=? AND status='OPEN'", (topic,))
+            plan['released'] = True
+            self.store.connection.execute('UPDATE rules_batch_groups SET plan=? WHERE batch_id=? AND ordinal=0', (json.dumps(plan),batch))
+
+    def finish_source_confirmations(self):
+        """Reconcile only this feature's own checkpoints, including after restart."""
+        with self.store._lock, self.store.connection:
+            rows = self.store.connection.execute("SELECT batch_id,plan FROM rules_batch_groups WHERE batch_id LIKE 'source-followup-confirmation:%' AND ordinal=0 AND status='PLANNED'").fetchall()
+            for row in rows:
+                topic = json.loads(row['plan'])['topic']
+                # The extension path owns a different topic. Retire the scratch
+                # only after its replacement has durably reserved an attempt.
+                state = self.store.connection.execute('SELECT state FROM rules_decisions WHERE topic_id=? ORDER BY id DESC LIMIT 1', (topic,)).fetchone()
+                replacement = self.store.connection.execute('SELECT attempts,phase,status FROM rules_topics WHERE topic_id=?', ('batch:'+topic,)).fetchone()
+                if replacement and (replacement['attempts'] or replacement['phase'] == 'WAITING' or replacement['status'] != 'OPEN'):
+                    if state is None:
+                        self.store.connection.execute('DELETE FROM rules_sources WHERE topic_id=?', (topic,))
+                        self.store.connection.execute('DELETE FROM rules_topics WHERE topic_id=?', (topic,))
+                    else:
+                        # A successful batch can reuse the scratch id for its
+                        # real single-source group. Restore that group's NEW phase.
+                        self.store.connection.execute("UPDATE rules_topics SET phase='NEW',attempts=0,attempt_reserved=0 WHERE topic_id=?", (topic,))
+                    self.store.connection.execute("UPDATE rules_batch_groups SET status='DONE' WHERE batch_id=? AND ordinal=0", (row['batch_id'],))
+                    continue
+                if state is None: continue
+                # Same-topic old-path HOLD owns its retry counter; never reset it.
+                if state[0] == 'MEDIA_ONLY':
+                    self.store.connection.execute("UPDATE rules_topics SET phase='NEW',attempts=0,attempt_reserved=0 WHERE topic_id=?", (topic,))
+                self.store.connection.execute("UPDATE rules_batch_groups SET status='DONE' WHERE batch_id=? AND ordinal=0", (row['batch_id'],))
+
+    def source_followup_for_member(self, message):
+        """A restarted worker may dequeue any member before the anchor."""
+        with self.store._lock:
+            for row in self.store.connection.execute('''SELECT g.plan,g.status,b.fingerprint FROM rules_batch_groups g
+                    JOIN rules_batches b ON b.batch_id=g.batch_id
+                    WHERE g.batch_id LIKE 'source-followup:%' AND g.ordinal=0 AND g.status='PLANNED' '''):
+                plan = json.loads(row['plan'])
+                if any((chat,mid) == (message.chat_id,message.message_id) for _,chat,mid in plan['sources']):
+                    return plan,row['status'],row['fingerprint']
+            return None
+
+    def source_followup_checkpoint(self, message):
+        with self.store._lock:
+            row = self.store.connection.execute('''SELECT g.plan,g.status,b.fingerprint FROM rules_batch_groups g
+                JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.batch_id=? AND g.ordinal=0''',
+                (f'source-followup:{message.chat_id}:{message.message_id}',)).fetchone()
+            return (json.loads(row['plan']),row['status'],row['fingerprint']) if row else None
+
+    def commit_source_followup(self, message, topic, snapshot, originals, decision, window_minutes):
+        """One SQLite transaction: recheck, claim, add source, journal and replay plan."""
+        batch = f'source-followup:{message.chat_id}:{message.message_id}'
+        own = f'{message.chat_id}:{message.message_id}'
+        with self.store._lock:
+            connection = self.store.connection
+            connection.execute('BEGIN IMMEDIATE')
+            try:
+                if (self.topic_for_source_followup(message.chat_id,message.sender_id,window_minutes,message.received_at) != topic
+                        or self.topic_snapshot(topic) != snapshot):
+                    connection.rollback(); return False
+                if any((chat,mid) == (message.chat_id,message.message_id) for _,chat,mid in snapshot['sources']):
+                    connection.rollback(); return False
+                now = self.store.clock().isoformat()
+                ref = originals[-1][0]
+                connection.execute('INSERT INTO rules_inflight_topics VALUES(?,?,0)', (topic,'single:'+topic))
+                connection.execute('INSERT INTO rules_sources VALUES(?,?,?,?)', (topic,ref,message.chat_id,message.message_id))
+                connection.execute('UPDATE rules_topics SET last_at=? WHERE topic_id=?', (now,topic))
+                lookup = {i:(m.chat_id,m.message_id) for i,m in originals}
+                provenance = {k:[dict(chat_id=lookup[i][0],message_id=lookup[i][1]) for i in v.source_ids] for k,v in decision.present.items()}
+                connection.execute('''INSERT INTO rules_decisions(topic_id,recorded_at,state,intent_rule,decision_rule,fingerprint,present_sources)
+                    VALUES(?,?,?,?,?,?,?)''', (topic,now,decision.state,decision.intent_rule,decision.rule,decision.fingerprint,json.dumps(provenance,separators=(',',':'))))
+                plan = dict(topic=topic,state=decision.state,intent=decision.intent,intent_rule=decision.intent_rule,rule=decision.rule,
+                            present={k:dict(value=v.value,source_ids=list(v.source_ids)) for k,v in decision.present.items()},
+                            questions=list(decision.questions),asked_fields=list(decision.asked_fields),
+                            sources=[[i,m.chat_id,m.message_id] for i,m in originals])
+                connection.execute('INSERT INTO rules_batches VALUES(?,?,?)', (batch,decision.fingerprint,now))
+                connection.execute("INSERT INTO rules_batch_groups VALUES(?,0,?,'PLANNED')", (batch,json.dumps(plan,ensure_ascii=False,separators=(',',':'))))
+                connection.execute("UPDATE rules_topics SET status='CLOSED',phase='WAITING',attempts=0,attempt_reserved=0 WHERE topic_id=?", (own,))
+                connection.execute("UPDATE rules_batch_groups SET status='DONE' WHERE batch_id=? AND ordinal=0", ('source-followup-confirmation:'+own,))
+                connection.commit()
+                return True
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def source_followup_replays(self):
+        with self.store._lock:
+            return [json.loads(row[0])['sources'][-1][1:] for row in self.store.connection.execute(
+                "SELECT plan FROM rules_batch_groups WHERE batch_id LIKE 'source-followup:%' AND ordinal=0 AND status='PLANNED'")]
+
+    def finish_source_followup(self, message, topic, result):
+        from dataclasses import asdict
+        with self.store._lock, self.store.connection:
+            batch = f'source-followup:{message.chat_id}:{message.message_id}'
+            plan = json.loads(self.store.connection.execute('SELECT plan FROM rules_batch_groups WHERE batch_id=? AND ordinal=0',(batch,)).fetchone()[0])
+            plan['result'] = {name:getattr(result,name) for name in ('decision','tier','case_key','issue_number','issue_url','reason')}
+            if result.classification is not None: plan['result']['classification'] = asdict(result.classification)
+            self.store.connection.execute("UPDATE rules_batch_groups SET status='DONE',plan=? WHERE batch_id=? AND ordinal=0", (json.dumps(plan,ensure_ascii=False,separators=(',',':')),batch))
+            self.store.connection.execute("DELETE FROM rules_inflight_topics WHERE topic_id=? AND batch_id=?", (topic,'single:'+topic))
 
     def record_decision(self, topic_id, decision, confidence=None):
         import math

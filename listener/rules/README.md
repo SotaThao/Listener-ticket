@@ -15,9 +15,9 @@ File quyết định — bot nạp theo thứ tự:
 | [states.md](states.md) | 6 trạng thái kết quả, vòng đời pending, hạn 7 ngày, số lần thử `HOLD` | Code | 1 | ACTIVE |
 | [facts.md](facts.md) | Dữ kiện model trích (`fields`), dữ kiện code tính (`code_facts`), command → intent, điều kiện CÓ V1–V4, chuẩn hóa N1–N6 (N6 bỏ chữ đệm cuối), giá trị chung chung; mục 5 "Cách model ghi giá trị": nhóm đang đùa ⇒ `chat`; bảng `group_mood` (tín hiệu đùa do code đếm + 2 ví dụ đối chiếu, chỉ gửi khi nhóm đang đùa) | **Model** (`fields`, cách ghi giá trị) + Code | 2 | ACTIVE |
 | [readiness.md](readiness.md) | Lọc local trước model `prefilter` P1–P4 + `prefilter_words` (nhờ review/merge PR ⇒ `CHAT`, luật `F1`), `link_only` W1–W4 (tin chỉ có link ⇒ `CHAT`, luật `F3`), `chat_only` C1–C4 + `chat_words` (tin chỉ có từ xã giao ⇒ `CHAT`, luật `F4`), `banter_only` B1–B5 + `banter_signals` (tin đùa giữa lúc nhóm đang cười ⇒ `CHAT`, luật `F5`), `reply_chat` K1–K4 (tin Reply vào tin đã quyết `CHAT` ⇒ `CHAT`, luật `F6`), `image_split` S1–S4 (ảnh trần khác người gửi không bị gộp nhầm nhóm), bảng `intent_resolve` I1–I3, `team_request` T1–T5 (task giao/hỏi đồng nghiệp có `@tên` ⇒ `CHAT`, luật `F2`) và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
-| [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4) | Code | 4 | ACTIVE |
+| [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4), `source_followup` SF1–SF5 cho tin đơn không Reply | Code | 4 | ACTIVE |
 | [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | ACTIVE |
-| [examples.md](examples.md) | 27 ví dụ X1–X27 phủ mọi luật (X26, X27 chỉ gửi model khi nhóm đang đùa) + 23 ca lọc trước PF1–PF23 + 14 ca chỉ có link LC1–LC14 + 12 ca xã giao CC1–CC12 + 12 ca đùa BC1–BC12 + 7 ca Reply RC1–RC7 + 6 ca tách ảnh IS1–IS6 + 12 ca việc nội bộ TC1–TC12 + 15 ca chuẩn hóa G1–G15 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
+| [examples.md](examples.md) | 27 ví dụ X1–X27 phủ mọi luật (X26, X27 chỉ gửi model khi nhóm đang đùa) + 23 ca lọc trước PF1–PF23 + 14 ca chỉ có link LC1–LC14 + 12 ca xã giao CC1–CC12 + 12 ca đùa BC1–BC12 + 7 ca Reply RC1–RC7 + 6 ca tách ảnh IS1–IS6 + 12 ca việc nội bộ TC1–TC12 + 15 ca chuẩn hóa G1–G15 + source_followup_cases SF1–SF34 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
 
 
 File mở rộng — loader source nạp cùng sáu file trên khi bật rules; chỉ host áp dụng, không gửi bảng quyết định cho model:
@@ -35,6 +35,8 @@ File cho **người và Agent** — không nằm trong trình tự nạp quyết
 | [preflight.md](preflight.md) | Cổng bật tính năng: mục kiểm P1–P13, `GO` / `NO_GO`, điều kiện dừng bot H1–H7, phiếu ký | Người + Agent | DRAFT |
 
 Chưa soạn: `topics.md` (TG-05/06) · `priority.md`.
+
+`examples.md` có bảng `source_followup_cases` SF1–SF34 cho tin đơn không Reply; chỉ code/test dùng, không gửi model. Khác bảng `examples` (một bộ CodeFacts → R1–R13), các ca này cần chuỗi sự kiện, SQLite, pixel request, provider giả và restart. Evaluator markdown tĩnh không biểu diễn được các điều kiện đó. `tests.test_source_followup.SourceFollowupTests.test_documented_followup_case_coverage` so khớp từng ID với dictionary ID → tên test và comment `SF-test` của chính ID đó trong examples.md; kiểm đúng tên method có thể gọi, không suy từ thứ tự hàng. Unittest chạy riêng các flow với Message/store thật và fake IO; ánh xạ không tự chứng minh nội dung văn xuôi hoặc outcome của flow. Không coi kiểm cột/coverage là bằng chứng runtime của flow, không thay kiểm thử bằng việc tick PASS tĩnh.
 
 ## 2. Định dạng mỗi file quy tắc
 
@@ -54,7 +56,7 @@ Chưa soạn: `topics.md` (TG-05/06) · `priority.md`.
  ├─ 1. states.md      → tập trạng thái hợp lệ, limits
  ├─ 2. facts.md       → trường, code_facts, command_intent, field_valid, normalize, generic_values
  ├─ 3. readiness.md   → prefilter (khóa hash) + prefilter_words, link_only (khóa hash), chat_only (khóa hash) + chat_words, banter_only (khóa hash) + banter_signals, reply_chat (khóa hash), image_split (khóa hash), team_request (khóa hash), intent_resolve + decision (chỉ dùng trạng thái ở 1, trường/giá trị ở 2)
- ├─ 4. questions.md   → ask_order, fallback, answer_link (chỉ dùng trường ở 2)
+ ├─ 4. questions.md   → ask_order, fallback, answer_link, source_followup, limits (chỉ dùng trường ở 2)
  ├─ 5. channels.md    → outputs (đủ mọi trạng thái ở 1), blocks (khối phải có trong template)
  ├─ 6. examples.md    → chạy TỰ KIỂM: mỗi ví dụ ra đúng Kết quả, Luật, Hỏi; mỗi ca PF ra đúng `CHAT`/`không`; mỗi ca LC, CC, BC, RC ra đúng `CHAT`/`không`; mỗi ca IS ra đúng tin bị tách; mỗi ca TC ra đúng luật
  ├─ 7. lifecycle.md + analysis-status.md → kiểm extension ACTIVE và các bảng mở rộng
