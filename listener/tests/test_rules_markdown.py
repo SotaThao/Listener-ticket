@@ -71,6 +71,7 @@ REQUIRED = {
         "ask_order": ["Thứ tự", "intent", "Trường thiếu", "Khối template"],
         "fallback": ["Khi", "Khối template"],
         "answer_link": ["#", "Kênh", "Là Reply vào", "Pending", "Kết quả"],
+        "source_followup": ["#", "Bước"],
         "limits": ["Khóa", "Giá trị", "Nghĩa"],
     },
     "channels": {
@@ -92,6 +93,7 @@ REQUIRED = {
         "reply_chat_cases": ["#", "Tin", "Reply vào", "Kết quả"],
         "image_split_cases": ["#", "Nhóm", "Kết quả"],
         "normalize_cases": ["#", "Trường", "Giá trị", "Chung chung"],
+        "source_followup_cases": ["#", "Tin", "Bối cảnh", "Kết quả", "Luật"],
     },
     "roles": {
         "permission_states": ["Mã", "Nghĩa"],

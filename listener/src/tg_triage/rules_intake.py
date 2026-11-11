@@ -195,7 +195,7 @@ def early_decision(snapshot, sources, *, prefilter=True, banter_context=(), chat
     return result if independent else None
 
 
-def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset()):
+def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False):
     """Validate every group before returning decisions; None means the whole batch holds."""
     sources = list(sources)
     if not sources: return None
@@ -207,9 +207,13 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
     from .rules_extraction import split_and_extract
     reviews={}
     try:
-        groups = split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=reviews)
+        groups = split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=None if confirm_followup else reviews)
         if groups is None: return None
         if allow_mixed and len(groups) != 1: return None
+        if confirm_followup and any('lifecycle' in facts or facts.get('intent', {}).get('value') in ('status', 'analyze')
+                                    or (snapshot.extensions and snapshot.extensions.route(facts.get('intent', {}).get('value')))
+                                    for _, facts in groups):
+            return None
         if not allow_mixed and not reviews: groups = _split_foreign_images(groups, sources)
         owner = {mid: n for n,(ids,_) in enumerate(groups) for mid in ids}
         by_id = {source.message_id:source for source in sources}
@@ -357,14 +361,46 @@ def process(pipeline, message, start):
             if queued.chat_id == message.chat_id and (queued.chat_id,queued.message_id) in released and queued.message_id != message.message_id:
                 if pipeline.store.start_classifying(queued): sources.append(queued)
     sources.sort(key=lambda m:(m.received_at,m.message_id))
-    if len(sources) > 1: return _process_batch(pipeline,sources)
+    if len(sources) > 1:
+        from .store import _to_message
+        remaining=list(sources)
+        replayed=[]
+        for member in sources:
+            checkpoint=pipeline.rules_pending.source_followup_for_member(member)
+            if checkpoint is None: continue
+            linked={(chat,mid) for _,chat,mid in checkpoint[0]['sources']}
+            _,chat,mid=checkpoint[0]['sources'][-1]
+            anchor=_to_message(pipeline.store.get(chat,mid))
+            replayed.append(_complete_source_followup(pipeline,anchor,checkpoint,claim_queued=True))
+            remaining=[m for m in remaining if (m.chat_id,m.message_id) not in linked]
+        if not replayed: return _process_batch(pipeline,sources)
+        if remaining: replayed.append(_process_batch(pipeline,remaining))
+        return replayed[0] if len(replayed)==1 else pipeline._combine('source-followup-replay',replayed)
+    checkpoint = pipeline.rules_pending.source_followup_checkpoint(message)
+    checkpoint = checkpoint or pipeline.rules_pending.source_followup_for_member(message)
+    if checkpoint is not None:
+        from .store import _to_message
+        _,chat,mid = checkpoint[0]['sources'][-1]
+        anchor = _to_message(pipeline.store.get(chat,mid))
+        return _complete_source_followup(pipeline, anchor, checkpoint, claim_queued=True)
     decision = early_decision(pipeline.rules_snapshot, [message], banter_context=_banter_history(pipeline, [message]), chat_replies=_chat_reply_ids(pipeline, [message]))
+    if decision is None or decision.state == 'MEDIA_ONLY':
+        # questions.source_followup: single-message hook before extensions route
+        # even one source through _process_batch. Multi-source batches stay above.
+        if (message.reply_to_id is None and not message.is_forward and message.sender_id is not None
+                and not rules.COMMAND.match(message.text or '') and not message.has_document
+                and not code_facts([message]).team_mention_ids):
+            linked = _process_source_followup(pipeline, message)
+            if linked is not None: return linked
     if decision is None:
         if pipeline.rules_snapshot.extensions:
-            return _process_batch(pipeline, [message])
-        if message.reply_to_id is not None:
-            return _process_source_reply(pipeline,message)
-        return _process_single_pending(pipeline, message)
+            result = _process_batch(pipeline, [message])
+        elif message.reply_to_id is not None:
+            result = _process_source_reply(pipeline,message)
+        else:
+            result = _process_single_pending(pipeline, message)
+        pipeline.rules_pending.finish_source_confirmations()
+        return result
     from .models import Decision
     topic = f'{message.chat_id}:{message.message_id}'
     pipeline.rules_pending.create(topic, message.chat_id, message.message_id)
@@ -374,6 +410,7 @@ def process(pipeline, message, start):
     pipeline.store.finish(message, result)
     if decision.state == 'CHAT':
         pipeline.rules_pending.close(topic, 'CLOSED')
+    pipeline.rules_pending.finish_source_confirmations()
     return result
 
 
@@ -1919,6 +1956,184 @@ def _status_ops_answer(pipeline, message, topic):
     return result
 
 
+class _FollowupConfirmationProvider:
+    """Observe the successful provider projection, including cloud/local fallback."""
+    def __init__(self, provider, bare_ids):
+        self.provider, self.bare_ids = provider, bare_ids
+
+    def __getattr__(self, name):
+        return getattr(self.provider, name)
+
+    def _ask(self, body, parse, attempts):
+        import json
+        result = self.provider._ask(body, parse, attempts=attempts)
+        actual = body.get('_evidence_view') or dict(messages=body['messages'])
+        users = [m for m in actual['messages'] if m.get('role') == 'user']
+        if len(users) != 1: return None
+        packet = json.loads(users[0]['content'])
+        order = packet.get('images_order', [])
+        if not self.bare_ids <= set(order) or len(users[0].get('images', [])) != len(order): return None
+        return result
+
+
+def _process_source_followup(pipeline, message):
+    """Speculative IO owns only the new message's HOLD checkpoint."""
+    from dataclasses import replace
+    from .store import _to_message
+    from .thinking import decision_turn
+    pending = pipeline.rules_pending
+    window = pipeline.rules_snapshot.limits['followup_window_minutes']
+    with pipeline.store._lock:
+        topic = pending.topic_for_source_followup(message.chat_id, message.sender_id, window, message.received_at)
+        if topic is None: return None
+        snapshot = pending.topic_snapshot(topic)
+        if any((chat, mid) == (message.chat_id, message.message_id) for _, chat, mid in snapshot['sources']):
+            return None  # Only the durable checkpoint may replay an already committed link.
+        originals = []
+        for ref, chat_id, message_id in snapshot['sources']:
+            row = pipeline.store.get(chat_id, message_id)
+            if row is None: return None
+            originals.append((ref, _to_message(row)))
+        originals.append((max(ref for ref, _ in originals) + 1, message))
+    attempt = pending.prepare_source_followup(message, pipeline.rules_snapshot.limits['hold_max_retries'], pipeline.rules_snapshot.fingerprint)
+    if attempt is None: return None
+    own = f'{message.chat_id}:{message.message_id}'
+    outcome = None
+    try:
+        try:
+            actuals = [m for _, m in originals]
+            lookup = {(m.chat_id,m.message_id):ref for ref,m in originals}
+            model_sources = [replace(m,message_id=ref,reply_to_id=lookup.get((m.chat_id,m.reply_to_id))) for ref,m in originals]
+            bare = {ref for ref,m in originals if m.has_image and not m.text.strip()}
+            if any(m.has_image for m in actuals) and getattr(pipeline.classifier, 'supports_vision', False):
+                pipeline._prepared_images = pipeline.attachments.prepare_images(topic, actuals)
+            images = {lookup[(m.chat_id,m.message_id)]:path for m,path in pipeline._prepared_images.accepted} if pipeline._prepared_images else {}
+            if not bare or (getattr(pipeline.classifier, 'supports_vision', False) and bare <= set(images)):
+                import json
+                with decision_turn(pipeline, 'rules:followup:' + own, topic, message.message_id):
+                    outcome = evaluate_batch(pipeline.rules_snapshot, _FollowupConfirmationProvider(pipeline.classifier, bare),
+                                             model_sources, images=images, asked_counts=json.loads(snapshot['asked']),
+                                             allow_mixed=True, confirm_followup=True)
+        except Exception:
+            outcome = None
+        if (outcome is None or len(outcome) != 1
+                or {m.message_id for m in outcome[0][0]} != {ref for ref, _ in originals}
+                or outcome[0][1].state not in ('READY','NEED_INFO','CHAT','MEDIA_ONLY')):
+            pending.release_source_confirmation(message)
+            return None
+        if not pending.commit_source_followup(message, topic, snapshot, originals, outcome[0][1], window):
+            pending.release_source_confirmation(message)
+            return None
+        return _complete_source_followup(pipeline, message, pending.source_followup_checkpoint(message))
+    finally:
+        if pipeline._prepared_images is not None:
+            pipeline._prepared_images.close()
+            pipeline._prepared_images = None
+
+
+def _complete_source_followup(pipeline, message, checkpoint, *, claim_queued=False):
+    from .rules_pending_store import RulesHalt
+    try:
+        return _complete_source_followup_inner(pipeline,message,checkpoint,claim_queued=claim_queued)
+    except RulesHalt:
+        raise
+    except Exception as error:
+        # Match the ordinary RESERVED batch boundary without making a clean
+        # process death unrecoverable. BaseException still leaves PLANNED intact.
+        try:
+            pipeline.store.fail_message(message,type(error).__name__)
+        finally:
+            raise RulesHalt('source-followup completion failed; Owner inspection required') from error
+
+
+def _complete_source_followup_inner(pipeline, message, checkpoint, *, claim_queued=False):
+    """Replay committed facts, never another extraction or duplicate source append."""
+    from .models import Decision
+    from .decision_rules import Decision as RuleDecision, Field
+    from .store import _to_message
+    from .rules_pending_store import RulesHalt
+    pending = pipeline.rules_pending
+    plan, status, fingerprint = checkpoint
+    topic = plan['topic']
+    row = pipeline.store.get(message.chat_id,message.message_id)
+    if status == 'DONE':
+        from .models import Classification
+        value = dict(plan['result'])
+        if 'classification' in value: value['classification'] = Classification(**value['classification'])
+        result = Decision(**value)
+        if row['decision'] == 'classifying': pipeline.store.finish(message,result)
+        return result
+    if fingerprint != pipeline.rules_snapshot.fingerprint:
+        raise RulesHalt('followup checkpoint fingerprint changed; Owner inspection required')
+    if pending.topic_snapshot(topic)['sources'] != plan['sources']:
+        raise RulesHalt('followup checkpoint sources changed; Owner inspection required')
+    decision = RuleDecision(plan['state'],plan['intent'],plan['intent_rule'],plan['rule'],
+                            {k:Field(v['value'],tuple(v['source_ids'])) for k,v in plan['present'].items()},
+                            tuple(plan['questions']),tuple(plan['asked_fields']),fingerprint)
+    originals = [_to_message(pipeline.store.get(chat,mid)) for _,chat,mid in plan['sources']]
+    if any(pipeline.store.get(m.chat_id,m.message_id)['decision'] == 'error' for m in originals):
+        raise RulesHalt('followup member is quarantined; Owner inspection required')
+    if claim_queued:
+        # Pipeline.process holds the same lock as sweep. The worker now owns the
+        # whole committed group, even when restart dequeued its first member.
+        for member in originals:
+            if pipeline.store.get(member.chat_id,member.message_id)['decision'] == 'queued':
+                if not pipeline.store.start_classifying(member): raise RuntimeError('followup queued source unavailable')
+    source = originals[0]
+    # Internal claims are cleared on startup. Reinstall this checkpoint's claim
+    # before effects; all external reservations retain their normal no-retry rule.
+    with pipeline.store._lock, pipeline.store.connection:
+        claim = pipeline.store.connection.execute('SELECT batch_id FROM rules_inflight_topics WHERE topic_id=?',(topic,)).fetchone()
+        if claim and claim[0] != 'single:'+topic: raise RulesHalt('followup effect already claimed')
+        pipeline.store.connection.execute('INSERT OR IGNORE INTO rules_inflight_topics VALUES(?,?,0)',(topic,'single:'+topic))
+    if decision.state == 'READY':
+        root = pipeline.store.get(source.chat_id,source.message_id)
+        if root['issue_number'] is not None and root['decision'] == 'issue':
+            from . import group_notices
+            result = Decision('issue','rule',case_key=topic,issue_number=root['issue_number'],issue_url=root['issue_url'],reason=decision.rule)
+            text = group_notices.notice_text(result,(),pipeline.config.gh_repo)
+            if text: _send_ops(pipeline,source,topic,'other',text,once=True)
+            if row['decision'] in ('queued','classifying','pending_review'):
+                pipeline.store.finish(message,result)
+            pending.close(topic,'CLOSED')
+        else:
+            members = [m for m in originals if m.chat_id == source.chat_id]
+            # Rebuild only an unposted local case after interruption. A GitHub
+            # reservation, even without a result, is never cleared or retried.
+            with pipeline.store._lock, pipeline.store.connection:
+                cases = {pipeline.store.get(m.chat_id,m.message_id)['case_key'] for m in members} - {None}
+                for case in cases:
+                    rows = pipeline.store.connection.execute('SELECT chat_id,message_id,github_called_at FROM messages WHERE case_key=?',(case,)).fetchall()
+                    if {tuple(r)[:2] for r in rows} != {(m.chat_id,m.message_id) for m in members} or any(r['github_called_at'] for r in rows):
+                        raise RulesHalt('followup case has unresolved reservation')
+                    if pipeline.store.connection.execute('SELECT 1 FROM groups WHERE case_key=? AND github_called_at IS NOT NULL',(case,)).fetchone():
+                        raise RulesHalt('followup group has unresolved reservation')
+                    pipeline.store.connection.execute('DELETE FROM groups WHERE case_key=?',(case,))
+                    pipeline.store.connection.execute('DELETE FROM cases WHERE case_key=?',(case,))
+                    pipeline.store.connection.execute("UPDATE messages SET case_key=NULL,group_key=NULL,decision='classifying' WHERE case_key=?",(case,))
+            for member in members: _resume_source(pipeline,member)
+            prepared_here = False
+            try:
+                if pipeline._prepared_images is None and any(m.has_image for m in members) and getattr(pipeline.classifier,'supports_vision',False):
+                    pipeline._prepared_images = pipeline.attachments.prepare_images(topic,members)
+                    prepared_here = True
+                result = _create_single(pipeline,source,topic,decision,originals,members=members)
+            finally:
+                if prepared_here:
+                    pipeline._prepared_images.close(); pipeline._prepared_images = None
+            if result.decision == 'error': raise RulesHalt('unresolved followup effect; Owner inspection required')
+    else:
+        result = Decision('chat' if decision.state == 'CHAT' else 'pending_review','rule',case_key=topic,reason=decision.rule)
+        if decision.state == 'CHAT':
+            for member in originals: pipeline.store.finish(member,result)
+            pending.close(topic,'CLOSED')
+        else:
+            pipeline.store.finish(message,result)
+            if decision.state == 'NEED_INFO': _question(pipeline,source,topic,decision)
+    pending.finish_source_followup(message,topic,result)
+    return result
+
+
 def _process_existing_topic(pipeline,message,topic,asked,*,is_ops):
     from .models import Decision
     from .store import _to_message
@@ -2197,9 +2412,11 @@ def _escalate(pipeline, source, topic):
 
 def sweep(pipeline, *, exclude_chat_ids=frozenset()):
     from .store import _to_message
+    from .rules_pending_store import RulesHalt
     pending=pipeline.rules_pending
-    pending.expire_due(pipeline.rules_snapshot.limits['pending_expiry_days'])
+    pending.finish_source_confirmations()
     results=[]
+    pending.expire_due(pipeline.rules_snapshot.limits['pending_expiry_days'])
     for topic in pending.hold_topics():
         refs=pending.sources(topic)
         if not refs: continue
@@ -2210,6 +2427,7 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
             if any(row is None for row in rows): continue
             result=_process_batch(pipeline,[_to_message(row) for row in rows],topic)
             if result is not None: results.append(result)
+            pending.finish_source_confirmations()
             continue
         anchor=pipeline.store.get(*pairs[0])
         if anchor is None: continue
@@ -2232,6 +2450,7 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
         row=pipeline.store.get(*pairs[-1])
         if row is None: continue
         message=_to_message(row)
+        pending.release_source_confirmation(message)
         result=(_process_ops_reply(pipeline,message) if message.chat_id == pipeline.config.telegram.ops_chat_id
                 else _process_batch(pipeline,[message]) if pipeline.rules_snapshot.extensions
                 else _process_source_reply(pipeline,message) if message.reply_to_id is not None
@@ -2239,6 +2458,22 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
         if message.reply_to_id is not None and pipeline.rules_snapshot.extensions and result is not None and result.decision != 'pending_review':
             pending.close(topic,'CLOSED')
         if result is not None: results.append(result)
+        pending.finish_source_confirmations()
+    # Preserve the original expiry -> HOLD order. Replays are independent work;
+    # queued members belong to the worker, which shares Pipeline's lock here.
+    for chat_id,message_id in pending.source_followup_replays():
+        if chat_id in exclude_chat_ids: continue
+        try:
+            message = _to_message(pipeline.store.get(chat_id,message_id))
+            checkpoint = pending.source_followup_checkpoint(message)
+            states=[pipeline.store.get(chat,mid)['decision'] for _,chat,mid in checkpoint[0]['sources']]
+            if 'queued' in states and 'error' not in states: continue
+            results.append(_complete_source_followup(pipeline,message,checkpoint))
+        except RulesHalt:
+            raise
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('Source followup replay deferred chat_id=%s message_id=%s',chat_id,message_id)
     return results
 
 

@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.31 · **Updated**: 2026-11-10 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.35 · **Updated**: 2026-11-11 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -183,7 +183,17 @@ Một incident có thể có nhiều biểu hiện trong cùng hành trình: ả
 
 Case user xác nhận ngày 2026-10-16: ảnh `COMMON_VALIDATION_ERROR` + “Kiểu nầy chết luôn” + “AI voice không gửi link booking” + “Khách vào web không book được luôn” là một incident booking. Tin login cũ là phạm vi khác; không lấy ảnh hoặc error text của nó để diễn giải ảnh booking mới. Reply xác nhận incident về tin ảnh đầu tiên. Ticket login/billing độc lập vẫn phải được giữ riêng nếu có yêu cầu mới tương ứng.
 
+Ngoại lệ rules mode cho **một tin nguồn không Reply** (Owner 2026-11-11: “Cùng người + model xác nhận”; “30 phút”; “Duyệt, chạy tiếp”): `questions.md` · `source_followup` chỉ xét khi không command theo `rules.COMMAND`/forward/document, biết sender và có đúng một topic cùng group `OPEN`, quyết định gần nhất `NEED_INFO` hoặc `MEDIA_ONLY`, không `batch:`, không `LEGACY_REVIEW`/`HOLD` hoặc inflight, không chứa document, có tin nguồn từ cùng sender và tin cuối chưa đủ `followup_window_minutes` (30 phút). MEDIA_ONLY chỉ gồm ảnh trần cùng sender/group; đếm candidate chung hai trạng thái. Các lọc local chạy trước. Cùng sender và thời gian chỉ chọn candidate; model phải trích lại toàn bộ nguồn cùng tin mới thành đúng một nhóm đủ mọi tin, với pixel thật của mọi ảnh trần, mới được nối và chạy readiness từ R1. Model split/lỗi/quá budget/thiếu pixel thì tin đi đường cũ, topic cũ không đổi nguồn, attempts, trạng thái hay notice. Owner vòng hai: “Không nối, đi đường cũ” cho status/analysis; extraction có STATUS/ANALYZE/lifecycle bị loại khỏi confirmation trước routing/review, kể cả ANALYZE thiếu task; không đổi thành unknown rồi nối im lặng. Không áp cho batch nhiều tin, APPEND, lifecycle hoặc đường ops Reply; không trao quyền sửa ticket cũ. Checkpoint trước confirmation chỉ thuộc tin mới; commit link và facts/replay plan cùng transaction SQLite để crash không để lại source thêm nửa chừng. Replay sau commit dùng facts đã lưu, không gọi model/ghép tin lần nữa; reservation side effect chưa rõ vẫn dừng theo cơ chế hiện hữu.
+
+Cửa sổ source_followup tính từ `received_at` của nguồn cuối tới `received_at` tin mới (không âm, nhỏ hơn 30 phút), không từ lúc xử lý: backlog không làm hai tin cách hàng giờ trở thành gần nhau. Mặc định bảo thủ vòng 5, chờ Owner xác nhận: riêng tin có team mention theo T3–T4 thì đi đường cũ, không confirmation; đường cũ trích intent và áp T2/F2 như trước. Không suy task chỉ từ dấu @; bug/feedback vẫn do rules hiện hữu quyết định.
+
+Checkpoint confirmation được bàn giao khi đường cũ đã ghi trạng thái bền vững, bao gồm HOLD; không để lại hai topic OPEN/HOLD cùng retry tin đó. Lượt confirmation không ăn vào số retry của đường cũ; mỗi sweep, escalation và notice phải giống trường hợp không có candidate. Replay giữ thứ tự expiry rồi HOLD hiện hữu trước khi chạy các plan link độc lập; một plan lỗi tạm thời không chặn các topic khác. Nhóm còn queued thuộc worker, worker xử lý cả nhóm đã commit dù nhận nguồn cũ trước. Plan DONE trả kết quả đã lưu cả sau đổi fingerprint; plan chưa hoàn tất vẫn kiểm fingerprint và giữ bảo vệ reservation external.
+
+Riêng plan `source-followup:` đã commit nhưng còn `PLANNED`: startup gate từ chối phục vụ nếu nguồn đã quarantine/error hoặc sẽ hết attempts khi recovery, nguồn/topic thiếu hay đổi, plan không kiểm được, claim thuộc operation khác, case/group có reservation hay membership sai, hoặc nguồn READY không còn khả dụng. Plan khỏe vẫn qua gate và replay đúng một ticket. Lỗi completion thông thường như OperationalError được quarantine và RulesHalt ngay trong worker; không đợi sweep 15 giây rồi restart loop. Process chết thuần túy vẫn giữ recovery khỏe. Gate chỉ nhận connection, không biết RulesSnapshot hiện hành: riêng fingerprint mismatch còn được phát hiện ở worker/sweep; Owner phải so fingerprint trước restart (TG-27).
+
 ### TG-06 — Đóng và chia topic
+
+Riêng candidate `source_followup` không được nối có thể dùng **hai decision turns** liên tiếp: confirmation rồi đường cũ. `Turn` mặc định 2 calls/40 giây, nhưng `split_and_extract` gọi `configure_rules_parts(1)` nâng trần rules mỗi turn thành `2*1+1 = 3` provider attempts/40 giây. Vì vậy trần cho nhánh này là **6 attempts/80 giây deadline model**; không phải trần wall-clock của tải ảnh/IO. Confirmation không split nhiều phần; SF1 loại document nên không dùng phần mở rộng `configure_document_work`. Mỗi request text theo `thinking.py`: local 8.000 byte, cloud 24.000 byte (pixel có ngân sách riêng). Nếu có turn bao ngoài thì chia sẻ budget của turn đó, không tự mua thêm lượt trong một turn. Đây là ngoại lệ có hai turn rõ ràng, không phải cam kết mọi luồng chỉ tốn hai model calls.
 
 Ở đường legacy, đóng theo thời gian idle, command hoặc đầy case. Ở đường autonomous, model trả partition NEW/CONTINUE/CLARIFY/CHAT/ANALYZE cùng readiness và canonical draft trong lượt ingress; khi ảnh mới không reply bị đề xuất chia nhiều nhóm, phải kiểm lại ngữ nghĩa kể cả không có candidate lịch sử trước khi lưu plan hoặc tạo issue. Host kiểm nguồn/target của bản đầu trước bước kiểm này. Model kiểm định nhận đủ bản nháp canonical không đáng tin cùng nguồn/pixel hiện tại, chỉ trả `reviews[{group_index,verdict}]` với từng index đúng một lần và verdict `approve/context/reject`. `approve` giữ nguyên bản nháp, nguồn, task và quyền đã được kiểm; `context` chỉ hạ toàn nhóm thành CHAT trung tính, không gửi lời hỏi hay giữ nội dung lỗi suy diễn của bản nháp. Một `reject`, đầu ra sai/thiếu coverage hoặc packet bắt buộc không vừa budget làm toàn batch pending, không ghi một phần các nhóm được chấp thuận. Bước kiểm không viết lại nội dung, thêm nguồn/target, nâng quyền hoặc gộp nhóm; phân nhóm đầu sai phải bị từ chối thay vì sửa ngầm. Luồng thường/tài liệu ngắn giữ hai model calls/40s; tiền xử lý tài liệu dài dùng ngân sách hữu hạn do host tính ở TG-14, không cấp thêm retry/fallback ngoài ngân sách chung. Thất bại báo technical một lần theo batch, không dùng plan chưa kiểm để ghi. Host kiểm lại toàn bộ kết quả trước lưu plan/POST, gồm opaque candidate, quyền Reply của chính nhóm, confidence, repository và partition; cached plan/recovery cũng kiểm lại quyền Reply, không dùng plan cũ để vượt quy tắc mới; mỗi source ID được hạch toán đúng một lần. Không coi một case luôn bằng một issue.
 
@@ -241,6 +251,10 @@ needs_human reply tin đầu topic với tối đa ba câu hỏi ngắn đã san
 
 Ngoại lệ pending do **vision partition technical failure**: mỗi component text chưa phân loại được lưu `pending_review`/reason `vision_partition_unresolved` và nhận notice `context_pending`, chưa tạo ticket hay gắn với image ticket. Notice yêu cầu reply tin/notice với đầy đủ intent hoặc xác nhận chỉ chat. Reply có exact same-chat pending+sent-notice proof mở intake mới ngay, không sửa kế toán case cũ hoặc cấp quyền cho followup ticket cũ. Bare image không có yêu cầu vẫn theo TG-15.
 
+Khi tin nguồn được nối theo `source_followup` (TG-05), giữ lịch sử hỏi của chính topic: chỉ hỏi trường chưa đạt `max_asks_per_field`; fallback đã hỏi thì im lặng nếu vẫn `NEED_INFO`. `READY` tạo một ticket chứa mọi tin, `CHAT` đóng, `MEDIA_ONLY` giữ pending. Dry-run không gửi notice.
+
+Plan followup bị `RulesHalt` là việc đối soát của Owner theo TG-27, không phải thiếu dữ kiện để hỏi lại user; không phát thêm câu hỏi/fallback nhằm chữa checkpoint bị kẹt.
+
 ### TG-13 — Reaction
 
 Command đủ điều kiện có heart khi nhận; topic issue có heart trước tạo và OK hand sau khi đã biết issue number. Waiting/followup không tự có reaction mới; /question không reaction. Dry-run có thể heart nhưng không OK hand. Config `telegram.source_reactions = false` tắt mọi reaction trong group nguồn (heart, OK hand, heart của command, cả trong dry-run); mặc định `true`; chỉ có hiệu lực sau khi restart listener. Tắt reaction không đổi nơi gửi tin chữ (rules mode: chỉ group ops). Owner 2026-11-05 yêu cầu tạm tắt cho tới khi sản phẩm go-live; việc đặt `false` trên máy chạy được ghi riêng trong bằng chứng deploy. Khi bật lại, bot không bù reaction cho tin đã xử lý xong lúc tắt; chỉ tin được quyết định muộn sau khi bật (pending được trả lời ở ops, case đóng bởi sweep, tin còn trong hàng đợi lúc restart) mới nhận reaction trên tin gốc cũ.
@@ -264,6 +278,8 @@ Proof phân biệt raw byte count/SHA256, extracted text count/SHA256 và kiểu
 Base prompt/schema/context vẫn≤8000 byte; lane tài liệu host giới hạn tổng text request serialize UTF-8 kể cả schema/metadata/JSON escaping≤49152 byte. Chỉ đếm trường thực sự gửi trên wire; metadata private như `_local_messages` không đi vào packet và không bị đếm lặp base64. Cloud và local fallback phải được kiểm riêng theo consent/redaction và giới hạn ảnh hiện có20MiB/75MiB; multipart sai dạng bị từ chối. Không có flag user/model tự nới trần. Luồng ngắn giữ tối đa2 attempts/40 giây. Với tài liệu dài, host cấp một Turn chung tối đa số phần+4 calls (≤20), deadline40+20×số phần giây (≤360s); chunk/routing/repair/review/fallback/followup đều tiêu cùng ngân sách, không reset theo phần. Lỗi đọc/quá trần/hết budget phải có reason cụ thể, không gán `provider_unavailable` khi chưa gọi provider và không yêu cầu mô tả lại tài liệu. Persist read/processing proof trước tác động GitHub; cache/resume kiểm lại proof và reservation. Không lưu raw file text vào log chung.
 
 ### TG-15 — Vision và ảnh thiếu ngữ cảnh
+
+Diễn giải câu Owner vòng hai “Thói quen của user sẽ gửi hình trần và ghi chat tiếp theo. Nên phải gom nhóm để gửi model phân tích chính xác” (cần Owner xác nhận cách diễn giải): rules mode xét cả ảnh trần trước → text sau, text NEED_INFO trước → ảnh sau, và nhiều ảnh trần → text. Tất cả vẫn qua `source_followup`: đúng một OPEN NEED_INFO/MEDIA_ONLY candidate cùng sender/group còn dưới 30 phút và model xác nhận một nhóm đủ nguồn. Với bất kỳ ảnh trần nào trong nhóm, provider phải hỗ trợ vision, ảnh được `prepare_images` chấp nhận và pixel thực sự có trong request confirmation thành công. Thiếu một pixel vì không vision, ảnh lỗi/quá lớn/tải lỗi hoặc vượt budget ảnh ⇒ không nối, giữ nguyên topic cũ; text đi topic mới, ảnh trần riêng vẫn R3 MEDIA_ONLY không gọi model. Ảnh trần không có candidate cũng giữ R3 không model call. Đây là xác nhận ngữ nghĩa bằng pixel, không phải gộp do cùng sender/adjacency; ảnh chưa xem làm “xác nhận của model” rỗng, trái TG-05.7/TG-15 nên không được dùng để nối.
 
 Phân tích ảnh ban đầu phụ thuộc provider/consent/fallback. Ảnh không caption và không yêu cầu có thể pending_review, không tự tạo ticket/hỏi. Vision lỗi hoặc partition mơ hồ của yêu cầu tạo needs_human; câu hỏi thuần túy về ảnh vẫn chat.
 
@@ -324,6 +340,8 @@ Lock thực thi hội thoại tách khỏi lock SQLite; không giữ DB lock tro
 Reserve notice một lần: sent/failed/reserved không tự resend. Recovery analysis được duyệt sửa đúng notice đã gửi, theo planned→reserved→done/ambiguous. Edit lỗi không fallback thành send mới; unknown edit cần operator kiểm tra.
 
 ### TG-27 — Recovery do operator
+
+Với `source-followup:` PLANNED bị chặn, giữ bot dừng và dùng bản sao SQLite nhất quán. Lệnh có sẵn `python -m tg_triage legacy-preflight --db <offline-copy>` cho inventory và recovery HOLD; `trace` tra nguồn/issue/notice với config trỏ tới bản sao, nhưng cả hai không hiển thị JSON plan followup. Repo chưa có CLI chuyên xem payload hoặc repair plan này. Owner inspect bằng SQLite `mode=ro`: `rules_batches` (header/fingerprint), `rules_batch_groups.plan`, `rules_sources`, trạng thái/attempts/issue metadata của `messages`, `rules_inflight_topics`, reservation trong `cases`/`groups` và notice/issue đã gửi. So nguồn/ref/membership đã lưu và fingerprint header với `check-config` của cấu hình sẽ chạy. Xác minh outcome external, phục hồi nguồn/metadata từ bằng chứng hoặc duyệt reconciliation/bản sửa trước khi restart; chỉ tiếp tục khi gate CLEAR và fingerprint phù hợp. Không xóa claim, reset attempts/reservation hay sửa JSON để vượt gate; `legacy-transition`/`legacy-release` không repair plan followup. Giới hạn: gate không có running RulesSnapshot nên không chặn riêng fingerprint mismatch trước khi worker/sweep gặp plan.
 
 ensure_followup_job chỉ seed một stored followup đã chứng minh một lần, không global backfill. retry_followup_analysis chỉ cho terminal provider_unavailable, zero operations/siblings/split plan, không active root job, repo và notice chính xác; lưu audit bất biến. Không rearm original case hay retry POST ambiguous.
 
@@ -661,6 +679,22 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/rules_intake.py",
           "symbol": "_process_existing_topic"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "_process_source_followup"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_pending_store.py",
+          "symbol": "RulesPendingStore.topic_for_source_followup"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_pending_store.py",
+          "symbol": "RulesPendingStore.commit_source_followup"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "_complete_source_followup"
         }
       ],
       "tests": [
@@ -695,6 +729,86 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_rules_intake.py",
           "symbol": "RulesIntakeFactsTests.test_batch_reply_reuses_open_pending_and_original_evidence"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_link_ready_creates_exactly_one_ticket_with_both_messages"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_model_splits_new_topic_old_snapshot_and_attempts_byte_identical"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_readonly_intents_preserve_old_topic_and_match_different_sender"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_confirmation_death_leaves_recoverable_new_hold_old_unchanged"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_committed_link_replays_without_model_or_duplicate_effect"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_provider_down_multi_sweep_matches_different_sender"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_analyze_without_task_multi_sweep_matches_different_sender"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_confirmation_death_retry_hold_multi_sweep_matches_different_sender"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_request_too_large_multi_sweep_matches_different_sender"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_team_request_matches_different_sender_without_confirmation"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_sweep_yields_queued_committed_group_to_worker_and_expires"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_transient_replay_failure_is_isolated_after_expiry_and_hold"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_received_timestamps_control_window_despite_processing_backlog"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_done_checkpoint_survives_rules_fingerprint_change"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_followup_operational_error_halts_worker_and_restart_gate_immediately"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_followup_sources_change_halts_gate_and_worker_before_sweep"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_healthy_followup_plan_passes_gate_and_replays_once"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_followup_fingerprint_comparison_remains_at_worker_and_sweep"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_followup_gate_rejects_other_unreplayable_stored_states"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_no_followup_gate_and_ambiguity_match_head_for_all_batch_states"
         }
       ],
       "prompts": [
@@ -735,6 +849,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/rules_intake.py",
           "symbol": "evaluate_batch"
+        },
+        {
+          "path": "listener/src/tg_triage/thinking.py",
+          "symbol": "Turn.configure_rules_parts"
         }
       ],
       "tests": [
@@ -825,6 +943,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_rules_intake.py",
           "symbol": "RulesIntakeFactsTests.test_batch_validates_all_groups_before_returning_any_decisions"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_not_linked_confirmation_and_old_path_have_separate_bounded_turns"
         }
       ],
       "prompts": [
@@ -1123,6 +1245,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/rules_pending_store.py",
           "symbol": "RulesPendingStore.reserve_attempt"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_pending_store.py",
+          "symbol": "RulesPendingStore.reserve_notice"
         }
       ],
       "tests": [
@@ -1161,6 +1287,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_rules_intake.py",
           "symbol": "RulesIntakeFactsTests.test_hold_retries_survive_restart_and_escalate_once"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_link_need_info_sends_no_second_fallback"
         }
       ]
     },
@@ -1376,6 +1506,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/pipeline.py",
           "symbol": "Pipeline._unseen_tolerated"
+        },
+        {
+          "path": "listener/src/tg_triage/rules_intake.py",
+          "symbol": "_FollowupConfirmationProvider._ask"
         }
       ],
       "tests": [
@@ -1422,6 +1556,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_image_case_limit.py",
           "symbol": "ImageCaseLimitTests.test_t8_followup_over_vision_budget_clarifies_without_upload"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_image_first_text_second_seen_image_ready_uploads_one_ticket"
+        },
+        {
+          "path": "listener/tests/test_source_followup.py",
+          "symbol": "SourceFollowupTests.test_unseen_bare_image_does_not_link_or_call_model"
         }
       ]
     },
@@ -2288,7 +2430,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "6c7fad4793eb9cfa716eefc506143311199b9f70b8830376915799548bd95fa6",
     "listener/src/tg_triage/config.py": "33464c0643bfb4a86a7be648be979e6899ea340b54b302d7b41cd59e10a616d8",
-    "listener/src/tg_triage/decision_rules.py": "53e8d90006b9644822ff95a1cdd43da34bb8639dc630423ac2a9f7fac030a125",
+    "listener/src/tg_triage/decision_rules.py": "581bc1f97c0408054ab9687796962df5204cc491738bb9b37fc6cf78d5510367",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "b3568ca6f772ed617f3d354ef32a04973e00ec02e375b8bfcfe14347a7c7e1b3",
     "listener/src/tg_triage/followup_model.py": "898ae428bc0e5101550665853ed66dbfa0a8324fcc2ba4df18f4ab33d513d934",
@@ -2314,8 +2456,8 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "d275400dfc0c422dedfd8dd42aaec2c26343cc6079c1c14a8e7bc785dcdd9f04",
-    "listener/src/tg_triage/rules_intake.py": "11ba4dfb18579a6c4ee4af51545f9971e15add9a9c23ebda79218cc966b5240f",
-    "listener/src/tg_triage/rules_pending_store.py": "53c7361bde4cb26b1d835333443792149bc9108ef52d14191a8e202888547a2a",
+    "listener/src/tg_triage/rules_intake.py": "38745ca7e663f9508e9b418fcc3d1d0a1fb8b2410fffb8044fadcdacd03962dd",
+    "listener/src/tg_triage/rules_pending_store.py": "dbc1a64a90b69ac4167fd8caad4f4e3f09c17fa500f9d9cb10fde2cb3663ac3d",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
     "listener/src/tg_triage/telegram_io.py": "178462cb0a564973ab724aa3ec4ca8a4b56752d9c469585801352f4ef00726a3",
@@ -2381,6 +2523,10 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.35 | 2026-11-11 | Codex / owner AlexChu | Owner “Sửa thêm vòng 7”: questions v8 SF4, examples v20 SF30–SF34. Gate chỉ đọc chặn plan followup không thể replay; ambiguity dừng worker ngay, lỗi completion được quarantine trước RulesHalt. Plan khỏe vẫn recovery, các batch khác đối chiếu HEAD. Fingerprint mismatch chỉ worker/sweep vì gate không nhận RulesSnapshot; TG-05/TG-12/TG-27 ghi giới hạn và inspection bằng công cụ hiện có, chưa có CLI repair plan. Không sửa telegram_io/legacy_preflight hoặc schema; trace/hash và test mapping cập nhật. |
+| v1.16.34 | 2026-11-11 | Codex / owner AlexChu | Review vòng 5: bàn giao checkpoint cho cả HOLD, không retry kép; cô lập replay sau expiry/HOLD và nhường queued cho worker; cửa sổ theo received_at; DONE trả stored result trước fingerprint. Mặc định team mention T3–T4 không confirmation chờ Owner xác nhận. questions v7, examples v19 SF1–SF29 có ánh xạ ID/test rõ; test nhiều sweep đối chiếu sender khác và crash/recovery. Không đổi schema, pending logic bên trong batch hoặc ops reply. Trace/hash cập nhật. |
+| v1.16.33 | 2026-11-11 | Codex / owner AlexChu | Review vòng 4: questions v6 SF1–SF5, states v5 tham chiếu đủ SF1–SF4, examples v18 SF1–SF24. Không nối STATUS/ANALYZE/lifecycle; mở MEDIA_ONLY nhưng bắt buộc mọi pixel ảnh trần có trong confirmation; loại document, dùng rules.COMMAND. Checkpoint riêng trước model và transaction link/replay trên bảng sẵn có, không đổi schema. TG-06 ghi trần hai turns 6 attempts/80 giây; TG-15 ghi diễn giải ảnh cần Owner xác nhận. Test readonly, vision/upload, crash/replay/rollback và coverage ví dụ. Không sửa lỗi ops L1 CHAT ngoài scope. Trace/hash runtime cập nhật. |
+| v1.16.32 | 2026-11-11 | Codex / owner AlexChu | Owner: “Cùng người + model xác nhận”; “30 phút”; “Duyệt, chạy tiếp”. TG-05 thêm ngoại lệ nối tin đơn không Reply vào đúng một OPEN NEED_INFO topic sau model xác nhận; TG-12 giữ lịch sử hỏi, không lặp fallback. `questions.md` v5, `states.md` v4, `examples.md` v17; source_followup SF1–SF3, limit followup_window_minutes và ca SF1–SF9. Không đổi batch nhiều tin, ops L1–L4, APPEND/lifecycle. Rules fingerprint đổi; trace runtime cập nhật cho decision_rules, rules_pending_store, rules_intake; test_source_followup dùng fake, không network. |
 | v1.16.22 | 2026-11-06 | Claude / owner AlexChu | Owner: “Duyệt cả ba”. `readiness.md` v7 bảng `chat_only` C1–C4 (khóa hash) + `chat_words` (5 nhóm, 52 từ) ⇒ luật `F4` trước model; `facts.md` v5 bước N6 (khóa hash) + 12 cụm `work` chung chung; `examples.md` v8 `chat_cases` CC1–CC12, G11 đổi thành chung chung, thêm G12–G15. Code `decision_rules.py` (`normalize`, `chat_only_text`), `rules_intake.py` (`_local_rule` F4). Review GATE 0b CHANGES_REQUESTED (ghi rõ bỏ giùm/giúp khỏi N6, câu rủi ro cũ mâu thuẫn, câu hỏi có `?` bị F4 nuốt) đã sửa: C3 thêm điều kiện không có `?`, CC13–CC14. Rules fingerprint đổi. Test `RulesChatOnlyTests`, `test_chat_*`, `test_normalize_*`. Không đổi R1–R13, F1–F3, prompt model. |
 | v1.16.23 | 2026-11-09 | Claude / owner AlexChu | Owner: “cập nhật thêm context đùa giỡn dựa trên bối cảnh chung trên group để tránh log ticket sai” (live #118, #119). `readiness.md` v8 bảng `banter_only` B1–B5 (khóa hash) + `banter_signals` ⇒ luật `F5` trước model; `facts.md` v6 mục 5 hướng dẫn model đọc `read_only_context`; `examples.md` v9 `banter_cases` BC1–BC8. Code `decision_rules.py` (`has_laugh`, `banter_text`, `banter_context`), `rules_intake.py` (`_local_rule` F5, `_banter_history`). Rules fingerprint đổi. Test `RulesBanterTests`, `test_banter_*`. Không đổi R1–R13, F1–F4, prompt model. Giới hạn đã biết: #118 (không có dấu cười) vẫn do model quyết, không được đảm bảo. Review độc lập GATE 0b CHANGES_REQUESTED đã sửa: bỏ 😅 🙃, tin cười về sự cố không tính vào bối cảnh, cửa sổ 15 phút, thêm từ `vấn đề` không dấu/viết tắt/tiền, BC9–BC12, log cảnh báo khi không đọc được lịch sử. Owner đã duyệt: “Duyệt F5” (2026-11-09). Trace runtime: hash `decision_rules.py`, `rules_intake.py` cập nhật theo bản này.
 | v1.16.24 | 2026-11-09 | Claude / owner AlexChu | Owner: làm phương án A+B cho #118. `facts.md` v7 bảng `group_mood` (note + ví dụ X26, X27); `examples.md` v10 thêm X26, X27; `rules_extraction.py` thêm `group_mood`, `min_ago`, `laugh` vào gói tin khi nhóm đang đùa, thứ tự cắt khi quá hạn mức: ví dụ, tin context, `group_mood`; `decision_rules.py` thêm `banter_stats`, `mood_note`, `mood_examples`. Rules fingerprint đổi; trace runtime cập nhật hash `decision_rules.py`, `rules_extraction.py`. Test `RulesGroupMoodPacketTests`, `test_group_mood_*`. Không đổi R1–R13, F1–F5, `banter_only`. Không đảm bảo bắt #118: model vẫn là người quyết.

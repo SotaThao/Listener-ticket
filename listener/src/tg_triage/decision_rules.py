@@ -14,9 +14,9 @@ SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"group_mood": "Khóa|Giá trị", "fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
     "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "reply_chat": "#|Bước", "image_split": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
-    "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa"},
+    "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa", "source_followup": "#|Bước"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung", "source_followup_cases": "#|Tin|Bối cảnh|Kết quả|Luật"},
 }
 PREFILTER_RULE = "F1"
 PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
@@ -315,7 +315,7 @@ class RulesSnapshot:
             encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in t['facts'][name]).encode('utf8')
             if hashlib.sha256(encoded).hexdigest() != supported[name]: t['facts'][name][0].fail('unsupported algorithm definition')
         limits = {}
-        for file, expected in [('states', {'pending_expiry_days','hold_max_retries'}), ('facts', {'max_value_chars'}), ('questions', {'max_fields_per_ask','max_asks_per_field'})]:
+        for file, expected in [('states', {'pending_expiry_days','hold_max_retries'}), ('facts', {'max_value_chars'}), ('questions', {'max_fields_per_ask','max_asks_per_field','followup_window_minutes'})]:
             items = unique(t[file]['limits'], 'Khóa')
             if set(items) != expected: t[file]['limits'][0].fail('invalid limits')
             for k,r in items.items():
@@ -323,6 +323,11 @@ class RulesSnapshot:
                 if not re.fullmatch(r'[1-9][0-9]*', v): r.fail('invalid positive limit')
                 limits[k] = int(v)
         self.limits = MappingProxyType(limits)
+        followup = t['questions']['source_followup']
+        encoded = '\n'.join('| ' + ' | '.join(r.cells.values()) + ' |' for r in followup).encode('utf8')
+        if ([r.cells['#'] for r in followup] != ['SF1', 'SF2', 'SF3', 'SF4', 'SF5'] or
+                hashlib.sha256(encoded).hexdigest() != 'e02898c93f334822167550733eff9e8509221d29ae136eb3b59eb747008dad28'):
+            followup[0].fail('unsupported source followup definition')
         def check_condition(r, col, domain, special='*'):
             if r.cells[col] == special: return
             if not set(r.values(col)) <= set(domain): r.fail(f'{col}: unknown value')
