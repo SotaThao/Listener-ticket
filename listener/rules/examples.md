@@ -1,5 +1,81 @@
-<!-- rule-file: examples · version 16 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 20 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
+
+## Bảng: source_followup_cases
+
+Các ca SF chỉ áp cho tin đơn ở rules mode (`questions.md` · `source_followup`); không gửi bảng này cho model. Các tin và sender trong bảng đều giả định.
+
+| # | Tin | Bối cảnh | Kết quả | Luật |
+|---|---|---|---|---|
+| SF1 | “POS kẹt giấy” | Cùng người gửi, một topic OPEN NEED_INFO, sau 5 phút; model gộp đủ nguồn, intent bug có object và observed | Nối, một ticket đủ hai tin `READY` | SF1+SF2+SF5, R9 |
+| SF2 | “chỗ đó vẫn vậy” | Cùng người gửi, một topic OPEN NEED_INFO, sau 5 phút; model gộp đủ nguồn nhưng vẫn unknown; fallback đã hỏi | Nối, vẫn `NEED_INFO`, không hỏi lại | SF1+SF2+SF5, R13 |
+| SF3 | “thêm mục xuất file” | Candidate hợp lệ nhưng model tách thành hai nhóm | Topic mới; topic cũ nguyên trạng kể cả attempts, không notice cho topic cũ | SF2 |
+| SF4 | “POS kẹt giấy” | Khác người gửi với mọi tin nguồn của topic | Topic mới | SF1 |
+| SF5 | “POS kẹt giấy” | Cùng người gửi nhưng tin cuối đã 31 phút (từ 30 phút trở lên đều hết cửa sổ) | Topic mới | SF1 |
+| SF6 | “POS kẹt giấy” | Có hai topic OPEN NEED_INFO cùng người gửi còn trong cửa sổ | Topic mới | SF1 |
+| SF7 | Reply “POS kẹt giấy” | Reply thật vào nguồn pending | Theo đường source Reply hiện hữu | SF1 |
+| SF8 | “ok anh” | Cùng người gửi với một pending còn trong cửa sổ | `CHAT` trước khi tìm candidate, không gọi model | F4 |
+| SF9 | “chỗ đó vẫn vậy” | Candidate hợp lệ, model gộp đủ nguồn, dry-run | Trả pending_review hoặc dry_run_issue theo readiness, không gửi notice | SF5 |
+| SF10 | “ticket này tới đâu?” | Cùng sender có candidate, extraction là status | Không nối, topic cũ nguyên trạng; kết quả/notice STATUS giống sender khác | SF2 |
+| SF11 | “phân tích phần bị cắt” | Cùng sender có candidate, extraction analyze có task | Không nối, chạy ANALYZE theo đường cũ | SF2 |
+| SF12 | “phân tích giúp” | Extraction analyze không task, extensions; chạy nhiều sweep | Không nối; một HOLD topic, số lần gọi model/retry/escalation/notice từng sweep giống sender khác, không đổi thành R13 trên topic cũ | SF2+SF4 |
+| SF13 | Ảnh trần rồi “POS kẹt giấy” | Một MEDIA_ONLY cùng sender còn cửa sổ; provider vision nhận pixel; model một nhóm READY | Một ticket có cả ảnh lẫn text và ảnh đính kèm | SF1+SF2+SF3+SF5 |
+| SF14 | Ảnh trần rồi text | Provider không vision | Text thành topic mới; MEDIA_ONLY cũ nguyên trạng | SF3 |
+| SF15 | Text rồi ảnh trần | NEED_INFO còn cửa sổ, pixel được gửi, model một nhóm | Nối và áp readiness | SF3+SF5 |
+| SF16 | Text rồi ảnh trần | Pixel thiếu do không vision/tải lỗi/sai ảnh/quá lớn | Không nối; ảnh riêng MEDIA_ONLY R3 không model call cho ảnh | SF3 |
+| SF17 | Hai ảnh trần rồi text | Cùng sender, mọi pixel đều gửi; model xác nhận mỗi lượt | Hai ảnh cùng MEDIA_ONLY rồi một ticket đủ ảnh và text | SF1+SF3+SF5 |
+| SF18 | Tin có document | Có một candidate cùng sender | Không xét nối; đường cũ để Reply sau không bị HOLD vì document mới được nối | SF1 |
+| SF19 | “/unknown payload” | Không khớp rules.COMMAND, có candidate hợp lệ | Được xét confirmation như text thông thường | SF1 |
+| SF20 | Confirmation đang gọi model thì process chết | Topic mới có HOLD checkpoint, topic cũ chưa ghi | Gate startup chấp nhận; replay/sweep an toàn, topic cũ nguyên trạng | SF4 |
+| SF21 | Link commit rồi process chết trước completion hoặc trước đánh DONE | Replay plan đã lưu | Không ghép tin hai lần, không thêm ticket/notice, không còn inflight claim | SF4 |
+| SF22 | Ảnh trần thứ hai | Vượt giới hạn ảnh của prepare_images nên một ảnh không có pixel | Không nối, không dùng cùng sender để xác nhận ảnh chưa xem | SF3 |
+| SF23 | Text mới | Đồng thời có một NEED_INFO và một MEDIA_ONLY cùng sender hợp lệ | Hai candidate đếm chung nên topic mới | SF1 |
+| SF24 | Extraction có lifecycle | Có candidate hợp lệ | Không nối, đi đường cũ | SF2 |
+| SF25 | “@tuan_dev check log dang nhap giup anh” | Riêng tin có team mention T3–T4; đường cũ trích task | Không confirmation; CHAT/F2 giống sender khác; mặc định chờ Owner xác nhận | SF1, F2 |
+| SF26 | Hai tin cách nhau hai giờ, xử lý liên tiếp sau downtime | last_at mới nhưng received_at hai tin cách nhau ngoài cửa sổ | Không nối; nếu received_at chỉ cách 5 phút thì vẫn được xét dù xử lý trễ | SF1 |
+| SF27 | Provider lỗi hoặc request quá lớn | Có candidate; đường cũ HOLD/escalate, hoặc chết giữa confirmation rồi retry HOLD | Không còn HOLD checkpoint phụ; nhiều sweep có trạng thái/retry/notice giống sender khác ở cả hai mode | SF4 |
+| SF28 | Link READY rồi chết trong create_single | Restart requeue cả hai nguồn, sweep chạy trước worker; hoặc replay lỗi tạm thời | Expiry/HOLD vẫn chạy, sweep không văng lỗi; nhường queued cho worker, retry replay sau, đúng một ticket | SF4 |
+| SF29 | Tin đã có checkpoint DONE được replay sau đổi rules | Fingerprint mới khác fingerprint kết quả đã hoàn tất | Trả kết quả đã lưu, không gọi model/tạo ticket/notice lần nữa | SF4 |
+| SF30 | Một OperationalError khi resume link READY | Lỗi thông thường trong completion, không phải process chết | Worker quarantine và RulesHalt ngay; startup gate chặn, không chờ sweep hay restart loop | SF4 |
+| SF31 | Hai lần process chết khi replay | Nguồn đã hết attempts hoặc thành error/quarantine | Gate RulesHalt trước khi phục vụ; không reset attempts để chạy lại | SF4 |
+| SF32 | Nguồn/claim/case của plan thay đổi hoặc không còn khả dụng | Plan source-followup PLANNED không thể replay an toàn | Gate và worker chặn, Owner inspect ledger và outcome; không tự bỏ claim/reservation | SF4 |
+| SF33 | Process chết sau commit link, nguồn và reservation còn sạch | PLANNED khỏe | Gate OK, ambiguity False, replay đúng một ticket không gọi model lại; batch khác giữ hành vi HEAD | SF4 |
+| SF34 | Fingerprint plan khác rules đang chạy | Gate chỉ có connection, không có running RulesSnapshot | Gate không so fingerprint; worker/sweep RulesHalt, Owner đối chiếu header với check-config trước restart | SF4 |
+
+<!-- SF-test SF1: test_link_ready_creates_exactly_one_ticket_with_both_messages -->
+<!-- SF-test SF2: test_link_need_info_sends_no_second_fallback -->
+<!-- SF-test SF3: test_model_splits_new_topic_old_snapshot_and_attempts_byte_identical -->
+<!-- SF-test SF4: test_different_sender_creates_new_topic -->
+<!-- SF-test SF5: test_older_than_window_and_exact_boundary_create_new_topic -->
+<!-- SF-test SF6: test_two_matching_open_topics_create_new_topic -->
+<!-- SF-test SF7: test_reply_uses_existing_path_even_with_other_sender_after_window -->
+<!-- SF-test SF8: test_courtesy_filtered_before_candidate_or_model -->
+<!-- SF-test SF9: test_dry_run_sends_nothing_for_need_info_or_ready -->
+<!-- SF-test SF10: test_readonly_intents_preserve_old_topic_and_match_different_sender -->
+<!-- SF-test SF11: test_readonly_intents_preserve_old_topic_and_match_different_sender -->
+<!-- SF-test SF12: test_analyze_without_task_multi_sweep_matches_different_sender -->
+<!-- SF-test SF13: test_image_first_text_second_seen_image_ready_uploads_one_ticket -->
+<!-- SF-test SF14: test_image_first_without_vision_text_is_new -->
+<!-- SF-test SF15: test_text_first_seen_image_is_linked -->
+<!-- SF-test SF16: test_rejected_or_missing_image_is_not_linked,test_unseen_bare_image_does_not_link_or_call_model -->
+<!-- SF-test SF17: test_two_bare_images_then_text_are_confirmed_together -->
+<!-- SF-test SF18: test_document_is_excluded_before_confirmation -->
+<!-- SF-test SF19: test_slash_text_that_is_not_command_can_link -->
+<!-- SF-test SF20: test_confirmation_death_leaves_recoverable_new_hold_old_unchanged,test_confirmation_death_retry_hold_multi_sweep_matches_different_sender -->
+<!-- SF-test SF21: test_committed_link_replays_without_model_or_duplicate_effect -->
+<!-- SF-test SF22: test_image_budget_does_not_allow_unseen_bare_image_link -->
+<!-- SF-test SF23: test_need_info_and_media_only_count_together_for_ambiguity -->
+<!-- SF-test SF24: test_lifecycle_confirmation_is_explicitly_not_linked -->
+<!-- SF-test SF25: test_team_request_matches_different_sender_without_confirmation -->
+<!-- SF-test SF26: test_received_timestamps_control_window_despite_processing_backlog -->
+<!-- SF-test SF27: test_provider_down_multi_sweep_matches_different_sender,test_request_too_large_multi_sweep_matches_different_sender,test_confirmation_death_retry_hold_multi_sweep_matches_different_sender -->
+<!-- SF-test SF28: test_sweep_yields_queued_committed_group_to_worker_and_expires,test_transient_replay_failure_is_isolated_after_expiry_and_hold -->
+<!-- SF-test SF29: test_done_checkpoint_survives_rules_fingerprint_change -->
+<!-- SF-test SF30: test_followup_operational_error_halts_worker_and_restart_gate_immediately -->
+<!-- SF-test SF31: test_two_crashes_quarantined_link_member_halts_instead_of_deferring -->
+<!-- SF-test SF32: test_followup_sources_change_halts_gate_and_worker_before_sweep,test_followup_gate_rejects_other_unreplayable_stored_states -->
+<!-- SF-test SF33: test_healthy_followup_plan_passes_gate_and_replays_once,test_no_followup_gate_and_ambiguity_match_head_for_all_batch_states -->
+<!-- SF-test SF34: test_followup_fingerprint_comparison_remains_at_worker_and_sweep -->
 
 Bộ test cố định (`listener/tests/test_rules_markdown.py`): cho **dữ kiện** đầu vào, áp `facts.md` → `readiness.md` → `questions.md` phải ra đúng **Kết quả**, **Luật**, **Hỏi** — không phụ thuộc model. Mỗi luật R1–R13 có ít nhất một ví dụ.
 

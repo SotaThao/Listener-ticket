@@ -112,7 +112,7 @@ Code áp theo **đúng thứ tự** sau, bước đầu tiên khớp thì dừng
 | TG-05.4 | Hết 60s **không** làm context hết hạn: tin sau vẫn phải đối chiếu pending, ticket, reply chain, câu hỏi đã gửi. | `autonomous.py` |
 | TG-05.5 | **Gộp** khi các tin cùng mô tả một incident: ảnh lỗi + triệu chứng + tác động + câu cảm thán đi kèm. | prompt |
 | TG-05.6 | **Tách** khi là việc độc lập, kể cả cùng người, cùng phút. | prompt |
-| TG-05.7 | MUST NOT gộp/tách **chỉ vì** cùng sender, gần thời gian, nằm kề nhau, giống keyword. | prompt + `pipeline.py:validate_partition` |
+| TG-05.7 | MUST NOT gộp/tách **chỉ vì** cùng sender, gần thời gian, nằm kề nhau, giống keyword. Ngoại lệ rules mode cho tin đơn không Reply: `questions.md` · `source_followup` chọn đúng một OPEN NEED_INFO/MEDIA_ONLY topic cùng group/cùng sender còn dưới 30 phút, loại batch/LEGACY_REVIEW/HOLD/inflight/document; chỉ nối sau model xác nhận một nhóm đủ mọi nguồn và đã nhận pixel mọi ảnh trần. Split/lỗi/quá budget/thiếu pixel hoặc STATUS/ANALYZE/lifecycle giữ nguyên topic cũ và đi đường cũ. Source_followup: đo khoảng received_at nguồn cuối đến tin mới; team mention T3–T4 đi đường cũ, không confirmation (mặc định chờ Owner xác nhận). | prompt + `pipeline.py:validate_partition`, `rules_intake.py:process` |
 | TG-05.8 | Câu cảm thán đứng một mình ("Kiểu nầy chết luôn") MUST NOT thành bug riêng; không suy ra "hệ thống treo". | prompt |
 | TG-05.9 | MUST NOT khẳng định các triệu chứng cùng root cause khi chưa có dữ kiện. | prompt |
 | TG-16.1 | Chỉ được **bổ sung vào ticket/pending cũ** khi nhóm tin mới có **Reply thật** tới nguồn cũ hoặc tới bot notice đã ánh xạ về nguồn đó. | `autonomous.py`, `followups.py` |
@@ -121,7 +121,7 @@ Code áp theo **đúng thứ tự** sau, bước đầu tiên khớp thì dừng
 | TG-16.4 | Reply vào ticket cũ nhưng nội dung là việc khác ⇒ ticket mới riêng (có thể gắn liên quan). Reply không tự chứng minh cùng phạm vi. | prompt + host |
 | TG-06.1 [A] | Model trả partition **NEW / CONTINUE / CLARIFY / CHAT** cho từng nhóm. | `ingress_model.py` |
 | TG-06.2 | Mỗi source ID MUST xuất hiện **đúng một lần**. Thiếu, trùng hoặc ID lạ ⇒ partition bị loại. | `pipeline.py:validate_partition` |
-| TG-06.3 | Ảnh mới không reply mà bị chia nhiều nhóm ⇒ MUST kiểm lại ngữ nghĩa trong cùng budget trước khi lưu plan/tạo issue. Kiểm thất bại ⇒ pending + báo lỗi kỹ thuật một lần. | `thinking.py:preflight_initial` |
+| TG-06.3 | Ảnh mới không reply mà bị chia nhiều nhóm ⇒ MUST kiểm lại ngữ nghĩa trong cùng budget trước khi lưu plan/tạo issue. Kiểm thất bại ⇒ pending + báo lỗi kỹ thuật một lần. Riêng source_followup không nối dùng hai turns (confirmation + đường cũ), mỗi turn rules một phần tối đa 3 provider attempts/40 giây, tổng trần 6 attempts/80 giây deadline model, không gồm tải ảnh/IO; local 8.000 và cloud 24.000 byte text/request. | `thinking.py:preflight_initial`, `thinking.py:Turn.configure_rules_parts` |
 | TG-06.4 | Cached plan / recovery MUST kiểm lại quyền Reply; không dùng plan cũ để vượt rule mới. | `autonomous.py` |
 | TG-06.5 | Text bị cắt có `text_truncated`; model MUST NOT coi trích đoạn là toàn bộ. Context bắt buộc không vừa ⇒ báo lỗi budget, không đoán. | `thinking.py:pack_messages` |
 | TG-19.1 | Xác nhận người dùng (binding) lưu tách khỏi giả thuyết model; sống qua trim/restart. | `followup_store.py`, `topic_store.py` |
@@ -147,7 +147,7 @@ Code áp theo **đúng thứ tự** sau, bước đầu tiên khớp thì dừng
 | TG-14.7 | Ảnh đã upload / đang reserve / không rõ ⇒ MUST NOT upload lại. MUST NOT đọc lại pixel ảnh cũ chỉ để sửa phạm vi. | `attachments.py`, `followups.py` |
 | TG-14.8 | Caption "bảng này / mode này" MUST được giải nghĩa bằng heading và option đang chọn **nhìn thấy trong ảnh**, ghi rõ trong title/summary. Không rõ trong ảnh ⇒ nói rõ và hỏi. | prompt |
 | TG-14.9 | Pixel của tin nào chỉ thuộc tin đó. MUST NOT dùng ảnh/lỗi của ticket cũ để diễn giải ảnh mới. | prompt |
-| TG-15.1 | Ảnh **không caption, không yêu cầu** ⇒ `pending_review`: không tạo ticket. [L] không hỏi. [A] hỏi ý định sau khi gom. | `pipeline.py:_vision_fallback` |
+| TG-15.1 | Ảnh **không caption, không yêu cầu** ⇒ `pending_review`: không tạo ticket. [L] không hỏi. [A] hỏi ý định sau khi gom. Rules mode: ảnh riêng không candidate vẫn R3 MEDIA_ONLY không gọi model; source_followup cho ảnh trước/text sau, text NEED_INFO trước/ảnh sau hoặc nhiều ảnh trước/text sau chỉ khi một candidate hợp lệ và mọi pixel ảnh trần thực sự gửi trong confirmation. Đây là diễn giải câu trả lời Owner vòng hai cần Owner xác nhận. | `pipeline.py:_vision_fallback`, `rules_intake.py:_process_source_followup` |
 | TG-15.2 | Screenshot không giải thích [A] ⇒ hỏi tập trung, MUST NOT lặng lẽ coi là chat. | prompt |
 | TG-15.3 | Vision lỗi hoặc partition mơ hồ với ảnh có yêu cầu ⇒ `needs_human`. Câu hỏi thuần về ảnh ⇒ chat. | `pipeline.py` |
 | TG-15.4 | Khi model/partition lỗi: chỉ gom chung các tin nối bằng **reply edge thật**. MUST NOT gộp text không liên quan vào ticket ảnh vì nằm kề nhau. | `pipeline.py:_vision_failure_plans` |
@@ -163,7 +163,7 @@ Code áp theo **đúng thứ tự** sau, bước đầu tiên khớp thì dừng
 |---|---|---|
 | TG-12.1 | Hỏi bằng reply vào **tin đầu** của topic, tối đa **3 câu** ngắn, đã sanitize. | `group_notices.py` |
 | TG-12.2 | Câu hỏi MUST nhắc phần đã biết rồi hỏi phần thiếu. Mẫu: "Em đã ghi nhận lỗi POS trên app và web với máy in có dây. Anh/Chị cho Em biết lỗi chưa từng hết hay đã in được rồi mới lỗi lại nhé?" | prompt |
-| TG-12.3 | MUST NOT hỏi lại câu đã hỏi trong cùng pending topic (kể cả câu đang reserved/failed). Thiếu cùng một điểm ⇒ không hỏi thêm. | `autonomy_store.py` |
+| TG-12.3 | MUST NOT hỏi lại câu đã hỏi trong cùng pending topic (kể cả câu đang reserved/failed). Thiếu cùng một điểm ⇒ không hỏi thêm. Rules mode: tin được source_followup nối vào giữ asked_counts và fallback_asked của topic; chỉ hỏi trường chưa đạt max_asks_per_field, fallback đã hỏi thì im lặng; dry-run không gửi notice. | `autonomy_store.py`, `rules_pending_store.py:reserve_notice` |
 | TG-12.4 | Lỗi kỹ thuật (provider/schema/packet): **một** thông báo cho mỗi chu kỳ lỗi theo chat, ở tin nguồn đầu tiên. | `autonomy_store.py` |
 | TG-12.5 | Outcome GitHub không rõ ⇒ nhờ Owner kiểm repo trước retry. Hết quota ⇒ thông báo hỗ trợ. | `group_notices.py` |
 | TG-12.6 | Noise, chat, `pending_review` [L] ⇒ không gửi text. | `group_notices.py` |

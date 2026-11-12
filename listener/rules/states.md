@@ -1,4 +1,4 @@
-<!-- rule-file: states · version 3 · status ACTIVE · audience: code -->
+<!-- rule-file: states · version 5 · status ACTIVE · audience: code -->
 # Trạng thái kết quả
 
 Danh sách **đóng**: mỗi chủ đề nhận đúng một mã dưới đây, do code tính theo `readiness.md`. Model không trả trạng thái. Bot nói ở đâu: [`channels.md`](channels.md).
@@ -20,7 +20,7 @@ Vòng đời pending của một chủ đề. Mỗi dòng: đang ở trạng th�
 
 | Từ | Sự kiện | Sang |
 |---|---|---|
-| `OPEN` | Có tin hợp lệ nối vào chủ đề (`questions.md` · `answer_link` = `LINK`, hoặc tin cùng chủ đề ở group gốc) | `ANSWERED` |
+| `OPEN` | Có tin hợp lệ nối vào chủ đề (`questions.md` · `answer_link` = `LINK`, hoặc Reply thật vào nguồn của topic ở group gốc, hoặc tin nguồn không Reply được `questions.md` · `source_followup` SF1–SF4 xác nhận đủ intent/pixel và commit) | `ANSWERED` |
 | `ANSWERED` | Chạy lại `readiness.md` từ R1 | `CLOSED` nếu ra `READY`/`APPEND`/`CHAT`; `OPEN` nếu ra `NEED_INFO`/`MEDIA_ONLY`/`HOLD` |
 | `OPEN` | Quá `pending_expiry_days` ngày từ tin cuối của chủ đề | `EXPIRED` |
 | `OPEN` | Chủ đề `HOLD` thử lại quá `hold_max_retries` lần | `ESCALATED` |
