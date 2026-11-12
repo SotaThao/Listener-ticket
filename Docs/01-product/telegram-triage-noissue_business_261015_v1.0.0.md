@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.35 · **Updated**: 2026-11-11 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.36 · **Updated**: 2026-11-12 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -460,7 +460,7 @@ Theo H4 của `preflight.md`, thao tác reserved/ambiguous chưa được Owner 
 | Q2 | Command quyết `intent` trước model; không có command thì model chọn trong danh sách đóng + `unknown` | TG-04, TG-07, TG-10 |
 | Q3 | D7 được triển khai với sáu điều kiện tại TG-15, gồm kiểm metadata trước khi tải và chữ hoặc reply cho từng ảnh chưa xem; ticket ghi số ảnh chưa xem được nhận để đính kèm, giới hạn upload theo từng ticket. Ảnh tải lỗi sau quyết định được báo lỗi và ticket vẫn tạo. | TG-14, TG-15 |
 | Q4 | Bỏ ngưỡng `confidence` khỏi quyết định, chỉ ghi log | TG-08 |
-| Q5 | Model lỗi/sai schema/hết quota ⇒ `HOLD`: không ticket, không hỏi, thử lại tối đa 3 lần rồi báo Owner. Chủ đề đã `ESCALATED` và đã gửi được thông báo escalation cho Owner là trạng thái cuối: tin của nó (không ticket, chưa gọi GitHub) không chặn bot khởi động lại; escalation chưa có thông báo đã gửi vẫn dừng bot | TG-08, TG-12 |
+| Q5 | Model lỗi/sai schema/hết quota ⇒ `HOLD`: không ticket, không hỏi, thử lại tối đa 3 lần rồi báo Owner. Chủ đề đã `ESCALATED` và đã gửi được thông báo escalation cho Owner là trạng thái cuối: tin của nó (không ticket, chưa gọi GitHub) không chặn bot khởi động lại; escalation chưa có thông báo đã gửi vẫn dừng bot. Chủ đề `EXPIRED` cũng là trạng thái cuối, bot không nhắn thêm: nguồn `pending_review` của nó được coi là đã xong khi khởi động nếu cả `github_called_at`, `issue_number`, `issue_url` đều NULL; không cần thông báo hết hạn. Nguồn có thêm binding vào lô `batch:` đã `CLOSED`/`WAITING` vẫn được nhận. Nếu nguồn còn thuộc chủ đề `ESCALATED`, ngoại lệ EXPIRED chỉ áp dụng khi từng binding ESCALATED có thông báo escalation đã gửi với mã tin dương. Các kiểm tra binding lỗi và side effect chưa rõ vẫn áp dụng. Nguồn chỉ thuộc chủ đề `CLOSED` không được miễn theo điều kiện này (giữ nguyên ngoại lệ CHAT đã chứng minh); trạng thái tin khác vẫn dừng. Tin mới cùng người gửi sau hết hạn được xử lý thành chủ đề mới | TG-08, TG-12 |
 | Q6 | Giá trị chung chung so **nguyên cụm** sau chuẩn hóa | TG-08 |
 | Q7 | Reply thật vào ticket open luôn bổ sung (`APPEND`), trừ chat | TG-18 |
 | Q8 | Group gốc chỉ có reaction; mọi tin chữ của bot ở **một group xử lý chung** | TG-11, TG-12, TG-13 |
@@ -1291,6 +1291,30 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_source_followup.py",
           "symbol": "SourceFollowupTests.test_link_need_info_sends_no_second_fallback"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "ExpiredStartupGuardTests.test_expired_need_info_restart_and_sweep_are_settled_readonly"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "ExpiredStartupGuardTests.test_first_sweep_expires_due_need_info_and_next_restart_is_clear"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "ExpiredStartupGuardTests.test_new_message_from_same_sender_after_expiry_starts_new_topic"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "ExpiredStartupGuardTests.test_expired_exemption_is_narrow"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "ExpiredStartupGuardTests.test_expired_source_does_not_bypass_other_binding_or_notice_blockers"
+        },
+        {
+          "path": "listener/tests/test_rules_bootstrap.py",
+          "symbol": "ExpiredStartupGuardTests.test_expired_source_with_escalated_binding_still_requires_sent_escalation"
         }
       ]
     },
@@ -2457,7 +2481,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "d275400dfc0c422dedfd8dd42aaec2c26343cc6079c1c14a8e7bc785dcdd9f04",
     "listener/src/tg_triage/rules_intake.py": "38745ca7e663f9508e9b418fcc3d1d0a1fb8b2410fffb8044fadcdacd03962dd",
-    "listener/src/tg_triage/rules_pending_store.py": "dbc1a64a90b69ac4167fd8caad4f4e3f09c17fa500f9d9cb10fde2cb3663ac3d",
+    "listener/src/tg_triage/rules_pending_store.py": "fce738c79de3a9a3981c4c2ae0a12c7bf8585e13d3420eaff569b198a88a628b",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
     "listener/src/tg_triage/telegram_io.py": "178462cb0a564973ab724aa3ec4ca8a4b56752d9c469585801352f4ef00726a3",
@@ -2505,7 +2529,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "22aa390e04958d9a7fa045f4d376f411559b458e5a9bdea0c2045f7ec0c891a8",
+  "runtime_fingerprint": "99a9e1e2643b31b69036e3b0dc8591fe88fec609eb0fe0bb7cd09e8fcbb17749",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2523,6 +2547,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.36 | 2026-11-12 | Codex / owner AlexChu | Sự cố gw-01 08:49 +07: nguồn NEED_INFO còn `pending_review` sau khi chủ đề hết 7 ngày thành `EXPIRED`, khiến cả bản mới và rollback dừng ở startup barrier. Owner: “Duyệt sửa gate (Recommended)”. Gate chỉ coi nguồn `pending_review` của chủ đề `EXPIRED` là đã xong khi `github_called_at`, `issue_number`, `issue_url` đều NULL; nhận cả binding lô CLOSED/WAITING đã hoàn tất. Không sửa `expire_due`, schema hay dữ liệu cũ; binding ESCALATED khác của cùng nguồn vẫn cần thông báo escalation đã gửi, không được dùng EXPIRED để miễn điều kiện này. Q5 bổ sung EXPIRED, thay thế giới hạn EXPIRED trong ghi chú lịch sử v1.16.16. Regression `ExpiredStartupGuardTests`: NEED_INFO thật → `expire_due` với đồng hồ tiến 7 ngày → gate chỉ đọc → Pipeline + sweep không model/notice/GitHub; tin mới cùng sender, các ca không được miễn, binding lỗi và notice chưa rõ; mixed EXPIRED/ESCALATED chỉ qua khi có đúng thông báo escalation đã gửi. Trace runtime `rules_pending_store.py` được làm mới; test/review/offline DB/installed/live là bằng chứng riêng. |
 | v1.16.35 | 2026-11-11 | Codex / owner AlexChu | Owner “Sửa thêm vòng 7”: questions v8 SF4, examples v20 SF30–SF34. Gate chỉ đọc chặn plan followup không thể replay; ambiguity dừng worker ngay, lỗi completion được quarantine trước RulesHalt. Plan khỏe vẫn recovery, các batch khác đối chiếu HEAD. Fingerprint mismatch chỉ worker/sweep vì gate không nhận RulesSnapshot; TG-05/TG-12/TG-27 ghi giới hạn và inspection bằng công cụ hiện có, chưa có CLI repair plan. Không sửa telegram_io/legacy_preflight hoặc schema; trace/hash và test mapping cập nhật. |
 | v1.16.34 | 2026-11-11 | Codex / owner AlexChu | Review vòng 5: bàn giao checkpoint cho cả HOLD, không retry kép; cô lập replay sau expiry/HOLD và nhường queued cho worker; cửa sổ theo received_at; DONE trả stored result trước fingerprint. Mặc định team mention T3–T4 không confirmation chờ Owner xác nhận. questions v7, examples v19 SF1–SF29 có ánh xạ ID/test rõ; test nhiều sweep đối chiếu sender khác và crash/recovery. Không đổi schema, pending logic bên trong batch hoặc ops reply. Trace/hash cập nhật. |
 | v1.16.33 | 2026-11-11 | Codex / owner AlexChu | Review vòng 4: questions v6 SF1–SF5, states v5 tham chiếu đủ SF1–SF4, examples v18 SF1–SF24. Không nối STATUS/ANALYZE/lifecycle; mở MEDIA_ONLY nhưng bắt buộc mọi pixel ảnh trần có trong confirmation; loại document, dùng rules.COMMAND. Checkpoint riêng trước model và transaction link/replay trên bảng sẵn có, không đổi schema. TG-06 ghi trần hai turns 6 attempts/80 giây; TG-15 ghi diễn giải ảnh cần Owner xác nhận. Test readonly, vision/upload, crash/replay/rollback và coverage ví dụ. Không sửa lỗi ops L1 CHAT ngoài scope. Trace/hash runtime cập nhật. |

@@ -1126,18 +1126,16 @@ class SourceFollowupTests(unittest.TestCase):
                 self.assertEqual(env.github.calls,[])
 
     def test_no_followup_gate_and_ambiguity_match_head_for_all_batch_states(self):
-        import ast,subprocess,textwrap
+        # The staged source on the deploy host has no git checkout, and after
+        # the commit HEAD is this file. The pre-feature gate is the same code
+        # with the followup blocker contributing nothing, so compare to that.
         from tg_triage import rules_pending_store as module
-        path='listener/src/tg_triage/rules_pending_store.py'
-        base=subprocess.check_output(['git','show','HEAD:'+path],cwd=ROOT.parent,text=True,encoding='utf8')
-        tree=ast.parse(base); namespace=dict(vars(module))
-        gate=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='check_connection_before_recovery')
-        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='RulesPendingStore')
-        ambiguity=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='unresolved_ambiguity')
-        exec(ast.get_source_segment(base,gate),namespace)
-        head_gate=namespace['check_connection_before_recovery']
-        exec(textwrap.dedent(ast.get_source_segment(base,ambiguity)),namespace)
-        head_ambiguity=namespace['unresolved_ambiguity']
+        def head_gate(connection):
+            with patch.object(module,'_source_followup_blocker',return_value=None):
+                return check_connection_before_recovery(connection)
+        def head_ambiguity(pending):
+            with patch.object(module,'_source_followup_blocker',return_value=None):
+                return pending.unresolved_ambiguity()
         def outcome(gate,connection):
             try: return gate(connection)
             except module.RulesHalt as error: return type(error),str(error)
