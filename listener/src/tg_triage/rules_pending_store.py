@@ -307,6 +307,19 @@ def check_connection_before_recovery(connection):
                  if 'rules_sources' in tables else '')
         if 'rules_deferred_ops' in tables:
             bound += " AND NOT EXISTS (SELECT 1 FROM rules_deferred_ops d JOIN rules_topics t ON t.topic_id=d.topic_id WHERE d.chat_id=m.chat_id AND d.message_id=m.message_id AND t.status='OPEN')"
+        if 'rules_sources' in tables:
+            # Live 2026-11-12: expiry is terminal per states.md but leaves NEED_INFO
+            # sources pending_review, including their completed CLOSED batch binding.
+            # No notice is required for expiry. Binding and uncertain-effect checks
+            # above still apply, and another ESCALATED binding must retain its sent
+            # escalation proof. Only no-GitHub/no-issue pending_review is settled.
+            unnotified = ("NOT EXISTS (SELECT 1 FROM rules_notices n WHERE n.topic_id=t.topic_id AND n.kind='escalation'"
+                          " AND n.status='sent' AND n.notice_id>0)" if 'rules_notices' in tables else '1')
+            bound += (" AND NOT (m.decision='pending_review' AND m.github_called_at IS NULL AND m.issue_number IS NULL"
+                      " AND m.issue_url IS NULL AND EXISTS (SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id"
+                      " WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id AND t.status='EXPIRED')"
+                      " AND NOT EXISTS (SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id"
+                      " WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id AND t.status='ESCALATED' AND " + unnotified + "))")
         if {'rules_sources','rules_notices'} <= tables:
             # Live 2026-11-05: an escalated HOLD (terminal per states.md) left its no-ticket
             # `pending_review` source here and halted every later restart. Settled only when the

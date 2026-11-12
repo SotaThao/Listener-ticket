@@ -304,7 +304,11 @@ class RulesBootstrapTests(unittest.TestCase):
 
     def test_escalated_exemption_is_narrow(self):
         from tg_triage.rules_pending_store import check_before_recovery,RulesHalt
-        pending_cases={'closed_topic':dict(topic_status='CLOSED'),'expired_topic':dict(topic_status='EXPIRED'),
+        # Owner 2026-11-12 "Duyệt sửa gate": a pending_review source of an EXPIRED topic is settled
+        # (live halt 2026-11-12), so that shape left this must-halt list; see the expired tests below.
+        with self.subTest('expired_topic'):
+            check_before_recovery(self._escalated_hold_db('narrow-expired_topic.sqlite3',topic_status='EXPIRED'))
+        pending_cases={'closed_topic':dict(topic_status='CLOSED'),
                        'queued_message':dict(decision='queued'),'classifying_message':dict(decision='classifying'),
                        'no_owner_notice':dict(notice=None),'issue_without_call':dict(issue=True),
                        'escalated_and_closed_with_issue':dict(issue=True,also_closed=True)}
@@ -549,3 +553,210 @@ class RulesBootstrapTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(data)) as wheel:
             names = {name.rsplit('/', 1)[-1] for name in wheel.namelist() if '/share/tg-triage/rules/' in name}
         self.assertEqual(names, {name + '.md' for name in FILES + EXTENSION_FILES})
+
+
+class ExpiredStartupGuardTests(unittest.TestCase):
+    """Restart the API-produced NEED_INFO + CLOSED batch shape from 2026-11-12."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def _expired_need_info_db(self, name, *, expire=True):
+        from dataclasses import replace
+        from datetime import timedelta
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from tests.helpers import NOW, config, message
+        from tg_triage.pipeline import Pipeline
+        from tg_triage.store import Store
+        clock = [NOW]
+        settings = replace(config(), mode='live', autonomous_enabled=True, decision_rules_enabled=True,
+                           telegram=replace(config().telegram, ops_chat_id=-1009876543210))
+        snapshot = _load_decision_rules()
+        source = message(8, chat_id=-1003936738808, sender_id=17, text='nút này lỗi')
+        provider = SimpleNamespace(settings=SimpleNamespace(model='test'), think=False,
+                                   _ask=Mock(side_effect=lambda body, parse, attempts: parse(json.dumps({
+                                       'groups': [{'message_ids': [8], 'facts': {
+                                           'intent': {'value': 'bug', 'source_ids': [8]},
+                                           'object': {'value': 'nút này', 'source_ids': [8]}}}]}))))
+        sender = Mock(return_value=3)
+        github = Mock()
+        db = self.root / name
+        store = Store(db, clock=lambda: clock[0])
+        try:
+            pipeline = Pipeline(settings, store, provider, github, rules_snapshot=snapshot, notice_sender=sender)
+            result = pipeline.process(source)
+            self.assertEqual((result.decision, result.reason), ('pending_review', 'R12'))
+            self.assertEqual(provider._ask.call_count, 1)
+            sender.assert_called_once()
+            self.assertEqual(github.mock_calls, [])
+            topic = f'{source.chat_id}:8'
+            self.assertEqual([tuple(row) for row in store.connection.execute(
+                'SELECT topic_id,status,phase,attempts FROM rules_topics ORDER BY topic_id')],
+                [(topic, 'OPEN', 'NEW', 0), (f'batch:{topic}', 'CLOSED', 'WAITING', 0)])
+            self.assertEqual(tuple(store.connection.execute(
+                'SELECT kind,status,notice_id FROM rules_notices').fetchone()), ('question', 'sent', 3))
+            self.assertEqual(tuple(store.connection.execute(
+                'SELECT decision,attempts,github_called_at,issue_number,issue_url FROM messages').fetchone()),
+                ('pending_review', 1, None, None, None))
+            self.assertEqual(pipeline.rules_pending.sources(topic), {1: (source.chat_id, 8)})
+            self.assertEqual(pipeline.rules_pending.sources(f'batch:{topic}'), {1: (source.chat_id, 8)})
+            clock[0] += timedelta(days=snapshot.limits['pending_expiry_days'])
+            if expire is True:
+                self.assertEqual(pipeline.rules_pending.expire_due(snapshot.limits['pending_expiry_days']), 1)
+            elif expire is False:
+                self.assertTrue(pipeline.rules_pending.close(topic, 'CLOSED'))
+        finally:
+            store.close()
+        provider._ask.reset_mock(side_effect=True)
+        provider._ask.side_effect = AssertionError('expired topic must not call the model')
+        sender.reset_mock()
+        return db, settings, snapshot, source, clock, provider, sender, github
+
+    def test_expired_need_info_restart_and_sweep_are_settled_readonly(self):
+        import sqlite3
+        from tg_triage.legacy_preflight import inspect
+        from tg_triage.pipeline import Pipeline
+        from tg_triage.rules_pending_store import check_before_recovery, local_binding_blockers
+        from tg_triage.store import Store
+        db, settings, snapshot, source, clock, provider, sender, github = self._expired_need_info_db('expired.sqlite3')
+        with contextlib.closing(sqlite3.connect(db)) as connection:
+            before = '\n'.join(connection.iterdump()).encode('utf8')
+            file_before = db.read_bytes()
+            check_before_recovery(db)
+            self.assertEqual('\n'.join(connection.iterdump()).encode('utf8'), before)
+            self.assertEqual(db.read_bytes(), file_before)
+            self.assertEqual(local_binding_blockers(connection), [])
+        report = inspect(db)
+        self.assertEqual(report['recovery_gate'], 'CLEAR')
+        # Raw pending counts describe stored rows, not recovery safety or conversion authority.
+        self.assertEqual(report['counts']['legacy_messages'], 1)
+        store = Store(db, clock=lambda: clock[0]); self.addCleanup(store.close)
+        pipeline = Pipeline(settings, store, provider, github, rules_snapshot=snapshot, notice_sender=sender)
+        self.assertFalse(pipeline.rules_pending.unresolved_ambiguity())
+        notices = [tuple(row) for row in store.connection.execute('SELECT * FROM rules_notices')]
+        decisions = [tuple(row) for row in store.connection.execute('SELECT * FROM rules_decisions')]
+        self.assertEqual(pipeline.close_due_cases(), [])
+        self.assertEqual([tuple(row) for row in store.connection.execute('SELECT * FROM rules_notices')], notices)
+        self.assertEqual([tuple(row) for row in store.connection.execute('SELECT * FROM rules_decisions')], decisions)
+        self.assertEqual(store.get(source.chat_id, source.message_id)['decision'], 'pending_review')
+        provider._ask.assert_not_called()
+        sender.assert_not_called()
+        self.assertEqual(github.mock_calls, [])
+
+    def test_first_sweep_expires_due_need_info_and_next_restart_is_clear(self):
+        from tg_triage.pipeline import Pipeline
+        from tg_triage.rules_pending_store import check_before_recovery
+        from tg_triage.store import Store
+        db, settings, snapshot, source, clock, provider, sender, github = self._expired_need_info_db(
+            'due.sqlite3', expire=None)
+        check_before_recovery(db)
+        store = Store(db, clock=lambda: clock[0])
+        try:
+            pipeline = Pipeline(settings, store, provider, github, rules_snapshot=snapshot, notice_sender=sender)
+            topic = f'{source.chat_id}:8'
+            self.assertEqual(pipeline.rules_pending.topic_snapshot(topic)['status'], 'OPEN')
+            self.assertEqual(pipeline.close_due_cases(), [])
+            self.assertEqual(pipeline.rules_pending.topic_snapshot(topic)['status'], 'EXPIRED')
+            provider._ask.assert_not_called()
+            sender.assert_not_called()
+            self.assertEqual(github.mock_calls, [])
+        finally:
+            store.close()
+        check_before_recovery(db)
+
+    def test_new_message_from_same_sender_after_expiry_starts_new_topic(self):
+        from dataclasses import replace
+        from tg_triage.pipeline import Pipeline
+        from tg_triage.rules_pending_store import check_before_recovery
+        from tg_triage.store import Store
+        db, settings, snapshot, source, clock, provider, sender, github = self._expired_need_info_db('new.sqlite3')
+        check_before_recovery(db)
+        store = Store(db, clock=lambda: clock[0]); self.addCleanup(store.close)
+        pipeline = Pipeline(settings, store, provider, github, rules_snapshot=snapshot, notice_sender=sender)
+        provider._ask.side_effect = lambda body, parse, attempts: parse(json.dumps({
+            'groups': [{'message_ids': [9], 'facts': {
+                'intent': {'value': 'bug', 'source_ids': [9]},
+                'object': {'value': 'nút khác', 'source_ids': [9]}}}]}))
+        sender.return_value = 4
+        new = replace(source, message_id=9, received_at=clock[0], text='nút khác lỗi')
+        result = pipeline.process(new)
+        self.assertEqual((result.decision, result.reason), ('pending_review', 'R12'))
+        old_topic, new_topic = f'{source.chat_id}:8', f'{source.chat_id}:9'
+        self.assertEqual(pipeline.rules_pending.topic_snapshot(old_topic)['status'], 'EXPIRED')
+        self.assertEqual(pipeline.rules_pending.sources(old_topic), {1: (source.chat_id, 8)})
+        self.assertEqual(pipeline.rules_pending.topic_snapshot(new_topic)['status'], 'OPEN')
+        self.assertEqual(pipeline.rules_pending.sources(new_topic), {1: (source.chat_id, 9)})
+        provider._ask.assert_called_once()
+        sender.assert_called_once()
+        self.assertEqual(github.mock_calls, [])
+
+    def test_expired_exemption_is_narrow(self):
+        import sqlite3
+        from tg_triage.rules_pending_store import check_before_recovery, RulesHalt
+        cases = {
+            'issue_number': dict(issue_number=7),
+            'issue_url': dict(issue_url='https://github.com/sandbox/triage/issues/7'),
+            'github_called': dict(github_called_at='2026-11-05T04:46:50+00:00'),
+            'github_with_issue': dict(github_called_at='2026-11-05T04:46:50+00:00', issue_number=7,
+                                      issue_url='https://github.com/sandbox/triage/issues/7'),
+            **{state: dict(decision=state) for state in ('queued', 'classifying', 'in_case', 'pending')},
+            'closed_only': {},
+        }
+        for label, changes in cases.items():
+            with self.subTest(label):
+                db, *_ = self._expired_need_info_db(f'narrow-{label}.sqlite3', expire=label != 'closed_only')
+                with contextlib.closing(sqlite3.connect(db)) as connection:
+                    with connection:
+                        if changes:
+                            connection.execute('UPDATE messages SET ' + ','.join(f'{key}=?' for key in changes),
+                                               tuple(changes.values()))
+                    before = '\n'.join(connection.iterdump()).encode('utf8')
+                    file_before = db.read_bytes()
+                    with self.assertRaises(RulesHalt): check_before_recovery(db)
+                    self.assertEqual('\n'.join(connection.iterdump()).encode('utf8'), before)
+                    self.assertEqual(db.read_bytes(), file_before)
+
+    def test_expired_source_does_not_bypass_other_binding_or_notice_blockers(self):
+        from tg_triage.rules_pending_store import check_before_recovery, RulesHalt, RulesPendingStore
+        from tg_triage.store import Store
+        for label in ('orphan_binding', 'reserved_notice'):
+            with self.subTest(label):
+                db, settings, snapshot, source, clock, *_ = self._expired_need_info_db(f'blocked-{label}.sqlite3')
+                store = Store(db, clock=lambda: clock[0])
+                try:
+                    pending = RulesPendingStore(store)
+                    pending.create('other-topic', source.chat_id, source.message_id)
+                    if label == 'reserved_notice':
+                        self.assertIsNotNone(pending.reserve_notice('other-topic', settings.telegram.ops_chat_id, 'escalation'))
+                    else:
+                        # Corruption cannot be produced by the API: retain the source but remove its owner.
+                        with store.connection:
+                            store.connection.execute("DELETE FROM rules_topics WHERE topic_id='other-topic'")
+                finally:
+                    store.close()
+                with self.assertRaises(RulesHalt): check_before_recovery(db)
+
+    def test_expired_source_with_escalated_binding_still_requires_sent_escalation(self):
+        from tg_triage.rules_pending_store import check_before_recovery, RulesHalt, RulesPendingStore
+        from tg_triage.store import Store
+        for notice in (None, 'question', 'escalation'):
+            with self.subTest(notice=notice):
+                db, settings, snapshot, source, clock, *_ = self._expired_need_info_db(f'mixed-{notice}.sqlite3')
+                store = Store(db, clock=lambda: clock[0])
+                try:
+                    pending = RulesPendingStore(store)
+                    pending.create('other-escalated', source.chat_id, source.message_id)
+                    if notice is not None:
+                        sequence = pending.reserve_notice('other-escalated', settings.telegram.ops_chat_id, notice)
+                        self.assertIsNotNone(sequence)
+                        self.assertTrue(pending.finish_notice('other-escalated', sequence, 4))
+                    self.assertTrue(pending.close('other-escalated', 'ESCALATED'))
+                finally:
+                    store.close()
+                if notice == 'escalation':
+                    check_before_recovery(db)
+                else:
+                    with self.assertRaisesRegex(RulesHalt, 'legacy pending'): check_before_recovery(db)
