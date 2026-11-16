@@ -101,13 +101,13 @@ class CloudProvider(OllamaProvider):
     request_budget_bytes = CLOUD_REQUEST_BUDGET_BYTES
 
     def _ingress_source_text(self, text):
-        from .ai_transport import redact
+        from agentfleet_common.ai_transport import redact
         return redact(text)
 
     def _cloud_messages(self, messages):
         """OpenAI-style messages: contact text redacted, images as inline data: parts; None when an
         image cannot be sent as a known type."""
-        from .ai_transport import redact
+        from agentfleet_common.ai_transport import redact
         from .thinking import ContextJSON, DocumentContextJSON
         def content_for_cloud(message):
             content=message['content']
@@ -182,9 +182,9 @@ class CloudProvider(OllamaProvider):
         return min(body.get('_request_limit', LOCAL_REQUEST_BUDGET_BYTES), self.request_budget_bytes)
 
     def _ask_cloud(self, body, parse, attempts):
-        from .ai_transport import complete, read_key, ProviderError
-        from .model_lock import MODEL_LOCK, LockUnavailable
-        from .model_lock import LockStopped
+        from agentfleet_common.ai_transport import complete, read_key, ProviderError
+        from agentfleet_common.model_lock import MODEL_LOCK, LockUnavailable
+        from agentfleet_common.model_lock import LockStopped
         from .thinking import CURRENT, BudgetExhausted
         turn = CURRENT.get()
         if turn:

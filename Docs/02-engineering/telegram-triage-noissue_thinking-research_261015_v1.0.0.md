@@ -6,7 +6,6 @@
 
 ## Related Documents
 
-- [Fleet Master](../00-master/worker-agent-fleet-1_master_261007_v1.0.8.md)
 - [Nguồn nghiệp vụ TG-01..TG-33](../01-product/telegram-triage-noissue_business_261015_v1.0.0.md)
 - [PR #43](https://github.com/PersonalProjectJob/telegram-agent/pull/43) · không có issue riêng.
 
@@ -124,8 +123,8 @@ Root: `C:/Users/AD/.codex/worktrees/telegram-ticket-reply/AgentBuilder`. Baselin
 | followup_store.py: save_followup_plan, reserve_followup_operation, finish_followup_operation, remember_followup_result, init_followups | Persist plan before external operations; reserve before POST; restart reserved→ambiguous; no blind duplicate POST. |
 | followups.py: _run, sweep, _notify | Execute/resume and report known actual outcomes. |
 | provider.py: CloudProvider._ask, _ask_cloud | Cloud consent, redaction, fallback and invalid-output retries; no semantic-turn-wide deadline. |
-| ai_transport.py: complete, request_json, redact | Bounded transport response/input, endpoint validation and per-call timeout. |
-| usage.py: UsageRecorder.record, build_summary | Usage/cost/latency available; model latency excludes waiting for MODEL_LOCK. |
+| agentfleet-common (AgentBuilder common/), ai_transport.py: complete, request_json, redact | Bounded transport response/input, endpoint validation and per-call timeout. |
+| usage.py: UsageRecorder.record | Usage/cost/latency available; model latency excludes waiting for MODEL_LOCK. |
 | classifier.py: strip_thinking, parsers and _ask | Ignores message.thinking; keep this invariant. |
 
 Full relative runtime paths above are under `listener/src/tg_triage/` unless explicitly given.

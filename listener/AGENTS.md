@@ -4,6 +4,7 @@ Owner quy trình/data/state: **AlexChu**. Executor (Codex, Gemini/Antigravity, C
 
 ## Trước khi làm bất cứ việc gì
 
+0. **Việc đang dở:** ranh giới repo #2178 (repo chỉ giữ tính năng log ticket). Đọc [Bàn giao §0](../Docs/04-tasks/listener-scope-cleanup-2178_plan_261116_v1.0.0.md#0-bàn-giao--đọc-mục-này-trước-cập-nhật-2026-11-16): PR đang mở, thứ tự merge → wheel `agentfleet-common` → preflight → deploy, đợt 3 (gỡ engine cũ), câu hỏi mở và bẫy đã gặp. `ai_transport` / `model_lock` không còn trong `tg_triage`: chúng thuộc package `agentfleet-common` ở repo AgentBuilder.
 1. **Xác định vai của mình** trong [`rules/roles.md`](rules/roles.md) · bảng `actors`. Chưa được Owner giao vai trong phiên ⇒ bạn là `AGENT`, kể cả khi là model mạnh.
 2. **Tra quyền** của việc sắp làm ở bảng `actions` (A01–A27): `ALLOW` làm; `ASK_OWNER` chỉ làm khi có **đồng ý của Owner trong phiên** đúng định nghĩa trong `roles.md` (nêu đúng việc, gửi trong cuộc trò chuyện hiện tại, trích nguyên văn vào báo cáo); `DENY` hoặc không có trong bảng ⇒ không làm.
 3. Gặp điều kiện ở bảng `stop_and_ask` (S1–S7) ⇒ dừng, báo Owner kèm bằng chứng.
@@ -28,7 +29,7 @@ Khi sửa hành vi: tìm đúng file quy tắc/template trước; không thêm q
 2. [THINKING engineering/research](../Docs/02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md) và [QA acceptance](../Docs/03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md): phân biệt hành vi đã triển khai với đề xuất, và tiêu chí bằng chứng.
 3. [Hướng dẫn listener](README.md): cấu hình, dry-run, drift check, trace chỉ đọc, reformat ticket.
 
-Tài liệu Fleet cũ là lịch sử. Riêng §12.11 của [assistant-definition](../Docs/02-engineering/worker-agent-fleet-1_assistant-definition_261012_v1.0.0.md) ("chỉ log ticket khi được tag") **đã lỗi thời**: TG-08 hiện hành không cần tag. Xung đột thì Business DOCS thắng.
+Tài liệu Worker Agent Fleet không còn trong repo này (repo chỉ chứa tính năng log ticket). Code còn ghi "Assistant definition 12.x" là tham chiếu lịch sử; riêng §12.11 ("chỉ log ticket khi được tag") **đã lỗi thời**: TG-08 hiện hành không cần tag. Xung đột thì Business DOCS thắng.
 
 ## Khi phân loại và log ticket
 

@@ -11,6 +11,8 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 > **Hiện tại (04/11/2026): bot đang vận hành thật theo rules mode — Owner ký GO cho release `7ba210b`.** Mọi tin chữ của bot vào group xử lý (ops), group nguồn chỉ nhận reaction. Tóm tắt đợt này: [Báo cáo tổng thể §1.1](Docs/04-tasks/listener-ticket-2178_report_261103_v1.0.2.md#11-cập-nhật-04112026--từ-kiểm-offline-tới-vận-hành-thật); phiếu bật: [`listener/rules/preflight.md`](listener/rules/preflight.md). Chưa có hướng dẫn cài từ đầu cho máy mới. Audit goal và giới hạn trước đợt vận hành: [`Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md`](Docs/02-engineering/listener-installer-noissue_devex-audit_261030_v1.0.0.md).
 
+> **Đang dở (16/11/2026) — ranh giới repo #2178:** repo này chỉ giữ tính năng log ticket. Đợt 1 (gỡ console + docs Fleet) và đợt 2 (dùng package dùng chung `agentfleet-common` từ AgentBuilder) đã có PR: [#5](https://github.com/SotaThao/Listener-ticket/pull/5), [#6](https://github.com/SotaThao/Listener-ticket/pull/6), [PersonalProjectJob/telegram-agent#171](https://github.com/PersonalProjectJob/telegram-agent/pull/171) — chưa merge, chưa deploy. Việc còn lại, thứ tự merge/deploy, câu hỏi mở và bẫy đã gặp: [Bàn giao §0](Docs/04-tasks/listener-scope-cleanup-2178_plan_261116_v1.0.0.md#0-bàn-giao--đọc-mục-này-trước-cập-nhật-2026-11-16).
+
 ## Tiến độ và công việc để PM kiểm soát
 
 - [Báo cáo tổng thể ngày 03/11/2026](Docs/04-tasks/listener-ticket-2178_report_261103_v1.0.2.md): tiến độ, phạm vi và estimate dev/AI.
@@ -21,7 +23,7 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 | Bạn là… | Đọc |
 |---|---|
-| Agent hoặc người tiếp nhận | [`listener/AGENTS.md`](listener/AGENTS.md) — tra vai, quyền, cổng bật trước khi làm bất cứ việc gì |
+| Agent hoặc người tiếp nhận | [`listener/AGENTS.md`](listener/AGENTS.md) — tra vai, quyền, cổng bật trước khi làm bất cứ việc gì · việc đang dở: [Bàn giao #2178 §0](Docs/04-tasks/listener-scope-cleanup-2178_plan_261116_v1.0.0.md#0-bàn-giao--đọc-mục-này-trước-cập-nhật-2026-11-16) |
 | Vận hành | [`listener/README.md`](listener/README.md) (config, dry-run, trace, reformat) · [`deploy/README.md`](deploy/README.md) |
 | Nghiệp vụ | [Business DOCS — TG-01…TG-33](Docs/01-product/telegram-triage-noissue_business_261015_v1.0.0.md) (nguồn nghiệp vụ duy nhất) · [Overview](Docs/00-master/telegram-triage-noissue_overview_261027_v1.0.0.md) · [Rulebook](Docs/01-product/telegram-triage-noissue_rulebook_261027_v1.0.0.md) · [Luồng nghiệp vụ](Docs/01-product/telegram-triage-noissue_business-flow_261028_v1.0.0.md) |
 | Quy tắc quyết định (ACTIVE; bot chạy rules mode) | [`listener/rules/README.md`](listener/rules/README.md) |
@@ -30,7 +32,7 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 ```
 listener/                 code (src/tg_triage), prompts, templates/github-ticket, rules (8 ACTIVE; roles/preflight DRAFT), tests
-Docs/                     tài liệu Telegram triage (+ tài liệu Worker Agent Fleet cũ được trace tham chiếu)
+Docs/                     tài liệu Telegram triage
 scripts/                  policy checker, reformat ticket, smoke model (fake tools)
 deploy/                   build_wheel.py, agentfleet_deploy.py (THINKPAD)
 config/listener.example.toml, systemd/tg-triage.service, .env.example

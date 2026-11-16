@@ -15,7 +15,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import tests
-from tg_triage import classifier, model_lock, rules, telegram_io
+from tg_triage import classifier, rules, telegram_io
+from agentfleet_common import model_lock
 from tg_triage.config import ConfigError, load_config
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
@@ -121,7 +122,7 @@ class PrefixTransportTests(unittest.IsolatedAsyncioTestCase):
 class LockBoundaryTests(unittest.TestCase):
     def test_os_lock_errors_log_error_distinct_from_http(self):
         for error in (PermissionError('PRIVATE'),OSError('PRIVATE')):
-            with self.subTest(error=type(error).__name__),patch('tg_triage.model_lock._open_lock',side_effect=error),self.assertLogs('tg_triage.classifier',level='ERROR') as logs:
+            with self.subTest(error=type(error).__name__),patch('agentfleet_common.model_lock._open_lock',side_effect=error),self.assertLogs('tg_triage.classifier',level='ERROR') as logs:
                 opener=Mock()
                 self.assertIsNone(classifier.Classifier(config().ollama,opener=opener).classify('ordinary'))
                 opener.assert_not_called()

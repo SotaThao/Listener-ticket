@@ -2,7 +2,7 @@
 import atexit
 import os
 import tempfile
-from tg_triage.model_lock import LOCK_DIR_ENV
+from agentfleet_common.model_lock import LOCK_DIR_ENV
 
 _model_lock_directory = tempfile.TemporaryDirectory(prefix='agentfleet-unittest-')
 TEST_MODEL_LOCK_DIR = _model_lock_directory.name

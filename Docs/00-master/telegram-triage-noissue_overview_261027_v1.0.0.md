@@ -101,7 +101,6 @@ flowchart TD
 | [listener/README.md](../../listener/README.md) | Vận hành, cấu hình, drift check, reformat |
 | [listener/AGENTS.md](../../listener/AGENTS.md) | Điểm vào cho Agent |
 | [Template log ticket](../templates/github-ticket/README.md) | Khuôn `.md` cho issue, comment, câu trả lời group; có test chống lệch với code |
-| `worker-agent-fleet-1_*` | Lịch sử. §12.11 "phải tag" **đã lỗi thời** |
 
 ### Code (`listener/src/tg_triage/`)
 
@@ -112,7 +111,7 @@ flowchart TD
 | `rules.py` | Command và noise — nơi duy nhất code tự quyết về nội dung | 03, 04 |
 | `models.py` | Danh mục category/type/label, record | 07 |
 | `classifier.py`, `ingress_model.py`, `followup_model.py` | Parse/validate output model | 06, 07, 18 |
-| `thinking.py`, `thinking_transport.py`, `provider.py`, `ai_transport.py` | Đóng gói context, gọi model, budget | 06, 19, 30 |
+| `thinking.py`, `thinking_transport.py`, `provider.py`; `ai_transport.py` và `model_lock.py` từ `agentfleet-common` (AgentBuilder `common/`) | Đóng gói context, gọi model, budget | 06, 19, 30 |
 | `pipeline.py` | Quyết định cuối: ngưỡng, safety, vision fallback | 06, 08, 09, 10, 15 |
 | `autonomous.py`, `lifecycle.py`, `followups.py` | Định tuyến autonomous, vòng đời ticket, bổ sung | 05, 16, 18, 20–23 |
 | `github_issues.py`, `issue_format.py` | Ghi GitHub, template issue | 11, 17, 24, 31 |

@@ -780,11 +780,6 @@ async def run(config, pipeline):
             await asyncio.gather(startup, return_exceptions=True)
             return
         startup.result()
-        from .receipt import ready
-        ready(config)
-        usage = getattr(getattr(pipeline, "classifier", None), "usage", None)
-        if usage is not None:
-            usage.publish(force=True)   # the console summary exists from startup, before any model call
         attach_downloader = getattr(pipeline, "set_media_downloader", None)
         if attach_downloader is not None:
             attach_downloader(make_media_downloader(client, asyncio.get_running_loop()))

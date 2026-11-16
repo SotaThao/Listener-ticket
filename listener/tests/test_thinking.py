@@ -10,13 +10,13 @@ from unittest.mock import patch
 
 from tg_triage.classifier import Classifier
 from tg_triage.config import load_config, ConfigError
-from tg_triage.model_lock import ModelLock
+from agentfleet_common.model_lock import ModelLock
 from tg_triage.pipeline import Pipeline
 from tg_triage.provider import CloudProvider
 from tg_triage.store import Store
 from tg_triage.thinking import Turn, CURRENT, BudgetExhausted, compact_context
 from tg_triage.thinking_transport import DeadlineHTTPS, _addresses
-from tg_triage.ai_transport import ProviderError
+from agentfleet_common.ai_transport import ProviderError
 from tests.helpers import config, message, topic, FakeHTTP, FakeTopicModel, NOW
 from tests.helpers import EXAMPLE
 from tests.test_followups import GitHub, Model, answer
@@ -117,7 +117,7 @@ class ThinkingTests(unittest.TestCase):
             token=CURRENT.set(Turn(store,'cap','root',1)) if active else CURRENT.set(None)
             response={'source_roles':[dict(message_id=1,role='ancillary',confidence=.9)]} if narrow else answer('chat')
             try:
-                with patch('tg_triage.thinking_transport.complete',return_value=response) as bounded, patch('tg_triage.ai_transport.complete',return_value=response) as legacy:
+                with patch('tg_triage.thinking_transport.complete',return_value=response) as bounded, patch('agentfleet_common.ai_transport.complete',return_value=response) as legacy:
                     if narrow:
                         model.analyze_source_roles([], [message(1)])
                     else:
@@ -178,7 +178,7 @@ class ThinkingTests(unittest.TestCase):
         provider=CloudProvider(cfg)
         turn=Turn(store,'x','r',1); token=CURRENT.set(turn)
         try:
-            with patch('tg_triage.ai_transport.read_key',return_value='fake'), patch('tg_triage.thinking_transport.complete',return_value={}) as request:
+            with patch('agentfleet_common.ai_transport.read_key',return_value='fake'), patch('tg_triage.thinking_transport.complete',return_value={}) as request:
                 result=provider.classify('nội dung')
             self.assertIsNone(result)
             self.assertEqual(request.call_count,2)

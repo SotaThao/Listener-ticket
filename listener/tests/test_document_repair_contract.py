@@ -58,7 +58,7 @@ class DocumentRepairContractTests(TestCase):
         def complete(*args, **kwargs):
             requests.append(copy.deepcopy(args[3]))
             return next(results)
-        self.enterContext(patch('tg_triage.ai_transport.read_key', return_value='fake'))
+        self.enterContext(patch('agentfleet_common.ai_transport.read_key', return_value='fake'))
         self.enterContext(patch('tg_triage.thinking_transport.complete', side_effect=complete))
         return requests
 
@@ -218,7 +218,7 @@ class DocumentRepairContractTests(TestCase):
             requests.append(args[3])
             now[0] = 41.0
             return {}
-        self.enterContext(patch('tg_triage.ai_transport.read_key', return_value='fake'))
+        self.enterContext(patch('agentfleet_common.ai_transport.read_key', return_value='fake'))
         self.enterContext(patch('tg_triage.thinking_transport.complete', side_effect=slow_invalid))
         self.assertIsNone(self.cloud().analyze_ingress([doc(1)], [], document_contents=self.rows()))
         self.assertEqual(1, len(requests))
@@ -272,7 +272,7 @@ class DocumentRepairContractTests(TestCase):
                 bad = new_wire([1])
                 bad['groups'][0].update(change)
                 # Distinct patch contexts prevent a nested subtest from reusing a prior fake response.
-                with patch('tg_triage.ai_transport.read_key', return_value='fake'), \
+                with patch('agentfleet_common.ai_transport.read_key', return_value='fake'), \
                      patch('tg_triage.thinking_transport.complete', side_effect=[{}, bad]) as request:
                     p = self.pipeline()
                     self.assertEqual('pending_review', p.process(doc(1)).decision)
@@ -286,7 +286,7 @@ class DocumentRepairContractTests(TestCase):
             with self.subTest(details=details):
                 wire = new_wire([1])
                 wire['groups'][0]['analysis']['details'] = details
-                with patch('tg_triage.ai_transport.read_key', return_value='fake'), \
+                with patch('agentfleet_common.ai_transport.read_key', return_value='fake'), \
                      patch('tg_triage.thinking_transport.complete', side_effect=[{}, wire]) as request:
                     p = self.pipeline()
                     self.assertEqual('pending_review', p.process(doc(1)).decision)

@@ -139,7 +139,6 @@ class Config:
     aggregation: AggregationConfig = field(default_factory=AggregationConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    console_revision: str = ""
     thinking_enabled: bool = True
     topic_memory_enabled: bool = False
     autonomous_enabled: bool = False
@@ -331,7 +330,7 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         timeout = _number(ollama["timeout_seconds"], "ollama.timeout_seconds", 0.001)
     else:
         timeout = DEFAULT_MODEL_TIMEOUT_SECONDS
-    from .ai_transport import validate_endpoint, ProviderError, ENDPOINTS
+    from agentfleet_common.ai_transport import validate_endpoint, ProviderError, ENDPOINTS
     base_url = model_table.get("base_url", ENDPOINTS.get(provider, url))
     try:
         validate_endpoint(provider, base_url)
@@ -409,7 +408,6 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         aggregation=aggregation, attachments=attachments,
         model=ModelConfig(provider, model_name, think, timeout, base_url, max_output, consent, key_file,
                          image_consent, fallback, fallback_model, fallback_think, pricing),
-        console_revision=str(data.get("console", {}).get("revision", "")),
         thinking_enabled=thinking_enabled,
         topic_memory_enabled=topic_memory_enabled,
         autonomous_enabled=autonomous_enabled,
