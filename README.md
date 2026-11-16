@@ -30,7 +30,7 @@ Bot đọc tin nhắn trong group Telegram của team (text, ảnh, caption, rep
 
 ```
 listener/                 code (src/tg_triage), prompts, templates/github-ticket, rules (8 ACTIVE; roles/preflight DRAFT), tests
-Docs/                     tài liệu Telegram triage (+ tài liệu Worker Agent Fleet cũ được trace tham chiếu)
+Docs/                     tài liệu Telegram triage
 scripts/                  policy checker, reformat ticket, smoke model (fake tools)
 deploy/                   build_wheel.py, agentfleet_deploy.py (THINKPAD)
 config/listener.example.toml, systemd/tg-triage.service, .env.example

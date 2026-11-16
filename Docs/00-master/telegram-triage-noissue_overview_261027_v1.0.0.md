@@ -101,7 +101,6 @@ flowchart TD
 | [listener/README.md](../../listener/README.md) | Vận hành, cấu hình, drift check, reformat |
 | [listener/AGENTS.md](../../listener/AGENTS.md) | Điểm vào cho Agent |
 | [Template log ticket](../templates/github-ticket/README.md) | Khuôn `.md` cho issue, comment, câu trả lời group; có test chống lệch với code |
-| `worker-agent-fleet-1_*` | Lịch sử. §12.11 "phải tag" **đã lỗi thời** |
 
 ### Code (`listener/src/tg_triage/`)
 

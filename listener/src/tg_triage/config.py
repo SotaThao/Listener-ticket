@@ -139,7 +139,6 @@ class Config:
     aggregation: AggregationConfig = field(default_factory=AggregationConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    console_revision: str = ""
     thinking_enabled: bool = True
     topic_memory_enabled: bool = False
     autonomous_enabled: bool = False
@@ -409,7 +408,6 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         aggregation=aggregation, attachments=attachments,
         model=ModelConfig(provider, model_name, think, timeout, base_url, max_output, consent, key_file,
                          image_consent, fallback, fallback_model, fallback_think, pricing),
-        console_revision=str(data.get("console", {}).get("revision", "")),
         thinking_enabled=thinking_enabled,
         topic_memory_enabled=topic_memory_enabled,
         autonomous_enabled=autonomous_enabled,

@@ -28,7 +28,7 @@ Khi sửa hành vi: tìm đúng file quy tắc/template trước; không thêm q
 2. [THINKING engineering/research](../Docs/02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md) và [QA acceptance](../Docs/03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md): phân biệt hành vi đã triển khai với đề xuất, và tiêu chí bằng chứng.
 3. [Hướng dẫn listener](README.md): cấu hình, dry-run, drift check, trace chỉ đọc, reformat ticket.
 
-Tài liệu Fleet cũ là lịch sử. Riêng §12.11 của [assistant-definition](../Docs/02-engineering/worker-agent-fleet-1_assistant-definition_261012_v1.0.0.md) ("chỉ log ticket khi được tag") **đã lỗi thời**: TG-08 hiện hành không cần tag. Xung đột thì Business DOCS thắng.
+Tài liệu Worker Agent Fleet không còn trong repo này (repo chỉ chứa tính năng log ticket). Code còn ghi "Assistant definition 12.x" là tham chiếu lịch sử; riêng §12.11 ("chỉ log ticket khi được tag") **đã lỗi thời**: TG-08 hiện hành không cần tag. Xung đột thì Business DOCS thắng.
 
 ## Khi phân loại và log ticket
 

@@ -1,4 +1,4 @@
-"""Hosted model with images, local Ollama backup, usage accounting, pricing and the console summary.
+"""Hosted model with images, local Ollama backup, usage accounting and pricing.
 
 Offline: a fake upstream replaces the network (`transport=`), fake HTTP replaces Ollama, SQLite is
 in-memory or temporary. No test here may reach the real network."""
@@ -14,12 +14,12 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
 
-from tg_triage import ai_transport, usage as usage_module
+from tg_triage import ai_transport
 from tg_triage.ai_transport import ProviderError, complete, usage_of
 from tg_triage.config import ConfigError, ModelConfig, PricingConfig, load_config
 from tg_triage.provider import build_provider
 from tg_triage.store import Store
-from tg_triage.usage import UsageRecorder, build_summary, price
+from tg_triage.usage import UsageRecorder, price
 from tests.helpers import EXAMPLE, JPG, PNG, WEBP, FakeHTTP, config, message
 
 REAL_COMPLETE = ai_transport.complete
@@ -73,7 +73,7 @@ class ProviderBase(unittest.TestCase):
         patch("tg_triage.ai_transport.complete",
               lambda *a, **k: REAL_COMPLETE(*a, transport=upstream, **k)).start()
         settings = replace(config(), model=model_config(**model))
-        self.recorder = UsageRecorder(self.store, settings, clock=lambda: self.now, trailing=False)
+        self.recorder = UsageRecorder(self.store, settings, clock=lambda: self.now)
         return build_provider(settings, opener=self.http, prompt="P", case_prompt="CASE",
                               topics_prompt="TOPICS", usage=self.recorder)
 
@@ -327,7 +327,7 @@ class UsageSinkTests(unittest.TestCase):
         store = Store(":memory:")
         self.addCleanup(store.close)
         settings = config()
-        recorder = UsageRecorder(store, settings, clock=lambda: 1_800_000_000.0, trailing=False)
+        recorder = UsageRecorder(store, settings, clock=lambda: 1_800_000_000.0)
         provider = build_provider(settings, opener=FakeHTTP(OLLAMA_ENVELOPE), prompt="P", case_prompt="C",
                                   topics_prompt="T", usage=recorder)
         self.assertEqual(provider.analyze_case([message(1, "lỗi")]).verdict, "ticket")
@@ -365,133 +365,9 @@ class PricingTests(unittest.TestCase):
     def test_ollama_is_free_even_with_a_price_table(self):
         store = Store(":memory:")
         self.addCleanup(store.close)
-        recorder = UsageRecorder(store, config(), clock=lambda: self.ts(14, 2), trailing=False)
+        recorder = UsageRecorder(store, config(), clock=lambda: self.ts(14, 2))
         recorder.record("ollama", "qwen3.5:9b", "primary", "ok", self.USAGE, 5)
         self.assertEqual(store.model_usage_since(0)[0][8], 0.0)
-
-
-class SummaryTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.db = Path(self.tmp.name) / "triage.sqlite3"
-        self.store = Store(self.db)
-        self.addCleanup(self.store.close)
-        self.now = datetime(2026, 10, 14, 12, 0).timestamp()   # local noon, as the file defines "today"
-        self.settings = replace(config(), db_path=str(self.db), model=model_config())
-        self.clock_value = self.now
-        self.recorder = UsageRecorder(self.store, self.settings, clock=lambda: self.clock_value, trailing=False)
-        self.path = Path(self.tmp.name) / "agentfleet-usage.json"
-
-    def test_summary_schema_values_and_daily_lines(self):
-        usage = {"prompt_tokens": 100, "completion_tokens": 50, "cache_hit_tokens": 40}
-        self.recorder.record("deepseek", "deepseek-flash", "primary", "rate_limited", {}, 10)
-        self.recorder.record("ollama", "qwen3.5:9b", "fallback", "ok", {"prompt_tokens": 7, "completion_tokens": 3}, 10)
-        self.clock_value -= 3 * 86400   # three days ago: inside 7d and 30d, outside today
-        self.recorder.record("deepseek", "deepseek-flash", "primary", "ok", usage, 10)
-        self.clock_value = self.now - 20 * 86400
-        self.recorder.record("deepseek", "deepseek-flash", "primary", "ok", usage, 10)
-        self.clock_value = self.now - 40 * 86400
-        self.recorder.record("deepseek", "deepseek-flash", "primary", "ok", usage, 10)
-        self.clock_value = self.now
-        self.recorder.publish(force=True)
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(set(data), {"schema", "generatedAt", "currency", "windows", "daily"})
-        self.assertEqual((data["schema"], data["currency"], data["generatedAt"]), (1, "USD", self.now))
-        self.assertEqual(set(data["windows"]), {"today", "7d", "30d"})
-        window_keys = {"calls", "ok", "errors", "fallbacks", "promptTokens", "completionTokens",
-                       "cacheHitTokens", "cost", "byModel"}
-        model_keys = {"provider", "model", "calls", "errors", "fallbacks", "promptTokens",
-                      "completionTokens", "cacheHitTokens", "cost"}
-        for window in data["windows"].values():
-            self.assertEqual(set(window), window_keys)
-            for entry in window["byModel"]:
-                self.assertEqual(set(entry), model_keys)
-        today, week, month = data["windows"]["today"], data["windows"]["7d"], data["windows"]["30d"]
-        self.assertEqual((today["calls"], today["ok"], today["errors"], today["fallbacks"]), (2, 1, 1, 1))
-        self.assertEqual((today["promptTokens"], today["completionTokens"], today["cacheHitTokens"]), (7, 3, 0))
-        self.assertEqual((week["calls"], week["errors"], week["fallbacks"], week["promptTokens"]), (3, 1, 1, 107))
-        self.assertEqual((month["calls"], month["promptTokens"]), (4, 207))
-        self.assertEqual(sorted((e["provider"], e["calls"]) for e in month["byModel"]),
-                         [("deepseek", 3), ("ollama", 1)])
-        self.assertEqual(round(sum(e["cost"] for e in month["byModel"]), 6), month["cost"])
-        self.assertEqual(month["cost"], round(month["cost"], 6))
-        daily = data["daily"]
-        self.assertEqual(len(daily), 30)
-        self.assertEqual([d["date"] for d in daily], sorted(d["date"] for d in daily))
-        self.assertEqual(daily[-1]["date"], "2026-10-14")
-        self.assertEqual(daily[0]["date"], "2026-09-15")
-        self.assertEqual(daily[-1], {"date": "2026-10-14", "calls": 2, "errors": 1, "fallbacks": 1, "cost": today["cost"]})
-        self.assertEqual({d["date"]: d["calls"] for d in daily if d["calls"]},
-                         {"2026-10-14": 2, "2026-10-11": 1, "2026-09-24": 1})
-        self.assertEqual(sum(1 for d in daily if d["calls"] == 0), 27)
-        for line in daily:
-            self.assertEqual(set(line), {"date", "calls", "errors", "fallbacks", "cost"})
-
-    def test_empty_database_still_produces_a_full_schema(self):
-        data = build_summary([], "USD", self.now)
-        self.assertEqual(len(data["daily"]), 30)
-        self.assertEqual(data["windows"]["today"]["byModel"], [])
-        self.assertEqual(data["windows"]["30d"]["calls"], 0)
-
-    def test_writes_are_throttled_to_one_per_interval(self):
-        self.recorder.publish(force=True)
-        first = json.loads(self.path.read_text())["generatedAt"]
-        self.clock_value = self.now + 10
-        self.recorder.record("ollama", "m", "primary", "ok", {}, 1)
-        data = json.loads(self.path.read_text())
-        self.assertEqual((data["generatedAt"], data["windows"]["today"]["calls"]), (first, 0))
-        self.clock_value = self.now + 31
-        self.recorder.record("ollama", "m", "primary", "ok", {}, 1)
-        data = json.loads(self.path.read_text())
-        self.assertEqual((data["generatedAt"], data["windows"]["today"]["calls"]), (self.now + 31, 2))
-
-    def test_a_throttled_write_is_not_lost_the_trailing_timer_fires(self):
-        recorder = UsageRecorder(self.store, self.settings, clock=lambda: self.clock_value, interval=0.2)
-        recorder.publish(force=True)
-        recorder.record("ollama", "m", "primary", "ok", {}, 1)
-        self.assertEqual(json.loads(self.path.read_text())["windows"]["today"]["calls"], 0)
-        import time
-        time.sleep(0.1)
-        self.clock_value += 1   # the fake clock passes the interval; the timer re-publishes
-        for _ in range(40):
-            if json.loads(self.path.read_text())["windows"]["today"]["calls"] == 1:
-                break
-            time.sleep(0.05)
-        self.assertEqual(json.loads(self.path.read_text())["windows"]["today"]["calls"], 1)
-        recorder.trailing = False   # stop the re-arming timer: the fake clock no longer moves
-
-    def test_write_is_atomic_temp_then_replace_with_no_leftover(self):
-        seen = []
-        real = os.replace
-
-        def replace_spy(source, target):
-            seen.append((Path(source).name, json.loads(Path(source).read_text()) ["schema"], Path(target).exists()))
-            return real(source, target)
-
-        with patch.object(usage_module.os, "replace", replace_spy):
-            self.recorder.publish(force=True)
-        self.assertEqual(seen, [("agentfleet-usage.tmp", 1, False)])
-        self.assertEqual(sorted(p.name for p in Path(self.tmp.name).glob("agentfleet-usage*")), ["agentfleet-usage.json"])
-        before = self.path.read_bytes()
-        with patch.object(usage_module.os, "replace", side_effect=OSError("disk")):
-            self.recorder.publish(force=True)   # swallowed: accounting never breaks the listener
-        self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(sorted(p.name for p in Path(self.tmp.name).glob("agentfleet-usage*")), ["agentfleet-usage.json"])
-
-    @unittest.skipIf(os.name == "nt", "POSIX mode bits")
-    def test_posix_mode_is_0640(self):
-        self.recorder.publish(force=True)
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o640)
-
-    def test_memory_database_writes_no_file(self):
-        recorder = UsageRecorder(Store(":memory:"), config(), clock=lambda: self.now, trailing=False)
-        self.assertIsNone(recorder.path)
-        recorder.publish(force=True)
-
-    def test_startup_publish_is_wired_next_to_receipt_ready(self):
-        text = (Path(__file__).resolve().parents[1] / "src" / "tg_triage" / "telegram_io.py").read_text(encoding="utf-8")
-        self.assertLess(text.index("ready(config)"), text.index("usage.publish(force=True)"))
 
 
 class RetentionAndConfigTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.36 · **Updated**: 2026-11-12 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.37 · **Updated**: 2026-11-16 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Claude
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -10,7 +10,6 @@ User yêu cầu tài liệu này và sau đó yêu cầu triển khai THINKING. 
 
 ## Related Documents
 
-- [Fleet Master và phạm vi được yêu cầu](../00-master/worker-agent-fleet-1_master_261007_v1.0.8.md)
 - [THINKING: nghiên cứu và implementation](../02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md)
 - [QA acceptance](../03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md)
 - [Hướng dẫn listener](../../listener/README.md)
@@ -2453,7 +2452,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "6c7fad4793eb9cfa716eefc506143311199b9f70b8830376915799548bd95fa6",
-    "listener/src/tg_triage/config.py": "33464c0643bfb4a86a7be648be979e6899ea340b54b302d7b41cd59e10a616d8",
+    "listener/src/tg_triage/config.py": "2e170673e171d5feebc7a57777eebd783a85b87ab8b564e5cdef51c10392be91",
     "listener/src/tg_triage/decision_rules.py": "581bc1f97c0408054ab9687796962df5204cc491738bb9b37fc6cf78d5510367",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "b3568ca6f772ed617f3d354ef32a04973e00ec02e375b8bfcfe14347a7c7e1b3",
@@ -2475,7 +2474,6 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/pipeline.py": "6af1619cbbc7343a3d4b3349cac17b7115c641817049e480af002c898ffda87c",
     "listener/src/tg_triage/provider.py": "22c0378e6d3722d857fee4ca1f9687b91eabd6f137b1e7b22bdc92db5fd2533b",
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
-    "listener/src/tg_triage/receipt.py": "ff455fdfb9424cc3e802641607dfe3c872ddc65490b2705bb804ca92f282d51a",
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
     "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
@@ -2484,14 +2482,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_pending_store.py": "fce738c79de3a9a3981c4c2ae0a12c7bf8585e13d3420eaff569b198a88a628b",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
-    "listener/src/tg_triage/telegram_io.py": "178462cb0a564973ab724aa3ec4ca8a4b56752d9c469585801352f4ef00726a3",
+    "listener/src/tg_triage/telegram_io.py": "e17c6b37da0b49cda37f7be51a286b2b49df7a12bd8a96f6d3afb4c2e8142539",
     "listener/src/tg_triage/thinking.py": "2b6b77fc94412144a68f7410b9ff594818d34dc0d6f3720ae93dede7970aa418",
     "listener/src/tg_triage/thinking_transport.py": "12aa57301f012f1091e79af7a3756139c8ac8b475e4c97e4d9b66024932e0d66",
     "listener/src/tg_triage/ticket_status.py": "6ca9ee02dcfd523df6e778247e4ed1bdac82ccc9233c9aacf0dad7cdcfe2d4bb",
     "listener/src/tg_triage/ticket_templates.py": "ed373d6f490c2005fd119f46c009af35cf389878d443d002183c1bbe2b93baa9",
     "listener/src/tg_triage/topic_store.py": "495bd90150783df45463d86a66dd32927e69fec001f7406808f8496f2466f672",
     "listener/src/tg_triage/trace.py": "3b4c55d7664a8024359c3a35113841c7af76e7770a1823dfe3843d3ea01d2ba0",
-    "listener/src/tg_triage/usage.py": "421146bd0ac181a2ff45be7c2d7e82cca1ff54cafc2941bc958f20eb9622828e",
+    "listener/src/tg_triage/usage.py": "0e6a54137bddd420fbb863071f3eccf560f3cace29edf9e2df4bd8a60d3006a2",
     "listener/templates/github-ticket/_common.md": "14be08601a1ef8cb0dce40bab5e54e317376cbbe56c8c9d41c1bc8d57e8e9716",
     "listener/templates/github-ticket/bug.md": "d517980a99b5ecfacf8de9e14d444f728b279d8841f699b767562f2579c2113c",
     "listener/templates/github-ticket/comments.md": "3a358d5d6ee36d1bcc810fadb03208c2f9cffbd9a672ccdb5348761fa43f8a27",
@@ -2500,15 +2498,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
     "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056"
   },
-  "legacy_documents": [
-    "Docs/00-master/worker-agent-fleet-1_brief_261007_v1.0.7.md",
-    "Docs/00-master/worker-agent-fleet-1_master_261007_v1.0.8.md",
-    "Docs/00-master/worker-agent-fleet-1_setup-plan_261008_v1.0.6.md",
-    "Docs/02-engineering/worker-agent-fleet-1_assistant-definition_261012_v1.0.0.md",
-    "Docs/02-engineering/worker-agent-fleet-1_engineering_261009_v1.0.3.md",
-    "Docs/02-engineering/worker-agent-fleet-1_engineering_261009_v1.0.4.md",
-    "Docs/02-engineering/worker-agent-fleet-1_service-split_261013_v1.0.0.md"
-  ],
+  "legacy_documents": [],
   "related_documents": [
     "Docs/02-engineering/telegram-triage-noissue_thinking-research_261015_v1.0.0.md",
     "Docs/03-qa/telegram-triage-noissue_qa_261015_v1.0.0.md",
@@ -2529,7 +2519,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "99a9e1e2643b31b69036e3b0dc8591fe88fec609eb0fe0bb7cd09e8fcbb17749",
+  "runtime_fingerprint": "e3106ce31d8de5883317033ee2a78e5161b6a2035766eb920246184a008238f6",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2547,6 +2537,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.37 | 2026-11-16 | Claude / owner AlexChu | Ranh giới repo theo yêu cầu Owner (“gỡ trước các phần cho phép”): repo chỉ giữ tính năng log ticket. Gỡ hợp đồng AgentFleet console: `receipt.py` (`agentfleet-ready.json`), `console_revision`, file tổng hợp `agentfleet-usage.json` trong `usage.py`; vẫn ghi `model_usage` và giá. Gỡ 7 tài liệu `worker-agent-fleet-1_*` khỏi repo, `legacy_documents` để trống. Runtime inventory 61→60, hash `usage.py`/`telegram_io.py`/`config.py` làm mới. Hành vi log ticket không đổi; chưa deploy, cần phiếu preflight mới. Hash khớp không thay review ngữ nghĩa của người. |
 | v1.16.36 | 2026-11-12 | Codex / owner AlexChu | Sự cố gw-01 08:49 +07: nguồn NEED_INFO còn `pending_review` sau khi chủ đề hết 7 ngày thành `EXPIRED`, khiến cả bản mới và rollback dừng ở startup barrier. Owner: “Duyệt sửa gate (Recommended)”. Gate chỉ coi nguồn `pending_review` của chủ đề `EXPIRED` là đã xong khi `github_called_at`, `issue_number`, `issue_url` đều NULL; nhận cả binding lô CLOSED/WAITING đã hoàn tất. Không sửa `expire_due`, schema hay dữ liệu cũ; binding ESCALATED khác của cùng nguồn vẫn cần thông báo escalation đã gửi, không được dùng EXPIRED để miễn điều kiện này. Q5 bổ sung EXPIRED, thay thế giới hạn EXPIRED trong ghi chú lịch sử v1.16.16. Regression `ExpiredStartupGuardTests`: NEED_INFO thật → `expire_due` với đồng hồ tiến 7 ngày → gate chỉ đọc → Pipeline + sweep không model/notice/GitHub; tin mới cùng sender, các ca không được miễn, binding lỗi và notice chưa rõ; mixed EXPIRED/ESCALATED chỉ qua khi có đúng thông báo escalation đã gửi. Trace runtime `rules_pending_store.py` được làm mới; test/review/offline DB/installed/live là bằng chứng riêng. |
 | v1.16.35 | 2026-11-11 | Codex / owner AlexChu | Owner “Sửa thêm vòng 7”: questions v8 SF4, examples v20 SF30–SF34. Gate chỉ đọc chặn plan followup không thể replay; ambiguity dừng worker ngay, lỗi completion được quarantine trước RulesHalt. Plan khỏe vẫn recovery, các batch khác đối chiếu HEAD. Fingerprint mismatch chỉ worker/sweep vì gate không nhận RulesSnapshot; TG-05/TG-12/TG-27 ghi giới hạn và inspection bằng công cụ hiện có, chưa có CLI repair plan. Không sửa telegram_io/legacy_preflight hoặc schema; trace/hash và test mapping cập nhật. |
 | v1.16.34 | 2026-11-11 | Codex / owner AlexChu | Review vòng 5: bàn giao checkpoint cho cả HOLD, không retry kép; cô lập replay sau expiry/HOLD và nhường queued cho worker; cửa sổ theo received_at; DONE trả stored result trước fingerprint. Mặc định team mention T3–T4 không confirmation chờ Owner xác nhận. questions v7, examples v19 SF1–SF29 có ánh xạ ID/test rõ; test nhiều sweep đối chiếu sender khác và crash/recovery. Không đổi schema, pending logic bên trong batch hoặc ops reply. Trace/hash cập nhật. |

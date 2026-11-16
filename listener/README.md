@@ -146,10 +146,6 @@ timeout_seconds = 600      # reasoning is slow on CPU; measure on the real host 
     deepseek-flash (api-docs.deepseek.com/quick_start/pricing, measured 2026-10-15); openai / anthropic / compatible
     have no built-in price and cost 0 until set. `cost = (cache_hit * hit + (prompt - cache_hit) * miss +
     completion * output) / 1e6`, times `offpeak_factor` off-peak. Local Ollama costs 0.
-  - **Console summary:** `agentfleet-usage.json` (schema 1, camelCase) is written next to the database, atomically
-    (temp, fsync, replace; mode 0640 and group `tglistener` off Windows) at startup and after a model call, at most
-    once per 30 seconds. It holds `today` / `7d` / `30d` windows (local calendar days of the server, with a
-    per-model breakdown) and 30 `daily` lines (oldest first, empty days as zero lines).
 - **Reasoning stays private:** with `think = true` Ollama returns the reasoning in `message.thinking` next to
   the JSON in `message.content`. Only `content` is parsed (a leading `<think>...</think>` block left in
   `content` is stripped first). The reasoning is never read, logged, stored in SQLite or put in an issue.
