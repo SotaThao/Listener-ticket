@@ -264,7 +264,7 @@ class ReviewFixTests(unittest.TestCase):
 
     def test_f10_dependency_version_bound(self):
         project = tomllib.loads((ROOT / "listener/pyproject.toml").read_text())
-        self.assertEqual(project["project"]["dependencies"], ["telethon>=1.45,<2"])
+        self.assertEqual(project["project"]["dependencies"], ["telethon>=1.45,<2", "agentfleet-common==1.0.0"])
 
     def test_f11_readme_documents_signals_deadline_and_replay(self):
         text = (ROOT / "listener/README.md").read_text(encoding="utf-8")

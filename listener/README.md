@@ -11,13 +11,32 @@ Agents taking over triage or GitHub ticket logging start with [AGENTS.md](AGENTS
 From `listener/`, PowerShell:
 
 ```powershell
-$env:PYTHONPATH="src"
+$env:PYTHONPATH="src;<AgentBuilder>\common\src"
 python -m unittest discover -s tests -t . -v
 python -m compileall -q src tests
 ```
 
 Tests use standard-library unittest, temporary SQLite files and injected HTTP
-openers. They do not need packages, sockets, tokens, sessions or a local model.
+openers. The shared `agentfleet_common` package must be importable; the source path
+above avoids installing it. Windows separates PYTHONPATH entries with `;`; on
+POSIX use `PYTHONPATH="src:<AgentBuilder>/common/src"`.
+Tests do not need sockets, tokens, sessions or a local model.
+
+Before deploying listener, place the `agentfleet-common==1.0.0` wheel in
+`/var/cache/agentfleet/wheels` and install it into the listener venv first, using
+the offline cache. See AgentBuilder's `common/README.md` for the wheel build command.
+The listener deploy guard must explicitly allow the retired module paths:
+`--allow-removed tg_triage/ai_transport.py --allow-removed tg_triage/model_lock.py`.
+
+Preferred rollback: `agentfleet_deploy.py --service listener --rollback <backup from the deploy that introduced agentfleet-common>`.
+That backup holds the previous code and venv and needs no uninstall.
+Only if redeploying an older release stage instead, run `pip uninstall agentfleet-common`
+in the listener venv immediately before the deploy command; the guard refuses the
+older stage while the package is present. If that deploy fails and rolls back to
+the newer listener, reinstall into the listener venv before relying on the unit:
+`pip install --no-index --find-links /var/cache/agentfleet/wheels agentfleet-common==1.0.0`,
+then check that the unit is active.
+
 
 ## Configuration and commands
 

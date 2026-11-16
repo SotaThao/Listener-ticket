@@ -231,7 +231,7 @@ class ProviderBudgetTests(RulesBootstrapTests):
 
     def run_local_route(self, text, *, settings, error=None, images=None, has_image=False):
         from tg_triage.provider import CloudProvider
-        from tg_triage.ai_transport import ProviderError
+        from agentfleet_common.ai_transport import ProviderError
         from tests.helpers import FakeHTTP
         http = FakeHTTP({'message': {'content': json.dumps({'groups': [{'message_ids': [1], 'facts': {}}]})}})
         provider = CloudProvider(settings, opener=http)
@@ -239,7 +239,7 @@ class ProviderBudgetTests(RulesBootstrapTests):
         turn = Turn(store, 'rules:t', 't', 1)
         token = CURRENT.set(turn)
         try:
-            with patch('tg_triage.ai_transport.read_key', return_value='k'), \
+            with patch('agentfleet_common.ai_transport.read_key', return_value='k'), \
                  patch('tg_triage.thinking_transport.complete', side_effect=error or ProviderError('timeout')) as cloud:
                 groups = split_and_extract(provider, self.snapshot(), [message(1, text=text, has_image=has_image)], images=images)
         finally:

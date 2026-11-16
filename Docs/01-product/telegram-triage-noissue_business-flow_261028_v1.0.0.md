@@ -82,7 +82,7 @@ listener/
 | Nhận tin, gom tin | `telegram_io.py`, `pacing.py` | Nghe group, chờ 30–60s (autonomous) hoặc cửa sổ 2 phút (legacy) |
 | Lưu và chống trùng | `store.py`, `followup_store.py`, `autonomy_store.py`, `topic_store.py` | SQLite, sổ ghi thao tác, bộ nhớ chủ đề |
 | Lọc lệnh, noise | `rules.py` | Lệnh `/bug /task /feedback…`, tin rỗng |
-| Hiểu hội thoại (model) | `thinking.py`, `thinking_transport.py`, `provider.py`, `ai_transport.py`, `classifier.py`, `ingress_model.py`, `followup_model.py`, `model_lock.py` | Đóng gói context ≤ 8 KB, gọi model, kiểm output |
+| Hiểu hội thoại (model) | `thinking.py`, `thinking_transport.py`, `provider.py`, `classifier.py`, `ingress_model.py`, `followup_model.py`; `ai_transport.py` và `model_lock.py` từ `agentfleet-common` (AgentBuilder `common/`) | Đóng gói context ≤ 8 KB, gọi model, kiểm output |
 | Quyết định | `pipeline.py`, `autonomous.py`, `models.py` | Ngưỡng 0.7, safety, chọn tạo / hỏi / bỏ qua; danh mục loại và nhãn |
 | Ticket đã có | `followups.py`, `lifecycle.py` | Bổ sung, tách, tái diễn, trạng thái open/closed |
 | **Dựng nội dung** | `ticket_templates.py` (mới), `issue_format.py` | Nạp/kiểm/render template; ghép marker, title, nhãn, sanitize |

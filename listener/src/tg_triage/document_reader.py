@@ -243,7 +243,7 @@ def _text_messages(messages):
         value=dict(message)
         if isinstance(value.get('content'),list):
             parts=value['content']
-            from .ai_transport import IMAGE_URL
+            from agentfleet_common.ai_transport import IMAGE_URL
             if any(not isinstance(p,dict) or p.get('type') not in ('text','image_url')
                     or p.get('type')=='text' and not isinstance(p.get('text'),str)
                     or p.get('type')=='image_url' and (not isinstance(p.get('image_url'),dict)

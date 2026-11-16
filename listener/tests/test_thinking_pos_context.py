@@ -53,7 +53,7 @@ class POSContextTests(unittest.TestCase):
         group=topic(tuple(range(448,453)),category='bug',type='bug',title='POS không in ticket và receipt',
             summary='Không in trên cả app và web, sử dụng máy in có dây.',actionable=True,
             details={'environment':'App và web; máy in có dây','actual':'Không in ticket và receipt'})
-        with patch('tg_triage.ai_transport.read_key',return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key',return_value='fake'), \
              patch.object(provider,'_cloud_messages',wraps=provider._cloud_messages) as cloud_messages, \
              patch('tg_triage.thinking_transport.complete',return_value={'groups':[asdict(group)]}) as request:
             for source in self.sources():p.process(source)

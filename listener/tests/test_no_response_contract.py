@@ -13,7 +13,7 @@ from tg_triage.ingress_model import parse_ingress
 from tg_triage.classifier import Classifier
 from tg_triage.provider import CloudProvider
 from tg_triage.thinking import CURRENT, Turn, request_text_bytes
-from tg_triage.ai_transport import redact
+from agentfleet_common.ai_transport import redact
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
 from tests.helpers import config, message, NOW, FakeHTTP, JPG
@@ -263,7 +263,7 @@ class NoResponseContractTests(TestCase):
         def complete(*args, **kwargs):
             requests.append(copy.deepcopy(args[3]))
             return next(replies)
-        with patch('tg_triage.ai_transport.read_key', return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key', return_value='fake'), \
              patch('tg_triage.thinking_transport.complete', side_effect=complete):
             result = CloudProvider(cfg).analyze_ingress(sources, [], read_context=history or [])
         self.assertIsNotNone(result)
@@ -366,7 +366,7 @@ class NoResponseContractTests(TestCase):
         turn = Turn(store, 'review:test', 'review:root', 604)
         token = CURRENT.set(turn)
         self.addCleanup(CURRENT.reset, token)
-        with patch('tg_triage.ai_transport.read_key', return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key', return_value='fake'), \
              patch('tg_triage.thinking_transport.complete', side_effect=complete):
             result = CloudProvider(cfg).analyze_ingress(sources, [], images=images, read_context=history)
         self.assertIsNotNone(result)

@@ -7,7 +7,7 @@ name = "tg-triage"
 version = "1.0.0"
 description = "Telegram group triage using local Ollama and GitHub issues"
 requires-python = ">=3.11"
-dependencies = ["telethon>=1.45,<2"]
+dependencies = ["telethon>=1.45,<2", "agentfleet-common==1.0.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

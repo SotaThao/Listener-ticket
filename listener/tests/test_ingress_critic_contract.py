@@ -52,7 +52,7 @@ class IngressCriticContractTests(TestCase):
             if before:
                 before(len(requests))
             return next(responses)
-        self.enterContext(patch('tg_triage.ai_transport.read_key', return_value='fake'))
+        self.enterContext(patch('agentfleet_common.ai_transport.read_key', return_value='fake'))
         self.enterContext(patch('tg_triage.thinking_transport.complete', side_effect=complete))
         return requests
 

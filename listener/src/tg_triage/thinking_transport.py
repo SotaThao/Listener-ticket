@@ -1,4 +1,4 @@
-"""Turn-deadline transport adapter; shared service transport stays byte-identical.
+"""Listener-only turn-deadline adapter using agentfleet-common from AgentBuilder common/.
 
 DNS runs in a daemon resolver (no credentials or HTTP); only the calling thread performs
 network requests and owns the model lock. No detached model request can outlive its turn.
@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 from urllib.parse import urlsplit
-from .ai_transport import (ProviderError, ENDPOINTS, PROVIDERS, PinnedHTTPS, LIMIT,
+from agentfleet_common.ai_transport import (ProviderError, ENDPOINTS, PROVIDERS, PinnedHTTPS, LIMIT,
                            IMAGE_URL, usage_of)
 
 _DNS_SLOTS = threading.BoundedSemaphore(2)

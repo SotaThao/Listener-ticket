@@ -4,6 +4,7 @@ Owner quy trình/data/state: **AlexChu**. Executor (Codex, Gemini/Antigravity, C
 
 ## Trước khi làm bất cứ việc gì
 
+0. **Việc đang dở:** ranh giới repo #2178 (repo chỉ giữ tính năng log ticket). Đọc [Bàn giao §0](../Docs/04-tasks/listener-scope-cleanup-2178_plan_261116_v1.0.0.md#0-bàn-giao--đọc-mục-này-trước-cập-nhật-2026-11-16): PR đang mở, thứ tự merge → wheel `agentfleet-common` → preflight → deploy, đợt 3 (gỡ engine cũ), câu hỏi mở và bẫy đã gặp. `ai_transport` / `model_lock` không còn trong `tg_triage`: chúng thuộc package `agentfleet-common` ở repo AgentBuilder.
 1. **Xác định vai của mình** trong [`rules/roles.md`](rules/roles.md) · bảng `actors`. Chưa được Owner giao vai trong phiên ⇒ bạn là `AGENT`, kể cả khi là model mạnh.
 2. **Tra quyền** của việc sắp làm ở bảng `actions` (A01–A27): `ALLOW` làm; `ASK_OWNER` chỉ làm khi có **đồng ý của Owner trong phiên** đúng định nghĩa trong `roles.md` (nêu đúng việc, gửi trong cuộc trò chuyện hiện tại, trích nguyên văn vào báo cáo); `DENY` hoặc không có trong bảng ⇒ không làm.
 3. Gặp điều kiện ở bảng `stop_and_ask` (S1–S7) ⇒ dừng, báo Owner kèm bằng chứng.

@@ -16,8 +16,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from .ai_transport import usage_of
-from .model_lock import MODEL_LOCK, LockUnavailable
+from agentfleet_common.ai_transport import usage_of
+from agentfleet_common.model_lock import MODEL_LOCK, LockUnavailable
 from .thinking import LOCAL_REQUEST_BUDGET_BYTES
 
 from .models import (CATEGORIES, CaseAnalysis, Classification, DETAIL_LIST_KEYS, DETAIL_STRING_KEYS,
@@ -890,7 +890,7 @@ class Classifier:
 
     def _ask(self, body, parse, attempts=2):
         from .thinking import CURRENT, BudgetExhausted
-        from .model_lock import LockStopped
+        from agentfleet_common.model_lock import LockStopped
         from .document_reader import wire_body
         turn = CURRENT.get()
         if hasattr(self, "max_output"):
@@ -915,7 +915,7 @@ class Classifier:
                             return None
                     started = time.monotonic()   # latency excludes the wait for the model lock
                     if self.opener is urlopen:
-                        from .ai_transport import complete
+                        from agentfleet_common.ai_transport import complete
                         if turn:
                             from .thinking_transport import complete
                         value = complete('ollama', self.settings.url, self.settings.model,
