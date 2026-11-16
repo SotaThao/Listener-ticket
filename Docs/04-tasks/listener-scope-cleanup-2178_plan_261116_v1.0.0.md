@@ -1,8 +1,70 @@
 # Kế hoạch gỡ đợt 2 và đợt 3: đưa repo về đúng tính năng log ticket
 
-**Ngày:** 2026-11-16 · **Owner:** AlexChu · **Trạng thái:** Nháp chờ Owner duyệt · **Refs:** vlink-group/vlink-nexora#2178
-**Tiền đề:** Đợt 1 (2026-11-16, chưa commit) đã gỡ hợp đồng AgentFleet console và 7 docs Worker Agent Fleet. Business DOCS v1.16.37, 2231 test OK, policy checker PASS 60 file.
+**Ngày:** 2026-11-16 · **Owner:** AlexChu · **Trạng thái:** Đợt 1 + 2 đã code, review, mở PR (chưa merge, chưa deploy); đợt 3 chưa bắt đầu · **Refs:** vlink-group/vlink-nexora#2178
 **Nguyên tắc Owner:** repo `Listener-ticket` chỉ chứa tính năng log ticket Telegram Triage; phần còn lại thuộc repo khác.
+
+---
+
+## 0. Bàn giao — đọc mục này trước (cập nhật 2026-11-16)
+
+Agent tiếp nhận: đọc hết mục 0, rồi `listener/AGENTS.md` (vai, quyền, cổng GO). Mục 1 trở xuống là kế hoạch gốc và quyết định Owner, giữ nguyên làm lịch sử.
+
+### 0.1 Đã xong
+
+| Đợt | Việc | Commit · nhánh | PR |
+|---|---|---|---|
+| 1 | Gỡ hợp đồng AgentFleet console (`receipt.py`, `console_revision`, file `agentfleet-usage.json`) và 7 docs `worker-agent-fleet-1_*`. Business DOCS v1.16.37, inventory 61 → 60 | `5127df9` · `feature/2178_remove-console-fleet-docs` | [SotaThao/Listener-ticket#5](https://github.com/SotaThao/Listener-ticket/pull/5) → `main` |
+| 2 (AgentBuilder) | Package `agentfleet-common` 1.0.0 (`agentfleet_common`, `PROTOCOL = 1`) trong `common/`: `ai_transport`, `model_lock` (chép nguyên văn từ `nailhub/`, chỉ đổi dòng docstring), 22 test, `build_wheel.py --service common` | `02d1604` · `feature/2178_agentfleet-common` | [PersonalProjectJob/telegram-agent#171](https://github.com/PersonalProjectJob/telegram-agent/pull/171) → `main` |
+| 2 (Listener) | Đổi 12 import sang `agentfleet_common`, xóa 2 bản sao, pin `agentfleet-common==1.0.0`, `listener/tests/test_packaging.py` kiểm version/`PROTOCOL`/hash file đã cài. Business DOCS v1.16.38, inventory 60 → 58 | `b113b3a` · `feature/2178_agentfleet-common` | [SotaThao/Listener-ticket#6](https://github.com/SotaThao/Listener-ticket/pull/6) → nhánh của #5 (xếp chồng) |
+
+Bằng chứng đợt 2: full suite Listener `Ran 2217 tests … OK (skipped=2)` (= 2231 − 16 test chuyển/bỏ + 2 mới, `nx-verifier` đối chiếu từng tên); policy checker PASS 33 rule / 58 file; package 22 test OK; `nx-reviewer` GATE 0b **APPROVED** sau 2 vòng sửa. Executor: Codex `gpt-6.1-sol` · `high`.
+
+### 0.2 Việc còn lại, theo thứ tự
+
+| # | Việc | Ai | Ghi chú |
+|---|---|---|---|
+| 1 | Review + merge **#171 → #5 → #6** đúng thứ tự | Owner | #6 xếp chồng trên #5; merge #5 xong GitHub tự đổi base #6 về `main`. Không repo nào có CI cho các nhánh này — không có check tự động |
+| 2 | Build wheel `agentfleet-common` từ **commit merge của #171**: `python deploy/build_wheel.py --service common --commit <sha> --stage <dir>` (trong AgentBuilder) | Owner/operator | Không build từ worktree chưa commit |
+| 3 | Đặt wheel vào `/var/cache/agentfleet/wheels` trên gw-01 và `pip install --no-index --find-links /var/cache/agentfleet/wheels agentfleet-common==1.0.0` vào **venv listener** (không cài vào venv NailHub — guard của NailHub sẽ từ chối) | Owner (sudo) | Phải làm **trước** deploy listener; deploy cài listener bằng `--no-deps` |
+| 4 | Precheck DB live trước khi stop bot, như sau sự cố 12/11 (chạy gate khởi động của bản mới trên bản sao DB live, giả lập hết hạn topic OPEN) | Agent soạn, Owner chạy sudo | Chưa tự động hóa trong deploy — xem 0.4 |
+| 5 | Phiếu preflight mới trong `listener/rules/preflight.md` cho release gồm #5 + #6 (P1–P13, Owner ký GO) | Agent soạn, Owner ký | Phiếu cuối trong repo là `064e1c8` (06/11); các bản cài sau đó chưa có phiếu |
+| 6 | Deploy listener với `--allow-removed` cho `tg_triage/receipt.py`, `tg_triage/ai_transport.py`, `tg_triage/model_lock.py` | Owner | Staged test `test_packaging` chạy trong venv đích trước khi stop: lệch version/hash package ⇒ deploy dừng, bot không bị đụng |
+| 7 | Sau deploy: kiểm journal (PID mới, `NRestarts=0`, dòng `rules fingerprint=`, 0 `ERROR`/`Traceback`/`RulesHalt`) | Agent đọc, Owner chạy | |
+| 8 | NailHub (và NailBlog) chuyển sang `agentfleet-common`, bỏ bản sao riêng | Repo AgentBuilder | Trước khi chuyển, `common/tests/test_parity.py` giữ hai bên cùng giao thức khóa. Đổi `PROTOCOL` thì phải nâng mọi service cùng lượt |
+| 9 | Đợt 3: gỡ engine window + autonomous | Agent qua `/dispatch` (GATE 0b) | Kế hoạch mục "Đợt 3" + kết quả đo bước 3.0 + quyết định Q2–Q4 ở cuối file. Bắt đầu từ `main` sau khi #6 merge |
+
+**Rollback sau deploy đợt 2:** ưu tiên `agentfleet_deploy.py --service listener --rollback <backup của lần deploy đó>`. Chỉ khi deploy lại một release cũ hơn thì mới `pip uninstall agentfleet-common` khỏi venv listener, ngay trước lệnh deploy; nếu deploy đó tự rollback về bản mới thì cài lại package trước khi tin vào unit (chi tiết: `listener/README.md`).
+
+### 0.3 Câu hỏi còn mở (cần Owner/operator trả lời, đừng đoán)
+
+- **Production build listener từ repo nào?** README deploy trỏ `/srv/agentfleet-split`. AgentBuilder vẫn còn thư mục `listener/` cũ (có bản sao `ai_transport`/`model_lock` cũ). Nếu gw-01 build listener từ AgentBuilder thì #5/#6 không bao giờ tới production. Kiểm `git -C /srv/agentfleet-split remote -v` trên gw-01 trước bước 6.
+- **`deploy/` và `systemd/` trong repo này** là hạ tầng AgentFleet (deploy nhiều service). AgentBuilder cũng có `deploy/` + `systemd/`. Hai bản có thể lệch; Owner quyết bản nào là nguồn, rồi gỡ bản kia (chưa nằm trong đợt nào).
+- **`legacy_reconciliation.py`** gỡ được khi DB live không còn dữ liệu engine cũ cần chuyển — cần đọc DB gw-01 (chỉ đọc, bản sao).
+- **PR #5, #6 chưa gán assignee**: `PersonalProjectJob` không phải collaborator của `SotaThao/Listener-ticket`, GitHub bỏ qua lệnh gán.
+
+### 0.4 Việc từ các audit ngày 16/11 chưa làm
+
+Các audit hạ tầng (DX 4/10) và cấu trúc thư mục (6/10) ngày 16/11 đề xuất thêm các việc dưới đây. Theo ranh giới repo, phần lớn thuộc **AgentBuilder** (hạ tầng), chỉ mục đầu thuộc repo này:
+
+| Việc | Thuộc | Ghi chú |
+|---|---|---|
+| Subcommand `tg_triage precheck` (gate khởi động trên bản sao DB live, giả lập topic hết hạn; phase hiện tại chặn deploy, phase hết hạn chỉ cảnh báo) | Listener | Dùng lại `check_before_recovery` + `expire_due`; chạy thêm `check-config` của stage |
+| Deploy gọi precheck trước `stop`; gate chạy lại trên backup sau `stop` | AgentBuilder `deploy/` | Phân loại kết quả theo JSON stdout, không theo exit code (argparse cũng trả 2) |
+| Timer kiểm gate mỗi giờ trên code đang cài | AgentBuilder `systemd/` | Listener không gửi cảnh báo này (Owner: listener chỉ log ticket) |
+| Cảnh báo khi bot chết (`OnFailure=`), gửi qua Telethon + MTProxy vào group ops, chống trùng | AgentBuilder `systemd/` | Bot API trực tiếp bị chặn trên gw-01 (chỉ đi được qua MTProxy) |
+| Hướng dẫn cài máy mới, lỗi `check-config` tách "không có file/không có quyền/TOML sai", help cho subcommand, config mẫu rules mode | Listener + AgentBuilder | |
+| Đổi tên test theo hành vi (`test_review_round2/3`, `test_round3_settings`, `test_review_fixes`) | Listener | |
+
+### 0.5 Bẫy đã gặp — đọc trước khi làm tiếp
+
+- **Push vào `SotaThao/Listener-ticket`** cần tài khoản `SotaThao`; git mặc định dùng `PersonalProjectJob` (chỉ đọc) và bị 403. Dùng token của `gh auth token --user SotaThao` cho riêng lệnh push/`gh pr`.
+- **Không có nhánh `test`** ở cả hai repo; PR `feature/*` vào `main` (khác bảng mặc định của rule commit-pr).
+- **Test `deploy.test_deploy.WheelTests.test_real_suites_from_real_staged_layout` của AgentBuilder lỗi sẵn** trên `origin/main` sạch khi checkout Windows `core.autocrlf=true` (fixture template thành CRLF). Không do các PR này gây ra.
+- **Codex `gpt-6.1-sol` không có tool `update_plan`** → BLOCKED ngay lượt đầu nếu prompt bắt buộc. Cho phép in kế hoạch đánh số + `STEP n DONE` trong tin nhắn; thanh `%` của `codex-progress.py` sẽ không chạy. Đề xuất đổi rule đã gửi `harness/inbox/codex-261116-update-plan-unavailable.md` (trùng với `codex-261104-update-plan-fallback.md`).
+- **Ghi file Docs có tiếng Việt bằng PowerShell/console redirect làm mất dấu** (thành `?`), policy checker không bắt. Ghi bằng Python `encoding='utf-8'`, rồi đếm `?` trong dòng vừa sửa.
+- **Heredoc không quote mà chứa backtick** trong bash sẽ chạy nội dung backtick như lệnh (đã làm mất chữ trong một commit message). Ghi message ra file bằng tool Write rồi `git commit -F`.
+- **Business DOCS trace**: mọi sửa file trong `listener/src`, `listener/prompts`, `listener/templates` phải làm mới hash trong `runtime_inventory` và `runtime_fingerprint` (thuật toán ghi ngay trong block), giữ định dạng `json.dumps(indent=2, ensure_ascii=False)`. Checker hiện cứng `TG-01…TG-33` — đợt 3 phải sửa checker trước khi gỡ rule.
+- **State vận hành** của đợt 2 nằm ở task harness `T-261116-dot-2-tach-ai-transport-model-lock-thanh` trong `.agent-tasks/` của checkout chính (`node <skill-repo-vlink>/harness/bin/harness-task.mjs show <id>`), trạng thái `todo` kèm ghi chú bàn giao.
 
 ---
 
@@ -176,8 +238,7 @@ Phương pháp: chạy 7 file test rules mode (`test_ops_only_regression`, `test
 ## Thứ tự tổng
 
 ```
-Đợt 1 (xong, chưa commit) ──► commit/PR đợt 1
-Đợt 2: B1–B2 (repo khác) ──► 2.4 (repo này) ──► deploy B4
+Đợt 1 ✅ PR #5 ──► Đợt 2 ✅ PR #171 (AgentBuilder) + PR #6 ──► merge 171 → 5 → 6 ──► wheel + venv + preflight + deploy (mục 0.2)
 Đợt 3: 3.0 đo ──► 3.1 Owner ──► 3.2 move ──► 3.3 trace ──► 3.4 gỡ ──► 3.5 cờ ──► 3.6 deploy
 Đợt 2 và đợt 3 độc lập về file (trừ classifier.py: đợt 2 đổi import, đợt 3 chuyển strip_thinking)
 ⇒ làm đợt 2 trước để tránh xung đột.
