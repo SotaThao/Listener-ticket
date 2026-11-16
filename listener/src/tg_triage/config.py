@@ -330,7 +330,7 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         timeout = _number(ollama["timeout_seconds"], "ollama.timeout_seconds", 0.001)
     else:
         timeout = DEFAULT_MODEL_TIMEOUT_SECONDS
-    from .ai_transport import validate_endpoint, ProviderError, ENDPOINTS
+    from agentfleet_common.ai_transport import validate_endpoint, ProviderError, ENDPOINTS
     base_url = model_table.get("base_url", ENDPOINTS.get(provider, url))
     try:
         validate_endpoint(provider, base_url)

@@ -12,7 +12,7 @@ from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
 from tg_triage.thinking import pack_messages,request_text_bytes
 from tg_triage.provider import build_provider
-from tg_triage.ai_transport import ProviderError
+from agentfleet_common.ai_transport import ProviderError
 from tests.helpers import config,message,topic,FakeHTTP,FakeDownloader,FakeUploader,JPG,NOW
 from tests.test_followups import GitHub
 
@@ -34,7 +34,7 @@ class ThinkingImageTests(unittest.TestCase):
         provider=build_provider(cfg);gh=GitHub();sent=[]
         p=Pipeline(cfg,store,provider,gh,notice_sender=lambda c,m,t:sent.append((m,t)) or 1000+m,
             downloader=FakeDownloader({442:(JPG,'source.jpg')}),uploader=FakeUploader())
-        with patch('tg_triage.ai_transport.read_key',return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key',return_value='fake'), \
              patch('tg_triage.thinking_transport.complete',side_effect=responses) as request:
             self.feed(p)
         return store,gh,sent,request
@@ -230,7 +230,7 @@ class ThinkingImageTests(unittest.TestCase):
         p=Pipeline(cfg,store,provider,gh,uploader=FakeUploader(),downloader=FakeDownloader({442:(JPG,'photo.jpg')}))
         groups=[topic((442,),category='task',type='task',title='Thiết kế bảng đã nêu',summary='Yêu cầu thiết kế từ caption'),
             topic((443,),category='feedback',type='question'),topic((444,),category='chat',verdict='noise')]
-        with patch('tg_triage.ai_transport.read_key',return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key',return_value='fake'), \
              patch('tg_triage.thinking_transport.complete',return_value={'groups':[asdict(g) for g in groups]}) as request:
             self.feed(p)
         self.assertEqual(request.call_count,1)

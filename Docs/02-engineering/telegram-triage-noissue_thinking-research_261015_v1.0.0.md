@@ -123,7 +123,7 @@ Root: `C:/Users/AD/.codex/worktrees/telegram-ticket-reply/AgentBuilder`. Baselin
 | followup_store.py: save_followup_plan, reserve_followup_operation, finish_followup_operation, remember_followup_result, init_followups | Persist plan before external operations; reserve before POST; restart reserved→ambiguous; no blind duplicate POST. |
 | followups.py: _run, sweep, _notify | Execute/resume and report known actual outcomes. |
 | provider.py: CloudProvider._ask, _ask_cloud | Cloud consent, redaction, fallback and invalid-output retries; no semantic-turn-wide deadline. |
-| ai_transport.py: complete, request_json, redact | Bounded transport response/input, endpoint validation and per-call timeout. |
+| agentfleet-common (AgentBuilder common/), ai_transport.py: complete, request_json, redact | Bounded transport response/input, endpoint validation and per-call timeout. |
 | usage.py: UsageRecorder.record | Usage/cost/latency available; model latency excludes waiting for MODEL_LOCK. |
 | classifier.py: strip_thinking, parsers and _ask | Ignores message.thinking; keep this invariant. |
 

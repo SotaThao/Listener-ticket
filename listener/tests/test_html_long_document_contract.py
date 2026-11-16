@@ -179,7 +179,7 @@ class HtmlLongDocumentContractTests(TestCase):
         captured=[]
         def complete(provider,url,name,messages,schema,**kwargs):
             captured.append(copy.deepcopy(messages));return {}
-        with patch('tg_triage.ai_transport.read_key',return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key',return_value='fake'), \
              patch('tg_triage.thinking_transport.complete',side_effect=complete):
             with self.turn() as (turn,store):
                 self.assertEqual({},model._ask(body,json.loads,attempts=1))
@@ -191,14 +191,14 @@ class HtmlLongDocumentContractTests(TestCase):
     def test_fallback_payload_has_its_own_budget_after_primary_provider_failure(self):
         from tg_triage.provider import CloudProvider
         from tg_triage.config import ModelConfig
-        from tg_triage.ai_transport import ProviderError
+        from agentfleet_common.ai_transport import ProviderError
         settings=replace(config(),model=ModelConfig(provider='deepseek',name='test',think=False,
             base_url='https://api.deepseek.com',cloud_consent=True,cloud_image_consent=True,
             fallback='ollama',fallback_think=False))
         http=FakeHTTP(dict(message=dict(content='{}')))
         model=CloudProvider(settings,opener=http)
         body=document_body();body['_local_messages']=[dict(role='user',content='X'*9000)]
-        with patch('tg_triage.ai_transport.read_key',return_value='fake'), \
+        with patch('agentfleet_common.ai_transport.read_key',return_value='fake'), \
              patch('tg_triage.thinking_transport.complete',side_effect=ProviderError('provider_failed')) as cloud:
             with self.turn() as (turn,store):
                 self.assertIsNone(model._ask(body,json.loads,attempts=1))
