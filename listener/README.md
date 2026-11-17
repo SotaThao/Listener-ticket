@@ -55,6 +55,8 @@ python -m tg_triage login --config /etc/tg-triage/listener.toml
 python -m tg_triage run --config /etc/tg-triage/listener.toml
 python -m tg_triage export-csv --config /etc/tg-triage/listener.toml --out /var/lib/agentfleet/tg/review.csv
 python -m tg_triage export-csv --db /var/lib/agentfleet/tg/triage.sqlite3 --out /var/lib/agentfleet/tg/review.csv
+python -m tg_triage usage-daily --config /etc/tg-triage/listener.toml --days 30 --tz +07:00
+python -m tg_triage usage-daily --db /var/lib/agentfleet/tg/triage.sqlite3 --days 30
 ```
 
 For a dry-run, keep `mode = "dry-run"` or set `TG_TRIAGE_MODE=dry-run`.
@@ -64,6 +66,31 @@ prefixes in cells are neutralized with an apostrophe; the file has mode 0600.
 CSV export reads only the database path from TOML or `--db`; it does not load
 Telegram/GitHub credentials and opens SQLite read-only without recovery or
 schema changes. A missing database exits with code 2 without creating paths.
+
+`usage-daily` prints JSON for local calendar days (including today), defaulting to
+30 days and timezone `+07:00`. It reads only the database path from config (or uses
+`--db`), opens SQLite read-only, and works with databases predating classification
+logging. Per day/provider/model it reports model calls, ok/error counts, prompt,
+completion and cache-hit tokens, and cost. Classification totals are grouped by
+phase/final state, with runs using model calls and summed reasoning tokens (null
+when unavailable). Calls come from `model_usage`; they are not double-counted from
+classification rows. For negative offsets use `--tz=-07:00`.
+
+Rules evaluations record one metadata-only `classification_runs` row per attempt,
+including retries and zero-call early decisions. Several groups share a `MULTI`
+row and structural outcomes. Decisions reflect evaluation time; later execution
+overrides are excluded. Classic intake and the unread-document branch have no
+classification run. Proposals retain IDs, field names and enums, never text or
+field values. Provider/model identify the last recorded call; totals include all
+calls and fallback. Reasoning tokens and finish reason remain unavailable.
+`classification_tool_calls` is reserved for later tooling and has no current
+automatic writer. Tool arguments retain names, types/lengths and explicitly named
+integer IDs; raw values and nested content are discarded. Logging failures warn
+and leave classification behavior intact.
+Hourly maintenance uses `[assistant] retention_days` (default 90, range 1–3650)
+for these two tables, deleting tool rows first. It backfills recent single-group
+message-space ticket links from `messages.issue_url`; topic references are excluded.
+`model_usage` keeps its separate 90-day retention rule.
 
 On the ThinkPad, the provisioned environment must have the declared Telegram
 dependency and the package (or `listener/src` on PYTHONPATH). The supplied systemd

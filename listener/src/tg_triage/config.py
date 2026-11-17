@@ -126,6 +126,11 @@ class AttachmentsConfig:
 
 
 @dataclass(frozen=True)
+class AssistantConfig:
+    retention_days: int = 90
+
+
+@dataclass(frozen=True)
 class Config:
     mode: str
     telegram: TelegramConfig
@@ -145,6 +150,7 @@ class Config:
     context_quiet_seconds: int = 30
     context_max_wait_seconds: int = 60
     decision_rules_enabled: bool = False
+    assistant: AssistantConfig = field(default_factory=AssistantConfig)
 
     def redacted(self) -> dict:
         result = asdict(self)
@@ -391,6 +397,10 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
     context_max_wait_seconds=_integer(thinking_table.get('context_max_wait_seconds',60),'thinking.context_max_wait_seconds',30)
     if not context_quiet_seconds<=context_max_wait_seconds<=60:
         raise ConfigError('thinking: expected 30 <= context_quiet_seconds <= context_max_wait_seconds <= 60')
+    assistant_table = _optional_table(data, 'assistant')
+    retention_days = _integer(assistant_table.get('retention_days', 90), 'assistant.retention_days')
+    if retention_days > 3650:
+        raise ConfigError('assistant.retention_days: expected integer 1..3650')
     return Config(
         mode=mode,
         telegram=TelegramConfig(
@@ -414,4 +424,5 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         context_quiet_seconds=context_quiet_seconds,
         context_max_wait_seconds=context_max_wait_seconds,
         decision_rules_enabled=decision_rules_enabled,
+        assistant=AssistantConfig(retention_days),
     )

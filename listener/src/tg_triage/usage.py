@@ -51,6 +51,11 @@ class UsageRecorder:
             usage = usage or {}
             ts = self.clock()
             cost = 0.0 if provider == "ollama" else price(self.pricing, usage, ts)
+            try:
+                from . import classification_log
+                classification_log.note_call(provider, model, role, outcome, usage, round(cost, 6))
+            except Exception as error:
+                LOG.warning("Classification usage failed exception=%s", type(error).__name__)
             self.store.record_model_usage(
                 ts, provider, model, role, outcome, usage.get("prompt_tokens", 0),
                 usage.get("completion_tokens", 0), usage.get("cache_hit_tokens", 0),

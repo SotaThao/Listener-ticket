@@ -1,5 +1,6 @@
 """Trusted code facts for the rules-based intake path."""
 from . import rules
+from . import classification_log
 from .decision_rules import CodeFacts, has_team_mention
 
 
@@ -195,7 +196,20 @@ def early_decision(snapshot, sources, *, prefilter=True, banter_context=(), chat
     return result if independent else None
 
 
-def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False):
+def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, topic_id=None):
+    """Record one rules attempt without changing the evaluation result."""
+    sources = list(sources)
+    phase = 'followup_confirm' if confirm_followup else 'pending_merge' if allow_mixed else 'extract'
+    with classification_log.run(snapshot, sources, images, phase, topic_id=topic_id) as attempt:
+        result = _evaluate_batch(snapshot, provider, sources, images=images, reply_target_for=reply_target_for,
+            asked_counts=asked_counts, allow_mixed=allow_mixed, documents=documents, read_context=read_context,
+            banter_context=banter_context, chat_replies=chat_replies, confirm_followup=confirm_followup)
+        if attempt is not None:
+            attempt.result = result
+        return result
+
+
+def _evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False):
     """Validate every group before returning decisions; None means the whole batch holds."""
     sources = list(sources)
     if not sources: return None
@@ -208,6 +222,7 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
     reviews={}
     try:
         groups = split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=None if confirm_followup else reviews)
+        classification_log.note_proposal(groups, snapshot)
         if groups is None: return None
         if allow_mixed and len(groups) != 1: return None
         if confirm_followup and any('lifecycle' in facts or facts.get('intent', {}).get('value') in ('status', 'analyze')
@@ -1418,7 +1433,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                         pipeline._prepared_images=pipeline.attachments.prepare_images(batch_id,list(actual.values()))
                         scoped_images={lookup[(m.chat_id,m.message_id)]:path for m,path in pipeline._prepared_images.accepted
                                        if (m.chat_id,m.message_id) in lookup}
-                    merged=evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,scoped,images=scoped_images,asked_counts=asked,allow_mixed=True)
+                    merged=evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,scoped,images=scoped_images,asked_counts=asked,allow_mixed=True,topic_id=topic)
                     if merged is None or len(merged)!=1:
                         too_large=too_large or (merged is None and _too_large(turn))
                         groups=None; break
@@ -2013,7 +2028,7 @@ def _process_source_followup(pipeline, message):
                 with decision_turn(pipeline, 'rules:followup:' + own, topic, message.message_id):
                     outcome = evaluate_batch(pipeline.rules_snapshot, _FollowupConfirmationProvider(pipeline.classifier, bare),
                                              model_sources, images=images, asked_counts=json.loads(snapshot['asked']),
-                                             allow_mixed=True, confirm_followup=True)
+                                             allow_mixed=True, confirm_followup=True, topic_id=topic)
         except Exception:
             outcome = None
         if (outcome is None or len(outcome) != 1
@@ -2186,7 +2201,7 @@ def _process_ops_evaluate(pipeline,message,topic,asked,originals,snapshot,*,is_o
         images={pair_to_ref[(m.chat_id,m.message_id)]:path for m,path in pipeline._prepared_images.accepted} if pipeline._prepared_images is not None else {}
         reply_target='bot_question' if is_ops else 'none'
         outcome=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,model_sources,images=images,documents=documents,
-                                                    reply_target_for=lambda _: reply_target,asked_counts=asked,allow_mixed=True)
+                                                    reply_target_for=lambda _: reply_target,asked_counts=asked,allow_mixed=True,topic_id=topic)
         too_large = outcome is None and _too_large(turn)
     if outcome is None and too_large:
         result = _request_too_large(pipeline,source,topic,attempt)
@@ -2411,6 +2426,7 @@ def _escalate(pipeline, source, topic):
 
 
 def sweep(pipeline, *, exclude_chat_ids=frozenset()):
+    classification_log.maintain(pipeline.store, config=pipeline.config)
     from .store import _to_message
     from .rules_pending_store import RulesHalt
     pending=pipeline.rules_pending

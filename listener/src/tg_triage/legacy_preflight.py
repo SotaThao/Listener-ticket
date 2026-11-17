@@ -21,6 +21,8 @@ _register('core','reconciliation','case_key status balanced','status',('balanced
 _register('core','attachments','id chat_id message_id case_key status','status',('uploaded','prewrite_error'),(),('uploading','ambiguous','error'))
 _register('core','group_notices','chat_id message_id kind status notice_message_id','status',('sent',),(),('reserved','failed','ambiguous'))
 _register('accounting','model_usage','id outcome')
+_register('accounting','classification_runs','run_id created_at chat_id rules_fingerprint')
+_register('accounting','classification_tool_calls','run_id seq tool')
 _register('followup','followup_roots','root_key chat_id source_message_id case_key issue_number siblings split_plan',json_fields=('siblings','split_plan'))
 _register('followup','followup_jobs','id chat_id message_id root_key status plan result','status',('done','blocked'),('queued','planned','analyzing'),('reserved','ambiguous','error'),('plan',))
 _register('followup','followup_operations','job_id ordinal kind status payload','status',('done',),('planned',),('reserved','ambiguous','error'),('payload',))

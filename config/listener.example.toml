@@ -108,3 +108,7 @@ decision_rules_enabled = false
 # Live autonomous Telegram: wait for conversation context, then classify by meaning.
 context_quiet_seconds = 30
 context_max_wait_seconds = 60
+
+[assistant]
+# Retention for classification runs and their tool-call metadata only.
+retention_days = 90

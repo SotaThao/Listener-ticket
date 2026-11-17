@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.38 · **Updated**: 2026-11-16 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.39 · **Updated**: 2026-11-17 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -384,6 +384,12 @@ Template là nội dung tin cậy được phát hành, không phải kênh ch�
 
 Quota issue tính create attempts kể cả sibling/unknown outcome; comment không tính issue quota. Upload quota riêng. Dry-run không GitHub write/upload/text notice, có thể download/validate và reaction TG-13. SQLite giữ text/context gốc được bảo vệ; logs/usage không giữ content. Usage giữ 90 ngày; test regression không phải accuracy AI hay SLA.
 
+Rules mode lưu một dòng `classification_runs` cho mỗi lượt đánh giá, kể cả retry, lỗi và quyết định sớm không gọi model; không đổi quyết định hoặc thao tác của bot. Một nhóm ghi trạng thái/luật trực tiếp; nhiều nhóm dùng `MULTI` và kết quả cấu trúc theo nhóm. `final_state` là quyết định rules tại thời điểm đánh giá, không phản ánh override ở giai đoạn thực thi. Nhánh tài liệu chưa đọc và luồng classic (không rules) không có dòng này. `mode` hiện ghi `live` theo hợp đồng telemetry, không dùng cột này để chứng minh side effect hay dry-run đã gửi ticket.
+
+Proposal chỉ lưu IDs, tên trường, intent/loại lifecycle và cờ có task; không lưu giá trị dữ kiện, task text, trích dẫn, nội dung tin hay private reasoning. ID của pending merge/confirmation thuộc `topic_ref`, còn extract thuộc `message`; fingerprint của topic refs bao gồm topic_id và id_space để không trùng giữa hai chủ đề dùng cùng refs. Fingerprint lô chỉ dùng để truy vết, không deduplicate hoặc điều khiển xử lý. Token/chi phí cộng từ các lượt gọi thực tế; provider/model là lượt gọi cuối, fallback ghi cờ và mã lỗi, không ghi thông điệp lỗi tự do. `reasoning_tokens`, `finish_reason`, effort và tóm tắt suy luận hiện NULL. `classification_tool_calls` mới có schema/API, hiện chưa phát sinh tự động; tham số tool chỉ giữ tên, kiểu, độ dài và IDs dạng số nguyên được chỉ rõ, không giữ giá trị thô hoặc nội dung lồng nhau.
+
+`[assistant] retention_days` mặc định 90, chỉ chấp nhận số nguyên 1–3650; áp dụng riêng cho `classification_runs` và `classification_tool_calls`, dọn tối đa mỗi giờ, xóa tool rows trước run rows theo lô tối đa 5000. Không áp cấu hình này cho `model_usage` (vẫn quy tắc 90 ngày riêng), hội thoại hay journal cũ. Tối đa mỗi giờ bổ sung `ticket_ref` từ `messages.issue_url` cho lượt dưới 7 ngày, chỉ một nhóm, `id_space=message`, trạng thái READY/APPEND/APPEND_CLOSED/RELATED và chưa có link; không đổi bảng nguồn. Lỗi logging bị cô lập, không commit transaction của luồng khác. `usage-daily` chỉ đọc và xuất JSON theo ngày địa phương (mặc định +07:00), provider/model, outcome/token/cost từ usage và số lượt phân loại theo phase/final_state; database cũ thiếu hai bảng vẫn đọc được.
+
 `[thinking] enabled` mặc định true khi thiếu cấu hình; false + restart quay về semantic path cũ, giữ mọi journal/reservation/result bền vững. Migration chỉ thêm bảng, không xóa/đổi dữ liệu cũ. Journal quyết định hiện chưa có automatic retention; dữ liệu ngắn chỉ gồm IDs/labels/provenance, operator phải quản lý storage theo chính sách SQLite đang có.
 
 ### TG-33 — Template nội dung ticket/notice
@@ -500,6 +506,8 @@ SQLite chính chứa text/context hội thoại, không được coi là content
 | `group_notices` | Source message, kind/status và `notice_message_id` thực tế |
 | `attachments` | Reservation, filename và trạng thái upload; đối chiếu thêm asset refs trong context |
 | `model_usage` | Provider/model, outcome, token, latency và cost; telemetry, không thay bằng chứng phân loại |
+| `classification_runs` | Một lượt đánh giá rules: turn/topic, IDs, fingerprint, proposal cấu trúc, trạng thái/luật lúc đánh giá, tổng calls/token/cost; không content, không chứng minh execution outcome |
+| `classification_tool_calls` | Metadata tool theo `(run_id, seq)`; API dành cho lượt sau, hiện chưa tự ghi; retention xóa trước run |
 
 Chuỗi truy vết: `(chat_id, message_id)` → `case_key/group_key` → `followup_roots.root_key` → `followup_jobs.id` → `(job_id, ordinal)` → `(repository, issue_number)` và notice Telegram. Lấy root từ liên kết đã lưu, không tự nối chuỗi rồi đoán: case/root có thể khác định dạng. Issue number đơn lẻ không duy nhất giữa các repository; mọi truy vấn issue phải có chat/repository đã đối chiếu. Chỉ có URL được user/model đưa ra không chứng minh liên kết nguồn.
 
@@ -570,7 +578,7 @@ Output roots/job payload có thể chứa nội dung riêng tư: chỉ lưu evid
 
 Báo cáo debug phải có: thời điểm/timezone; host/runtime; repository/issue; chat/source/reply IDs; case/group/root/turn/job/operation keys tìm được hoặc ghi rõ chưa tìm thấy; nguồn ảnh/caption đã kiểm; reason/budget; trạng thái ledger và readback bên ngoài; backup/audit nếu đã sửa; kết quả còn chưa xác minh. Không báo PASS chỉ từ hash hoặc đọc code.
 
-Baseline v1.3.1 có SQLite, journal và các ledger nêu trên. Đợt foundation v1.4.0 triển khai topic registry/trace trong worktree; tình trạng test/review/enablement phải đọc evidence của đợt đó, không suy rằng đã deploy. Autonomous routing/lifecycle có trong v1.5.0 opt-in; dashboard debug và facts/semantic search toàn bộ lịch sử chưa triển khai. Giữ automatic retention 90 ngày chỉ cho usage theo TG-32; không áp con số này cho toàn bộ hội thoại/journal hay tự xóa mapping cần cho reply tin cũ.
+Baseline v1.3.1 có SQLite, journal và các ledger nêu trên. Đợt foundation v1.4.0 triển khai topic registry/trace trong worktree; tình trạng test/review/enablement phải đọc evidence của đợt đó, không suy rằng đã deploy. Autonomous routing/lifecycle có trong v1.5.0 opt-in; dashboard debug và facts/semantic search toàn bộ lịch sử chưa triển khai. Automatic retention theo TG-32 chỉ áp usage (90 ngày riêng) và hai bảng classification (cấu hình retention_days); không áp cho toàn bộ hội thoại/journal hay tự xóa mapping cần cho reply tin cũ.
 
 ## Truy vết và kiểm tra drift
 
@@ -2351,6 +2359,18 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/trace.py",
           "symbol": "trace"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "run"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "maintain"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "daily_summary"
         }
       ],
       "tests": [
@@ -2397,6 +2417,18 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_trace_autonomous.py",
           "symbol": "AutonomousTraceTests.test_clarification_reservation_is_traceable_without_question_or_hash"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_pipeline_batch_ab_has_identical_decisions_github_and_state"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_proposal_never_stores_content_or_task_text"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_startup_gate_1001_runs_supported_and_tool_roundtrip"
         }
       ]
     },
@@ -2444,14 +2476,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/prompts/thinking-topics.md": "f3295f8cdf8d3707d8844ffe61c2eeca0efc1763a0f9879c86b375c1a8b15a58",
     "listener/prompts/topics.md": "99dca8ee4272cca18bb283d489b709542661694639aad6ec720d63c7a2b47dc8",
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
-    "listener/src/tg_triage/__main__.py": "70c8267186e8f15b1556eb22c2d47e9988a554316775416873db44076568913f",
+    "listener/src/tg_triage/__main__.py": "b3cea5235e02029e0d2056491a4beca1350e56e03c5e41b0840b502b35478f05",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
     "listener/src/tg_triage/analysis_task.py": "f91cf1e28732c6a585eca133000065bb9c21fecb50354046ea02c791ed3def3c",
     "listener/src/tg_triage/attachments.py": "53a94fb982339aa8aba247ba763583bdc0436a73dae618c2942c61b4e7af55b6",
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "9551c55253041bf6bc66310262542bf183381e5b2ad2043c6b77f54f6201d5bc",
-    "listener/src/tg_triage/config.py": "e24729befd169d6af6a493f6841f9dfeb41ea75a3778699a8d6d77310835d1d3",
+    "listener/src/tg_triage/config.py": "6e173400d1bc0ac31d03513a022aa13867eb90ebd392e4c8c1c5a691668d8b7b",
     "listener/src/tg_triage/decision_rules.py": "581bc1f97c0408054ab9687796962df5204cc491738bb9b37fc6cf78d5510367",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "e24ccde2c8402ff6e62292f0eb0241a9baa3df3b2a4dffef0f465d253eecd3c8",
@@ -2463,7 +2495,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/ingress_diagnostics.py": "f61db228b7b23e4357c47ec38b3fc915cfa0e9ec2a1eec26071abd897bb4f82a",
     "listener/src/tg_triage/ingress_model.py": "489f3005ecd639f30cef3cb2acb3edc732b08f63921384eab408ed687fb59c96",
     "listener/src/tg_triage/issue_format.py": "c01c865efe9a037bb006f5c3e0d1673716c53ca176b4694de7ec972ba939b0ad",
-    "listener/src/tg_triage/legacy_preflight.py": "49225f7053005e8232120c0da61191eec493dc6589fb2cdc0831b26aecd38880",
+    "listener/src/tg_triage/legacy_preflight.py": "7cff5af8239110723eb44faf29d1ce2abdbd73c6c1bcf742d092813c24f50c12",
     "listener/src/tg_triage/legacy_reconciliation.py": "c26c46020bd218f4d5bf0df9e2111cf0094e7ab2f5ada1195680896b2d7baa50",
     "listener/src/tg_triage/lifecycle.py": "0c06d3a4360364b28a1be851bc7ff88080293486c3a7d6d8e276286eede84155",
     "listener/src/tg_triage/models.py": "4f5eccde0c4b989e7ae8fac637a3a1ee29c38b523c6b289c32a592b6dd672f79",
@@ -2476,10 +2508,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "d275400dfc0c422dedfd8dd42aaec2c26343cc6079c1c14a8e7bc785dcdd9f04",
-    "listener/src/tg_triage/rules_intake.py": "38745ca7e663f9508e9b418fcc3d1d0a1fb8b2410fffb8044fadcdacd03962dd",
+    "listener/src/tg_triage/rules_intake.py": "7c324a1bf1cd4298fd58dbb54fd1dd65a32c2a514a9722bded51dec56c1e5e1e",
     "listener/src/tg_triage/rules_pending_store.py": "fce738c79de3a9a3981c4c2ae0a12c7bf8585e13d3420eaff569b198a88a628b",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
-    "listener/src/tg_triage/store.py": "28b060fec3ac0332c9e5a9b8452105107200946fa93e1e30c46c95f0c91bd217",
+    "listener/src/tg_triage/store.py": "80bf2d7eda7011f2c26562da4740c9e91c3af696625d59d86a2c70fbab3ad783",
     "listener/src/tg_triage/telegram_io.py": "e17c6b37da0b49cda37f7be51a286b2b49df7a12bd8a96f6d3afb4c2e8142539",
     "listener/src/tg_triage/thinking.py": "2b6b77fc94412144a68f7410b9ff594818d34dc0d6f3720ae93dede7970aa418",
     "listener/src/tg_triage/thinking_transport.py": "8a24ae19c5068a9b82bbf9d4676d6b3f6b3c07854fab2a24f3cf69686cfacc48",
@@ -2487,14 +2519,15 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/ticket_templates.py": "ed373d6f490c2005fd119f46c009af35cf389878d443d002183c1bbe2b93baa9",
     "listener/src/tg_triage/topic_store.py": "495bd90150783df45463d86a66dd32927e69fec001f7406808f8496f2466f672",
     "listener/src/tg_triage/trace.py": "3b4c55d7664a8024359c3a35113841c7af76e7770a1823dfe3843d3ea01d2ba0",
-    "listener/src/tg_triage/usage.py": "0e6a54137bddd420fbb863071f3eccf560f3cace29edf9e2df4bd8a60d3006a2",
+    "listener/src/tg_triage/usage.py": "50acbdb041162d6b7d9150e84efdcfc383649a57742bef736c742a514bf2071f",
     "listener/templates/github-ticket/_common.md": "14be08601a1ef8cb0dce40bab5e54e317376cbbe56c8c9d41c1bc8d57e8e9716",
     "listener/templates/github-ticket/bug.md": "d517980a99b5ecfacf8de9e14d444f728b279d8841f699b767562f2579c2113c",
     "listener/templates/github-ticket/comments.md": "3a358d5d6ee36d1bcc810fadb03208c2f9cffbd9a672ccdb5348761fa43f8a27",
     "listener/templates/github-ticket/feedback.md": "97082da5b8503b743d2b3df18502498c05a65d9975621eef2dad812e67565dbc",
     "listener/templates/github-ticket/group-replies.md": "456e766494ce45b8d508e662c48c6eff2c4e34853163d2fc7867f09f55ea9397",
     "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
-    "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056"
+    "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056",
+    "listener/src/tg_triage/classification_log.py": "b85022bae39cc8bd074e887377f544aea2db36a532b654421105e3771be92ce4"
   },
   "legacy_documents": [],
   "related_documents": [
@@ -2535,6 +2568,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.39 | 2026-11-17 | Codex / owner AlexChu | #2914: thêm classification_runs và classification_tool_calls; một dòng mỗi lần đánh giá rules, proposal chỉ gồm cấu trúc/IDs, tổng usage và fallback. Ghi best-effort, không commit transaction khác, không đổi quyết định bot; phân biệt evaluation với execution, không ghi nhánh unread-document/classic. Thêm retention riêng qua assistant.retention_days, backfill ticket_ref hằng giờ và usage-daily chỉ đọc. Registry không khai báo json_fields/status/enum để lịch sử trên 1000 dòng không chặn startup; không sửa bug #2931. Trace thêm classification_log.py và cập nhật hash runtime đã đổi; kiểm thử privacy, failure isolation, Pipeline A/B, retention, CLI và gate 1001 dòng. Sau review: chọn cùng run_ids theo thứ tự khi dọn retention, phân biệt topic refs trong fingerprint, chuẩn hóa token không hợp lệ về 0, dùng mặc định khi thiếu assistant config, chỉ lưu cấu trúc tham số tool. Vòng 2: đo latency bằng store.clock để đồng hồ giả cố định tạo dòng giống nhau; truyền topic chứa refs khi pending merge nằm trong batch Turn, giữ đúng topic_id và fingerprint mà không đổi Turn/budget. Chưa deploy. |
 | v1.16.38 | 2026-11-16 | Codex / owner AlexChu | Round 2 (#2178): chuyển transport và model-lock dùng chung sang `agentfleet-common==1.0.0` tại AgentBuilder, `PROTOCOL = 1`; listener giữ `thinking_transport`. Gỡ hai bản sao local, chuyển pure-module tests và giữ integration tests; thêm kiểm tra packaging/version/protocol. Runtime inventory 60→58, làm mới hash 5 file runtime và fingerprint; mọi trace symbol còn tồn tại. Hành vi model/lock/error không đổi; wheel common phải có trong cache offline và venv trước khi deploy listener. |
 | v1.16.37 | 2026-11-16 | Claude / owner AlexChu | Ranh giới repo theo yêu cầu Owner (“gỡ trước các phần cho phép”): repo chỉ giữ tính năng log ticket. Gỡ hợp đồng AgentFleet console: `receipt.py` (`agentfleet-ready.json`), `console_revision`, file tổng hợp `agentfleet-usage.json` trong `usage.py`; vẫn ghi `model_usage` và giá. Gỡ 7 tài liệu `worker-agent-fleet-1_*` khỏi repo, `legacy_documents` để trống. Runtime inventory 61→60, hash `usage.py`/`telegram_io.py`/`config.py` làm mới. Hành vi log ticket không đổi; chưa deploy, cần phiếu preflight mới. Hash khớp không thay review ngữ nghĩa của người. |
 | v1.16.36 | 2026-11-12 | Codex / owner AlexChu | Sự cố gw-01 08:49 +07: nguồn NEED_INFO còn `pending_review` sau khi chủ đề hết 7 ngày thành `EXPIRED`, khiến cả bản mới và rollback dừng ở startup barrier. Owner: “Duyệt sửa gate (Recommended)”. Gate chỉ coi nguồn `pending_review` của chủ đề `EXPIRED` là đã xong khi `github_called_at`, `issue_number`, `issue_url` đều NULL; nhận cả binding lô CLOSED/WAITING đã hoàn tất. Không sửa `expire_due`, schema hay dữ liệu cũ; binding ESCALATED khác của cùng nguồn vẫn cần thông báo escalation đã gửi, không được dùng EXPIRED để miễn điều kiện này. Q5 bổ sung EXPIRED, thay thế giới hạn EXPIRED trong ghi chú lịch sử v1.16.16. Regression `ExpiredStartupGuardTests`: NEED_INFO thật → `expire_due` với đồng hồ tiến 7 ngày → gate chỉ đọc → Pipeline + sweep không model/notice/GitHub; tin mới cùng sender, các ca không được miễn, binding lỗi và notice chưa rõ; mixed EXPIRED/ESCALATED chỉ qua khi có đúng thông báo escalation đã gửi. Trace runtime `rules_pending_store.py` được làm mới; test/review/offline DB/installed/live là bằng chứng riêng. |
