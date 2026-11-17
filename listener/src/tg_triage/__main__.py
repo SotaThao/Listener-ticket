@@ -46,12 +46,16 @@ def main(argv=None) -> int:
     os.umask(0o077)
     parser = argparse.ArgumentParser(prog="tg-triage")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("run", "login", "export-csv", "check-config", "trace", "legacy-preflight", "legacy-transition", "legacy-release"):
+    for name in ("run", "login", "export-csv", "usage-daily", "check-config", "trace", "legacy-preflight", "legacy-transition", "legacy-release"):
         command = commands.add_parser(name)
         command.add_argument("--config", default="/etc/tg-triage/listener.toml")
         if name == "export-csv":
             command.add_argument("--out", required=True)
             command.add_argument("--db")
+        if name == 'usage-daily':
+            command.add_argument('--db')
+            command.add_argument('--days', type=int, default=30)
+            command.add_argument('--tz', default='+07:00')
         if name == "legacy-preflight":
             command.add_argument("--db", required=True)
             command.add_argument("--attachment-evidence", action="store_true")
@@ -91,6 +95,19 @@ def main(argv=None) -> int:
                 print(json.dumps(trace(store, repo=repo, issue=args.issue, chat_id=args.chat_id,
                                        message_id=args.message_id, limit=args.limit,
                                        include_text=args.include_text), ensure_ascii=False, indent=2))
+            finally:
+                store.close()
+            return 0
+        if args.command == 'usage-daily':
+            from .classification_log import daily_summary
+            db_path = args.db or load_database_path(args.config)
+            store = Store(db_path, read_only=True)
+            try:
+                try:
+                    report = daily_summary(store.connection, args.days, args.tz)
+                except ValueError as error:
+                    raise ConfigError(str(error)) from None
+                print(json.dumps(report, ensure_ascii=False, indent=2))
             finally:
                 store.close()
             return 0

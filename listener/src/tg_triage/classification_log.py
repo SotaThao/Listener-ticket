@@ -1,0 +1,316 @@
+"""Best-effort rules-attempt accounting. Proposals retain structure and IDs only.
+
+The recorded decision precedes execution overrides. Classic intake and unread-document
+branches do not enter this scope. This module owns both accounting tables and writes.
+"""
+
+import hashlib
+import json
+import logging
+import re
+from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
+
+LOG = logging.getLogger(__name__)
+CURRENT = ContextVar('classification_run', default=None)
+
+
+def init_store(connection):
+    """Add only new tables/indexes; the caller owns the initialization transaction."""
+    connection.execute('''CREATE TABLE IF NOT EXISTS classification_runs (
+        run_id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
+        turn_key TEXT NOT NULL, topic_id TEXT, phase TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'live', batch_fingerprint TEXT NOT NULL,
+        attempt_no INTEGER, chat_id INTEGER NOT NULL, message_ids TEXT NOT NULL,
+        id_space TEXT NOT NULL, image_ids TEXT NOT NULL DEFAULT '[]', rules_version TEXT,
+        rules_fingerprint TEXT NOT NULL, provider TEXT, model TEXT, effort TEXT,
+        model_calls INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+        cache_hit_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER,
+        finish_reason TEXT, cost REAL NOT NULL DEFAULT 0, fallback INTEGER NOT NULL DEFAULT 0,
+        fallback_reason TEXT, error_class TEXT, circuit_state TEXT NOT NULL DEFAULT 'none',
+        retry_at REAL, proposal_json TEXT, reasoning_summary TEXT, final_state TEXT,
+        decision_rule TEXT, outcomes_json TEXT, template TEXT, ticket_ref TEXT, error TEXT)''')
+    connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_created ON classification_runs(created_at)')
+    connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_batch ON classification_runs(batch_fingerprint, attempt_no)')
+    connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_topic ON classification_runs(topic_id)')
+    connection.execute('''CREATE TABLE IF NOT EXISTS classification_tool_calls (
+        run_id INTEGER NOT NULL, seq INTEGER NOT NULL, tool TEXT NOT NULL, args_json TEXT,
+        result_bytes INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
+        error TEXT, PRIMARY KEY(run_id, seq))''')
+
+
+def _failed(error):
+    LOG.warning('Classification accounting failed exception=%s', type(error).__name__)
+
+
+def _code(value):
+    # These are host/provider codes, never exception messages or arbitrary prose.
+    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_:+.-]{1,120}', value) else None
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+
+
+def _ids(values):
+    return [value for value in values if type(value) is int and value > 0]
+
+
+class _Attempt:
+    def __init__(self, turn, snapshot, sources, images, phase, topic_id=None):
+        if any(type(source.chat_id) is not int or source.chat_id == 0 for source in sources):
+            raise ValueError('invalid chat ID')
+        self.turn = turn
+        self.result = None
+        self.started = turn.store.clock()
+        topic_id = turn.root_key if topic_id is None else topic_id
+        keys = sorted([m.chat_id, m.message_id] for m in sources)
+        id_space = 'topic_ref' if phase in ('pending_merge', 'followup_confirm') else 'message'
+        fingerprint = (dict(id_space=id_space, topic_id=topic_id, sources=keys)
+                       if id_space == 'topic_ref' else keys)
+        self.values = dict(
+            created_at=self.started.timestamp(), turn_key=turn.key, topic_id=topic_id,
+            phase=phase, batch_fingerprint=hashlib.sha256(_json(fingerprint).encode('utf-8')).hexdigest(),
+            chat_id=sources[0].chat_id, message_ids=_json([m.message_id for m in sources]),
+            id_space=id_space,
+            image_ids=_json(sorted(images or {})), rules_fingerprint=snapshot.fingerprint,
+            model_calls=0, tokens_in=0, tokens_out=0, cache_hit_tokens=0, cost=0.0, fallback=0)
+
+    def write(self):
+        values = self.values
+        values['latency_ms'] = max(0, int((self.turn.store.clock() - self.started).total_seconds() * 1000))
+        values['error'] = _code(self.turn.reason) or values.get('error')
+        if self.result is None:
+            values['final_state'] = 'HOLD'
+            values['error'] = values['error'] or 'rules_extraction_failed'
+        else:
+            outcomes = [dict(message_ids=[m.message_id for m in members],
+                             final_state=decision.state, decision_rule=decision.rule,
+                             intent=decision.intent,
+                             template=f'{decision.intent}.md' if decision.state == 'READY'
+                             and decision.intent in ('bug', 'task', 'feedback') else None)
+                        for members, decision in self.result]
+            if len(outcomes) == 1:
+                values.update({key: outcomes[0][key] for key in ('final_state', 'decision_rule', 'template')})
+            else:
+                values.update(final_state='MULTI', outcomes_json=_json(outcomes))
+        store = self.turn.store
+        with store._lock:
+            connection = store.connection
+            if connection.in_transaction:
+                LOG.warning('Classification accounting skipped: active transaction')
+                return
+            if values['phase'] != 'followup_confirm':
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE name='rules_topics' AND type='table'").fetchone():
+                    row = connection.execute('SELECT attempts FROM rules_topics WHERE topic_id=?',
+                                             (self.turn.root_key,)).fetchone()
+                    values['attempt_no'] = row[0] if row else None
+            with connection:
+                columns = ','.join(values)
+                connection.execute(f'INSERT INTO classification_runs ({columns}) VALUES ({",".join("?" for _ in values)})',
+                                   tuple(values.values()))
+
+
+@contextmanager
+def run(snapshot, sources, images=None, phase='extract', *, topic_id=None):
+    """Isolate accounting failures; never suppress exceptions from evaluation.
+
+    topic_id names the referenced topic when its refs differ from the Turn root's
+    namespace. Omitting it retains the Turn root; the Turn and its budget stay intact.
+    """
+    attempt = None
+    token = None
+    try:
+        from .thinking import CURRENT as THINKING
+        turn = THINKING.get()
+        if turn is not None and turn.key.startswith('rules:') and sources:
+            attempt = _Attempt(turn, snapshot, sources, images, phase, topic_id)
+            token = CURRENT.set(attempt)
+    except Exception as error:
+        _failed(error)
+    try:
+        yield attempt
+    finally:
+        try:
+            if token is not None:
+                CURRENT.reset(token)
+            if attempt is not None:
+                attempt.write()
+        except Exception as error:
+            _failed(error)
+
+
+def note_call(provider, model, role, outcome, usage=None, cost=0):
+    """Accumulate actual UsageRecorder calls in the current evaluation only."""
+    try:
+        attempt = CURRENT.get()
+        if attempt is None:
+            return
+        values = attempt.values
+        usage = usage or {}
+        values.update(provider=provider, model=model)
+        values['model_calls'] += 1
+        for target, source in (('tokens_in', 'prompt_tokens'), ('tokens_out', 'completion_tokens'),
+                               ('cache_hit_tokens', 'cache_hit_tokens')):
+            count = usage.get(source, 0)
+            values[target] += count if type(count) is int and count >= 0 else 0
+        values['cost'] += cost
+        values['fallback'] |= int(role == 'fallback')
+        if outcome != 'ok':
+            values['error'] = _code(outcome)
+    except Exception as error:
+        _failed(error)
+
+
+def note_proposal(groups, snapshot):
+    """Project validated proposal metadata; discard all field/task text and unknown keys."""
+    try:
+        attempt = CURRENT.get()
+        if attempt is None or groups is None:
+            return
+        intents = (snapshot.intents - {'unknown'}) | {'analyze', 'status'}
+        lifecycle_kinds = {'evidence', 'recurrence', 'unclear', 'reused_success'}
+        proposal = []
+        for ids, facts in groups:
+            intent = facts.get('intent', {}).get('value')
+            kind = facts.get('lifecycle', {}).get('kind')
+            proposal.append(dict(message_ids=_ids(ids), intent=intent if intent in intents else 'other',
+                fields={name: _ids(facts[name]['source_ids']) for name in sorted(snapshot.text_fields | {'intent', 'media_ids'})
+                        if name in facts},
+                media_ids=_ids(facts.get('media_ids', {}).get('value', [])),
+                has_task=bool(facts.get('task')), lifecycle_kind=kind if kind in lifecycle_kinds else None))
+        attempt.values['proposal_json'] = _json(proposal)
+    except Exception as error:
+        _failed(error)
+
+
+def _tool_args(args):
+    """Describe argument structure without retaining strings or nested content."""
+    if args is None:
+        return None
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            pass
+
+    def shape(value):
+        types = {type(None): 'null', bool: 'boolean', int: 'integer', float: 'number',
+                 str: 'string', list: 'array', dict: 'object'}
+        result = dict(type=types.get(type(value), 'unknown'))
+        if type(value) in (str, list, dict):
+            result['length'] = len(value)
+        return result
+
+    result = shape(args)
+    if type(args) is dict:
+        result['arguments'] = {}
+        for name, value in args.items():
+            if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', name):
+                continue
+            item = shape(value)
+            if (name == 'id' or name.endswith('_id')) and type(value) is int:
+                item['id'] = value
+            elif (name == 'ids' or name.endswith('_ids')) and type(value) is list and all(type(i) is int for i in value):
+                item['ids'] = value
+            result['arguments'][name] = item
+    return _json(result)
+
+
+def record_tool_call(store, run_id, seq, tool, args_json=None, result_bytes=0, latency_ms=0, error=None):
+    """Store argument names and types/lengths, never raw argument values or text.
+
+    Only integer values named id/*_id and integer lists named ids/*_ids survive.
+    Nested object/array content and non-identifier argument names are discarded.
+    args_json accepts JSON text or a decoded JSON value; invalid JSON retains only
+    the input's type and length. None remains SQL NULL.
+    """
+    try:
+        with store._lock:
+            if store.connection.in_transaction:
+                LOG.warning('Classification accounting skipped: active transaction')
+                return
+            with store.connection:
+                store.connection.execute('''INSERT INTO classification_tool_calls
+                    (run_id,seq,tool,args_json,result_bytes,latency_ms,error) VALUES (?,?,?,?,?,?,?)''',
+                    (run_id, seq, tool, _tool_args(args_json), result_bytes, latency_ms, _code(error)))
+    except Exception as failure:
+        _failed(failure)
+
+
+def maintain(store, retention_days=90, *, config=None):
+    """Hourly bounded deletions and recent single-group ticket-link backfill."""
+    try:
+        if config is not None:
+            retention_days = getattr(getattr(config, 'assistant', None), 'retention_days', 90)
+        with store._lock:
+            now = store.clock().timestamp()
+            previous = getattr(store, '_classification_maintained_at', None)
+            if previous is not None and now - previous < 3600:
+                return
+            connection = store.connection
+            if connection.in_transaction:
+                LOG.warning('Classification accounting skipped: active transaction')
+                return
+            cutoff = now - retention_days * 86400
+            while True:
+                with connection:
+                    connection.execute('''DELETE FROM classification_tool_calls WHERE run_id IN
+                        (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,))
+                    deleted = connection.execute('''DELETE FROM classification_runs WHERE run_id IN
+                        (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,)).rowcount
+                if deleted < 5000:
+                    break
+            with connection:
+                rows = connection.execute('''SELECT run_id,chat_id,message_ids FROM classification_runs
+                    WHERE ticket_ref IS NULL AND id_space='message' AND outcomes_json IS NULL
+                    AND final_state IN ('READY','APPEND','APPEND_CLOSED','RELATED') AND created_at > ?''',
+                    (now - 7 * 86400,)).fetchall()
+                for run_id, chat_id, encoded in rows:
+                    urls = set()
+                    for mid in json.loads(encoded):
+                        row = connection.execute('SELECT issue_url FROM messages WHERE chat_id=? AND message_id=?',
+                                                 (chat_id, mid)).fetchone()
+                        if row and row[0]:
+                            urls.add(row[0])
+                    if len(urls) == 1:
+                        connection.execute('UPDATE classification_runs SET ticket_ref=? WHERE run_id=?',
+                                           (urls.pop(), run_id))
+            store._classification_maintained_at = now
+    except Exception as error:
+        _failed(error)
+
+
+def daily_summary(connection, days=30, tz='+07:00'):
+    """Read-only aggregates for local calendar days, including today."""
+    if type(days) is not int or days < 1:
+        raise ValueError('days must be a positive integer')
+    match = re.fullmatch(r'([+-])(\d{2}):(\d{2})', tz)
+    if not match or int(match[2]) > 23 or int(match[3]) > 59:
+        raise ValueError('tz must be a signed HH:MM offset')
+    offset = (int(match[2]) * 60 + int(match[3])) * (1 if match[1] == '+' else -1)
+    zone = timezone(timedelta(minutes=offset))
+    today = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (today - timedelta(days=days - 1)).timestamp()
+    end = (today + timedelta(days=1)).timestamp()
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    result = dict(tz=tz, days=days, model_usage=[], classification_runs=[])
+    modifier = f'{offset:+d} minutes'
+    if 'model_usage' in tables:
+        columns = ('day', 'provider', 'model', 'calls', 'ok', 'error', 'prompt_tokens',
+                   'completion_tokens', 'cache_hit_tokens', 'cost')
+        rows = connection.execute('''SELECT date(ts,'unixepoch',?),provider,model,count(*),
+            sum(CASE WHEN outcome='ok' THEN 1 ELSE 0 END),sum(CASE WHEN outcome='ok' THEN 0 ELSE 1 END),
+            sum(prompt_tokens),sum(completion_tokens),sum(cache_hit_tokens),sum(cost)
+            FROM model_usage WHERE ts>=? AND ts<? GROUP BY 1,2,3 ORDER BY 1,2,3''', (modifier, start, end))
+        result['model_usage'] = [dict(zip(columns, row)) for row in rows]
+    if 'classification_runs' in tables:
+        columns = ('day', 'phase', 'final_state', 'runs', 'runs_with_model_calls', 'reasoning_tokens')
+        rows = connection.execute('''SELECT date(created_at,'unixepoch',?),phase,final_state,count(*),
+            sum(CASE WHEN model_calls>0 THEN 1 ELSE 0 END),sum(reasoning_tokens)
+            FROM classification_runs WHERE created_at>=? AND created_at<? GROUP BY 1,2,3 ORDER BY 1,2,3''',
+            (modifier, start, end))
+        result['classification_runs'] = [dict(zip(columns, row)) for row in rows]
+    return result
