@@ -78,7 +78,7 @@ def parse_grouped_facts(content, snapshot, source_ids):
         return None
 
 
-def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None, limit=None, size_out=None, body_out=None):
+def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None, limit=None, size_out=None, body_out=None, extract=None, review=True):
     """One bounded call for grouping plus facts; code owns all decisions and targets."""
     if limit is None: limit = getattr(provider, 'request_budget_bytes', LOCAL_REQUEST_BUDGET_BYTES)
     sources = list(sources)
@@ -189,9 +189,12 @@ def partition_and_extract(provider, snapshot, sources, *, images=None, allow_mix
         if local: body['_local_messages']=local[0]['messages']
     view={}
     body['_evidence_view']=view
-    groups=provider._ask(body, lambda raw: parse_grouped_facts(raw,snapshot,ids), attempts=1)
+    parse = lambda raw: parse_grouped_facts(raw,snapshot,ids)
+    groups=(provider._ask(body, parse, attempts=1) if extract is None else
+            extract(provider, snapshot, sources, body, parse, images=images,
+                    documents=documents, read_context=read_context))
     if groups is None: return None
-    if snapshot.extensions and review_out is not None:
+    if review and snapshot.extensions and review_out is not None:
         from .rules_analysis import review
         reviews=review(provider,snapshot,groups,sources,read_context,documents,images,
                        view or dict(kind='local',messages=body['messages']))
@@ -245,7 +248,7 @@ def _pack(provider, snapshot, sources, images, allow_mixed, read_context, limit)
     return parts
 
 
-def split_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None):
+def split_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=False, documents=None, read_context=(), review_out=None, extract=None, review=True):
     """One call when the whole batch fits the provider budget; otherwise at most RULES_MAX_PARTS parts.
 
     Only a batch that can never fit sets turn.reason to 'rules_request_too_large' so the caller can tell the
@@ -253,7 +256,7 @@ def split_and_extract(provider, snapshot, sources, *, images=None, allow_mixed=F
     sources = list(sources)
     images = images or {}
     limit = getattr(provider, 'request_budget_bytes', LOCAL_REQUEST_BUDGET_BYTES)
-    kwargs = dict(allow_mixed=allow_mixed, read_context=read_context)
+    kwargs = dict(allow_mixed=allow_mixed, read_context=read_context, extract=extract, review=review)
     turn = CURRENT.get()
     if turn is not None and turn.reason == TOO_LARGE: turn.reason = None
     if turn is not None: turn.configure_rules_parts(1)   # best effort; an already used budget just stays

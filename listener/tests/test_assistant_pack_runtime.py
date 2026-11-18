@@ -103,8 +103,14 @@ class AssistantPackRuntimeTests(unittest.TestCase):
     def test_check_config_contains_pack_fingerprint_and_retention(self):
         code, out, err = self.cli('check-config')
         self.assertEqual(code, 0, err)
-        self.assertEqual(json.loads(out)['assistant'], dict(
-            retention_days=self.settings.assistant.retention_days, pack_fingerprint=self.fingerprint))
+        assistant = json.loads(out)['assistant']
+        self.assertEqual(assistant['retention_days'], self.settings.assistant.retention_days)
+        self.assertEqual(assistant['pack_fingerprint'], self.fingerprint)
+        self.assertFalse(assistant['enabled'])
+        self.assertEqual(assistant['mode'], 'shadow')
+        self.assertEqual(assistant['models'], ['ag/gemini-3.8-flash-medium', 'cx/gpt-6.1-sol'])
+        self.assertFalse(assistant['router_key_configured'])
+        self.assertNotIn('router_key', assistant)
 
     def test_disabled_rules_do_not_require_pack_and_report_null(self):
         with patch('tg_triage.__main__.load_config', return_value=replace(self.settings, decision_rules_enabled=False)), \

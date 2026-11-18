@@ -132,6 +132,19 @@ class AssistantConfig:
     github_repos: tuple[str, ...] = ()
     max_tool_calls: int = 8
     github_token: str | None = field(default=None, repr=False)
+    enabled: bool = False
+    mode: str = 'shadow'
+    router_base_url: str = 'http://127.0.0.1:20128/v1'
+    router_key_file: str = ''
+    router_key: str | None = field(default=None, repr=False)
+    models: tuple[str, ...] = ('ag/gemini-3.8-flash-medium', 'cx/gpt-6.1-sol')
+    gemini_timeout_s: float = 75
+    gpt_timeout_s: float = 65
+    deepseek_timeout_s: float = 40
+    turn_deadline_s: float = 180
+    max_calls_per_minute: int = 20
+    queue_max: int = 200
+    daily_cap: int = 0
 
 
 @dataclass(frozen=True)
@@ -160,6 +173,10 @@ class Config:
         result = asdict(self)
         result['assistant'].pop('github_token')
         result['assistant'].pop('github_token_file')
+        result['assistant'].pop('router_key')
+        result['assistant'].pop('router_key_file')
+        result['assistant']['router_key_configured'] = bool(self.assistant.router_key)
+        result['assistant']['models'] = list(self.assistant.models)
         result['assistant'].pop('max_tool_calls')
         result['assistant'].pop('github_repos')
         if self.assistant.github_token_file or self.assistant.github_repos:
@@ -210,6 +227,15 @@ def _number(value, name, minimum, maximum=None):
             or value < minimum or (maximum is not None and value > maximum)):
         raise ConfigError(f"{name}: expected finite number in the allowed range")
     return float(value)
+
+
+def assistant_models(models):
+    """Shared model allowlist validation for startup and offline preflight."""
+    if (not isinstance(models, list) or len(models) != 2 or any(
+            not isinstance(m, str) or not re.fullmatch(r'(ag|cx)/[A-Za-z0-9_.-]+', m)
+            or m.casefold().startswith('ag/claude-') for m in models)):
+        raise ConfigError('assistant.models: expected two allowed ag/cx models')
+    return tuple(models)
 
 
 def check_provider(provider):
@@ -424,6 +450,37 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
     if max_calls > 8:
         raise ConfigError('assistant.max_tool_calls: expected integer 1..8')
     github_token = _assistant_token(token_file)
+    enabled = assistant_table.get('enabled', False)
+    assistant_mode = assistant_table.get('mode', 'shadow')
+    if type(enabled) is not bool or assistant_mode not in ('shadow', 'live'):
+        raise ConfigError('assistant: invalid enabled or mode')
+    router_url = assistant_table.get('router_base_url', AssistantConfig.router_base_url)
+    from .router_transport import validate_base_url, RouterError
+    try:
+        validate_base_url(router_url)
+    except RouterError:
+        raise ConfigError('assistant.router_base_url: invalid loopback endpoint') from None
+    router_file = _string(assistant_table, 'router_key_file', 'assistant.router_key_file', empty=True, default='')
+    if enabled and router_file and not Path(router_file).is_absolute():
+        raise ConfigError('assistant.router_key_file: expected absolute path')
+    router_key = None
+    if enabled:
+        try:
+            router_key = _assistant_token(router_file)
+        except ConfigError:
+            raise ConfigError('assistant.router_key_file: credentials unavailable') from None
+    if enabled and assistant_mode == 'live' and not router_key:
+        raise ConfigError('assistant: live mode requires a configured router key')
+    models = assistant_models(assistant_table.get('models', list(AssistantConfig.models)))
+    extra = dict(enabled=enabled, mode=assistant_mode, router_base_url=router_url,
+                 router_key_file=router_file, router_key=router_key, models=tuple(models))
+    for name, maximum in (('gemini_timeout_s', 75), ('gpt_timeout_s', 65),
+                          ('deepseek_timeout_s', 40), ('turn_deadline_s', 180)):
+        extra[name] = _number(assistant_table.get(name, maximum), 'assistant.' + name, .001, maximum)
+    for name, default, minimum in (('max_calls_per_minute', 20, 1), ('queue_max', 200, 1), ('daily_cap', 0, 0)):
+        extra[name] = _integer(assistant_table.get(name, default), 'assistant.' + name, minimum)
+        if name != 'daily_cap' and extra[name] > default:
+            raise ConfigError('assistant.' + name + ': exceeds hard limit')
     return Config(
         mode=mode,
         telegram=TelegramConfig(
@@ -447,7 +504,7 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         context_quiet_seconds=context_quiet_seconds,
         context_max_wait_seconds=context_max_wait_seconds,
         decision_rules_enabled=decision_rules_enabled,
-        assistant=AssistantConfig(retention_days, token_file, tuple(repos), max_calls, github_token),
+        assistant=AssistantConfig(retention_days, token_file, tuple(repos), max_calls, github_token, **extra),
     )
 
 
