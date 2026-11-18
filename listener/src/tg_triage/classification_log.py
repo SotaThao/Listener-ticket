@@ -160,7 +160,7 @@ class _Attempt:
             created_at=self.started.timestamp(), turn_key=turn.key, topic_id=topic_id,
             phase=phase, batch_fingerprint=hashlib.sha256(_json(fingerprint).encode('utf-8')).hexdigest(),
             chat_id=sources[0].chat_id, message_ids=_json([m.message_id for m in sources]),
-            id_space=id_space,
+            id_space=id_space, rules_version=getattr(turn.store, 'assistant_pack_fingerprint', None),
             image_ids=_json(sorted(images or {})), rules_fingerprint=snapshot.fingerprint,
             model_calls=0, tokens_in=0, tokens_out=0, cache_hit_tokens=0, cost=0.0, fallback=0)
 

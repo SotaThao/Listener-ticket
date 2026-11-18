@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import assistant_pack
 from .attachments import GhCliUploader
 from .classifier import load_prompt
 from .config import ConfigError, load_config, load_database_path
@@ -30,6 +31,14 @@ def _load_decision_rules():
     if not templates_dir.is_dir():
         templates_dir = installed / 'templates' / 'github-ticket'
     return RulesSnapshot(rules_dir, templates_dir, extensions=True)
+
+
+def _load_assistant_pack():
+    source = Path(__file__).resolve().parents[2]
+    installed = Path(sys.prefix) / 'share' / 'tg-triage'
+    directory = source / 'assistant' if (source / 'assistant').is_dir() else installed / 'assistant'
+    rules_dir = source / 'rules' if (source / 'rules').is_dir() else installed / 'rules'
+    return assistant_pack.load(directory, rules_dir)
 
 
 def _build_classifier(config, store):
@@ -123,8 +132,10 @@ def main(argv=None) -> int:
         templates = load_templates() if args.command in ('run', 'check-config') else None
         decision_rules = (_load_decision_rules()
                           if config.decision_rules_enabled and args.command in ('run', 'check-config') else None)
+        pack = _load_assistant_pack() if decision_rules is not None else None
         if args.command == "check-config":
             result = config.redacted()
+            result['assistant']['pack_fingerprint'] = pack.fingerprint if pack is not None else None
             result['templates'] = {'fingerprint': templates.fingerprint}
             if decision_rules is not None:
                 result['rules'] = {'fingerprint': decision_rules.fingerprint}
@@ -138,6 +149,7 @@ def main(argv=None) -> int:
             logging.getLogger(__name__).info('templates fingerprint=%s', templates.fingerprint)
             if decision_rules is not None:
                 logging.getLogger(__name__).info('rules fingerprint=%s', decision_rules.fingerprint)
+                logging.getLogger(__name__).info('assistant pack fingerprint=%s', pack.fingerprint)
             validate_data_directories(config)
             # Lock before opening the store: a second process must not recover
             # another process's in-flight records.
@@ -145,6 +157,7 @@ def main(argv=None) -> int:
                 if decision_rules is not None:
                     check_before_recovery(config.db_path)
                 store = Store(config.db_path)
+                store.assistant_pack_fingerprint = pack.fingerprint if pack is not None else None
                 try:
                     if config.topic_memory_enabled or config.autonomous_enabled:
                         store.enable_topic_registry()
@@ -176,7 +189,7 @@ def main(argv=None) -> int:
     except TemplateError as error:
         print(f"TemplateError: {error}", file=sys.stderr)
         return 2
-    except RulesError as error:
+    except (RulesError, assistant_pack.AssistantPackError) as error:
         print(f"RulesError: {error}", file=sys.stderr)
         return 2
     except RulesHalt as error:
