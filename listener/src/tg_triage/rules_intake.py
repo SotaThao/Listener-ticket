@@ -201,7 +201,11 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
     sources = list(sources)
     phase = 'followup_confirm' if confirm_followup else 'pending_merge' if allow_mixed else 'extract'
     with classification_log.run(snapshot, sources, images, phase, topic_id=topic_id) as attempt:
-        result = _evaluate_batch(snapshot, provider, sources, images=images, reply_target_for=reply_target_for,
+        from .thinking import CURRENT
+        turn = CURRENT.get()
+        runtime = getattr(turn.store, 'assistant_runtime', None) if turn is not None else None
+        evaluate = _evaluate_batch if runtime is None else lambda *a, **kw: runtime.evaluate(_evaluate_batch, *a, **kw)
+        result = evaluate(snapshot, provider, sources, images=images, reply_target_for=reply_target_for,
             asked_counts=asked_counts, allow_mixed=allow_mixed, documents=documents, read_context=read_context,
             banter_context=banter_context, chat_replies=chat_replies, confirm_followup=confirm_followup)
         if attempt is not None:
@@ -209,7 +213,7 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         return result
 
 
-def _evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False):
+def _evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, extract=None, review=True, proposal_groups=None):
     """Validate every group before returning decisions; None means the whole batch holds."""
     sources = list(sources)
     if not sources: return None
@@ -221,7 +225,7 @@ def _evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_fo
     from .rules_extraction import split_and_extract
     reviews={}
     try:
-        groups = split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=None if confirm_followup else reviews)
+        groups = (proposal_groups if proposal_groups is not None else split_and_extract(provider, snapshot, sources, images=images, allow_mixed=allow_mixed, documents=documents, read_context=read_context, review_out=None if confirm_followup else reviews, extract=extract, review=review))
         classification_log.note_proposal(groups, snapshot)
         if groups is None: return None
         if allow_mixed and len(groups) != 1: return None
@@ -452,6 +456,8 @@ def _process_single_with_images(pipeline, message):
     topic = f'{message.chat_id}:{message.message_id}'
     pending = pipeline.rules_pending
     pending.create(topic, message.chat_id, message.message_id)
+    wait = _assistant_wait(pipeline, [message], topic)
+    if wait is not None: return wait
     attempt = pending.reserve_attempt(topic, pipeline.rules_snapshot.limits['hold_max_retries'])
     if attempt is None:
         return _escalate(pipeline,message,topic)
@@ -1348,6 +1354,8 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_analysis_orphaned_receipt')
         pending.create(batch_id,sources[0].chat_id,sources[0].message_id)
         for source in sources[1:]: pending.add_source(batch_id,source.chat_id,source.message_id)
+        wait = _assistant_wait(pipeline, sources, batch_id)
+        if wait is not None: return wait
         attempt=pending.reserve_attempt(batch_id,pipeline.rules_snapshot.limits['hold_max_retries'])
         if attempt is None: return _escalate(pipeline,sources[0],batch_id)
         for source in sources:
@@ -2491,7 +2499,27 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
         except Exception:
             import logging
             logging.getLogger(__name__).exception('Source followup replay deferred chat_id=%s message_id=%s',chat_id,message_id)
+    runtime = getattr(pipeline, 'assistant_runtime', None)
+    if runtime is not None and runtime.settings.mode == 'shadow':
+        runtime.publish()
+        runtime.drain()
     return results
+
+
+def _assistant_wait(pipeline, sources, topic):
+    """Admission before reserving a foreground attempt; disabled flow is untouched."""
+    runtime = getattr(pipeline, 'assistant_runtime', None)
+    if runtime is None or runtime.settings.mode != 'live': return None
+    status, due = runtime.waiting(sources, admit=False)
+    if status == 'ESCALATED': return _escalate(pipeline, sources[0], topic)
+    if status == 'DONE': return None  # Foreground reconciliation may have held a valid proposal.
+    if due: return None
+    from .models import Decision
+    result = Decision('pending_review', 'rule', case_key=topic, reason='rules_hold')
+    with pipeline.store._lock, pipeline.store.connection:
+        pipeline.store.connection.execute("UPDATE rules_topics SET phase='HOLD' WHERE topic_id=? AND status='OPEN' AND phase='NEW' AND attempt_reserved=0", (topic,))
+    for source in sources: pipeline.store.finish(source, result)
+    return result
 
 
 def _question(pipeline, source, topic, decision):

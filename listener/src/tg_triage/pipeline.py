@@ -247,7 +247,7 @@ class Pipeline:
 
     def __init__(self, config, store, classifier, github=None, *, timer=time.monotonic,
                  uploader=None, downloader=None, reactor=None, notice_sender=None, notice_editor=None,
-                 rules_snapshot=None):
+                 rules_snapshot=None, assistant_pack=None):
         self.config = config
         self.reactor = reactor
         self.notice_sender = notice_sender
@@ -265,6 +265,15 @@ class Pipeline:
         self.classifier = classifier
         self.github = github
         self.timer = timer
+        self.assistant_runtime = None
+        if config.decision_rules_enabled and config.assistant.enabled:
+            from .assistant_extractor import AssistantExtractor
+            def ops_notice(text):
+                if self.notice_sender is not None and config.telegram.ops_chat_id is not None:
+                    self.notice_sender(config.telegram.ops_chat_id, None, text)
+            self.assistant_runtime = AssistantExtractor(config, store,
+                assistant_pack.text if assistant_pack is not None else '', ops_notice=ops_notice)
+            store.assistant_runtime = self.assistant_runtime
         self._lock = threading.Lock()
         self._prepared_images = None
         if config.autonomous_enabled:
@@ -316,7 +325,10 @@ class Pipeline:
             if self.rules_pending is not None and self.rules_pending.unresolved_ambiguity():
                 from .rules_pending_store import RulesHalt
                 raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
-            return self._process(message)
+            result = self._process(message)
+            if self.assistant_runtime is not None:
+                self.assistant_runtime.publish()
+            return result
 
     def close_due_cases(self,exclude_chat_ids=()) -> list:
         """Analyze every case whose window expired; returns the decisions made."""

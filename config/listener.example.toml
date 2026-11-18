@@ -112,7 +112,20 @@ context_max_wait_seconds = 60
 [assistant]
 # Retention for classification runs and their tool-call metadata only.
 retention_days = 90
-# Future read-only assistant tools (#2917); currently not called by classification.
+# Assistant is disabled when these keys are absent. Shadow records only; live replaces extraction.
+# enabled = false
+# mode = "shadow" # shadow | live
+# router_base_url = "http://127.0.0.1:20128/v1" # loopback HTTP only
+# router_key_file = "/etc/tg-triage/9router-key" # absolute, plain text; missing: shadow unavailable, live config error
+# Disabled assistant ignores the router key file entirely (no file read).
+# models = ["ag/gemini-3.8-flash-medium", "cx/gpt-6.1-sol"]
+# gemini_timeout_s = 75
+# gpt_timeout_s = 65
+# deepseek_timeout_s = 40
+# turn_deadline_s = 180
+# max_calls_per_minute = 20
+# queue_max = 200
+# daily_cap = 0 # off; counts model calls, not batches
 # Optional plain-text read-only GitHub token; never reuse the issue-writing token.
 # Unix: private 0600, or 0640 with group tglistener, like model key files.
 # github_token_file = "/etc/tg-triage/assistant-github-token"

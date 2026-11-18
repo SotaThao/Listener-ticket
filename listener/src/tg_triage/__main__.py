@@ -158,6 +158,7 @@ def main(argv=None) -> int:
                     check_before_recovery(config.db_path)
                 store = Store(config.db_path)
                 store.assistant_pack_fingerprint = pack.fingerprint if pack is not None else None
+                pipeline = None
                 try:
                     if config.topic_memory_enabled or config.autonomous_enabled:
                         store.enable_topic_registry()
@@ -169,10 +170,12 @@ def main(argv=None) -> int:
                     # Issues use REST; image uploads use the gh CLI (Assistant definition 12.8).
                     uploader = (GhCliUploader(config.gh_repo, config.gh_token)
                                 if config.mode == "live" else None)
-                    pipeline_options = {'rules_snapshot': decision_rules} if decision_rules is not None else {}
-                    asyncio.run(run(config, Pipeline(config, store, classifier, github,
-                                                     uploader=uploader, **pipeline_options)))
+                    pipeline_options = {'rules_snapshot': decision_rules, 'assistant_pack': pack} if decision_rules is not None else {}
+                    pipeline = Pipeline(config, store, classifier, github, uploader=uploader, **pipeline_options)
+                    asyncio.run(run(config, pipeline))
                 finally:
+                    if pipeline is not None and pipeline.assistant_runtime is not None:
+                        pipeline.assistant_runtime.close()
                     try:
                         from .classification_log import flush
                         flush(store)
