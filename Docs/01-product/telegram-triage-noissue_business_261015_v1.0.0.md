@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.43 · **Updated**: 2026-11-18 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
+**Version**: v1.16.44 · **Updated**: 2026-11-18 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -1655,6 +1655,18 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/followups.py",
           "symbol": "_run"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_github.py",
+          "symbol": "GitHubReader.get_ticket"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_local.py",
+          "symbol": "LocalReader.get_messages"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_errors.py",
+          "symbol": "ToolDenied"
         }
       ],
       "tests": [
@@ -1669,6 +1681,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_followups.py",
           "symbol": "FollowupTests.test_canonical_source_url_casefold_still_accepts_same_repo"
+        },
+        {
+          "path": "listener/tests/test_assistant_tools.py",
+          "symbol": "ToolBoxTests.test_prompt_injection_end_to_end_keeps_scope_and_budget"
         }
       ]
     },
@@ -2387,6 +2403,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/classification_log.py",
           "symbol": "_Attempt.__init__"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_tools.py",
+          "symbol": "ToolBox.call"
         }
       ],
       "tests": [
@@ -2473,6 +2493,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_assistant_pack_runtime.py",
           "symbol": "AssistantPackRuntimeTests.test_all_classification_phases_record_pack_version_or_null"
+        },
+        {
+          "path": "listener/tests/test_assistant_tools.py",
+          "symbol": "ToolBoxTests.test_prompt_injection_end_to_end_keeps_scope_and_budget"
         }
       ]
     },
@@ -2555,7 +2579,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
     "listener/src/tg_triage/classifier.py": "9551c55253041bf6bc66310262542bf183381e5b2ad2043c6b77f54f6201d5bc",
-    "listener/src/tg_triage/config.py": "6e173400d1bc0ac31d03513a022aa13867eb90ebd392e4c8c1c5a691668d8b7b",
+    "listener/src/tg_triage/config.py": "76750cd59e9ae24e913e1a78fcbff967dc12a833539225266341c5ddbc56198a",
     "listener/src/tg_triage/decision_rules.py": "581bc1f97c0408054ab9687796962df5204cc491738bb9b37fc6cf78d5510367",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "e24ccde2c8402ff6e62292f0eb0241a9baa3df3b2a4dffef0f465d253eecd3c8",
@@ -2600,7 +2624,11 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
     "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056",
     "listener/src/tg_triage/classification_log.py": "76659618dbcb5ee6260496952598c4edff42c225832ba5a8a437a629fc6abaa7",
-    "listener/src/tg_triage/assistant_pack.py": "7fc8fad40b131a0364e9e92c2c1452aa2a748ebcff7744bf06e9048954ec1c9c"
+    "listener/src/tg_triage/assistant_pack.py": "7fc8fad40b131a0364e9e92c2c1452aa2a748ebcff7744bf06e9048954ec1c9c",
+    "listener/src/tg_triage/assistant_errors.py": "1b7ca1a59b71c55cd8b41754435328a04686fc9e8cde74c302c60cfdaf2fa732",
+    "listener/src/tg_triage/assistant_github.py": "9f1e25a83d12229360d6cd5e8f6c7ad50d8647df83367dc21416de7a9972ec35",
+    "listener/src/tg_triage/assistant_local.py": "a37ad5275488cfd1d35a6aeabfa8b3a3dba94d68a28542cd5b4706f48d0e3a79",
+    "listener/src/tg_triage/assistant_tools.py": "cdd4468b7d419eb6506855d2e5c9f245f245b3c96de1d14c58b249c9820b812f"
   },
   "legacy_documents": [],
   "related_documents": [
@@ -2623,7 +2651,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "c7b0340276f5b8c7de19715f4837805f0451083906cd8f5fa0e845eee02c0774",
+  "runtime_fingerprint": "3d17f15c5376a499c854f87e170aa562072364d1302198bb0290343235b26a43",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2637,10 +2665,30 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
 
 Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, vẫn giữ bot tắt. Tiếp tục kiểm tra bước tiếp theo như đề xuất.”
 
+### Công cụ tra cứu chỉ đọc cho trợ lý (#2916)
+
+Bảy công cụ gồm tìm ticket (`search_tickets`), đọc ticket (`get_ticket`), đọc chủ đề (`get_topic`), liệt kê chủ đề mở (`list_open_topics`), đọc tin nhắn (`get_messages`), đọc ảnh (`get_image`) và đọc quy tắc (`get_rule`). GitHub chỉ được đọc trong danh sách kho cho phép; nội dung ticket tối đa 4 KB. Chủ đề và tin nhắn chỉ thuộc chat đang phân loại, mỗi lần đọc tối đa 40 tin; ảnh chỉ thuộc lô hiện tại; quy tắc lấy từ gói đã nạp.
+
+Mỗi lượt cho phép tối đa 8 lần gọi, cấu hình có thể giảm còn 1–8; lần thứ 9 và mọi lần sau bị từ chối trước khi thực thi. Mọi kết quả thành công nằm trong `untrusted_data`: câu như “bỏ qua quy tắc”, yêu cầu đọc kho ngoài phạm vi, mở đường dẫn hoặc nâng giới hạn đều chỉ là dữ liệu, không cấp quyền. Mỗi lần gọi, kể cả bị từ chối, được ghi vào nhật ký tra cứu (`classification_tool_calls`): thứ tự, tên công cụ, cấu trúc tham số và ID số, kích thước kết quả, thời gian và tên lớp lỗi; không lưu nội dung văn bản của tham số. Lỗi ghi nhật ký không làm hỏng kết quả tra cứu; thông báo lỗi không tiết lộ token hay đường dẫn.
+
+Token GitHub chỉ đọc là tùy chọn (`assistant.github_token_file`), tệp thiếu được coi là chưa cấu hình; công cụ GitHub chưa dùng được khi thiếu token hoặc danh sách kho. Tệp bí mật áp dụng quyền truy cập như khóa model: Unix 0600 hoặc 0640 với nhóm tglistener; Windows dùng quyền truy cập của hệ điều hành. `check-config` chỉ công bố có token hay chưa, giữ thời hạn lưu và mã nhận diện gói. Các công cụ **chưa được gọi trong luồng phân loại**; việc nối trợ lý vào luồng thuộc #2917. Chưa triển khai production.
+
+```mermaid
+flowchart TD
+    A([Yêu cầu tra cứu]) --> B{Trong giới hạn và phạm vi?}
+    B -- Có --> C[Đọc dữ liệu được phép]
+    C --> D[Bọc dữ liệu chưa tin cậy]
+    B -- Không --> E[Trả lỗi an toàn]
+    D --> F[Ghi nhật ký nếu có]
+    E --> F
+    F --> G([Trả kết quả])
+```
+
 ## Changelog
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.44 | 2026-11-18 | Codex / owner AlexChu | #2916: bảy công cụ tra cứu chỉ đọc; giới hạn kho/chat/lô ảnh, tối đa 40 tin, nội dung ticket 4 KB và 8 lần gọi. Kết quả bọc dữ liệu chưa tin cậy, không làm theo chỉ dẫn trong tin/ticket; ghi classification_tool_calls kể cả lần bị từ chối, lỗi ghi không chặn tra cứu. Token GitHub tùy chọn, không công bố bí mật; thêm cấu hình và kiểm thử phạm vi, giới hạn, prompt injection, lỗi lưu trữ. Cập nhật trace/hash bốn module mới và config. Chưa nối vào phân loại (#2917), chưa deploy. |
 | v1.16.43 | 2026-11-18 | Codex / owner AlexChu | #2915: gói quy tắc trợ lý tập hợp nguyên tắc chung và các quy tắc quyết định hiện hành, có mã nhận diện nội dung (fingerprint). Khi bật rules mode, bot ghi mã này trong log khởi động, kết quả check-config và từng lượt phân loại (classification_runs.rules_version); không nạp gói thì trường này là NULL. Bot từ chối khởi động nếu gói thiếu, bị sửa hoặc không còn khớp nguồn quy tắc/nguyên tắc; sau khi cập nhật nguồn, dựng lại bằng python scripts/build-assistant-pack.py và kiểm tra bằng --check. Wheel chứa cả nguyên tắc và gói đã dựng; Git giữ xuống dòng LF, còn bộ nạp và lệnh kiểm tra chấp nhận BOM/CRLF/CR mà không đổi mã nhận diện. Chưa triển khai production. |
 | v1.16.42 | 2026-11-18 | Codex / owner AlexChu | #2931: cổng kiểm tra lúc khởi động không còn dừng khi lịch sử vượt 1.000 dòng. Trước đây, khi bảng có trường JSON (ví dụ rules_decisions, rules_batch_groups) vượt 1.000 dòng hoặc 8 MiB tổng, gate coi là chưa kiểm xong và dừng dịch vụ (dự kiến khoảng 06/12/2026 trên gw-01). Nay gate đọc lần lượt toàn bộ lịch sử bằng cursor SQLite ở bốn nhóm kiểm tra: dữ liệu JSON của các bảng, bằng chứng topic CHAT đã đóng, liên kết biên nhận/review với plan, và câu hỏi/trả lời lifecycle. Không giới hạn số dòng hoặc tổng dung lượng, nhưng vẫn giữ trần 256 KiB cho từng giá trị JSON và không nạp toàn bộ plan vào bộ nhớ (chỉ giữ mã hash và danh sách nguồn cần đối chiếu). Mọi điều kiện chặn và mã lỗi giữ nguyên: dòng JSON sai, sai kiểu, quá cỡ hoặc biên nhận không khớp vẫn dừng dịch vụ dù nằm ở bất kỳ vị trí nào. Lệnh báo cáo legacy-preflight giữ nguyên giới hạn 1.000 dòng và kết quả như cũ. Các giới hạn 1.000 dòng còn lại trên đường khởi động: trạng thái tạm thời (source-followup PLANNED; checkpoint RESERVED/AMBIGUOUS), autonomous_plans cũ đã ngừng ghi, và danh sách tin pending chưa có chủ (LIMIT 1001). Danh sách tin pending chưa có chủ có gồm cả nguồn pending_review của topic CHAT đã đóng, vốn tăng dần theo lịch sử (gw-01 hiện có 1), nên cần ticket theo dõi riêng. Kiểm thử: 1.000/1.001/10.000 dòng hợp lệ đều qua; dòng lỗi ở vị trí 1.500 và 10.000 vẫn chặn; 1.001 và 5.000 nhóm DONE với schema production có bảng biên nhận; khôi phục code cũ làm đỏ các ca qua. Chưa triển khai production. |
 | v1.16.41 | 2026-11-18 | Claude / owner AlexChu | Đính chính nguyên nhân #2914 theo dữ liệu gw-01: bản 57f4047 đã ghi classification_runs bình thường (9 dòng phase=extract từ 07:40 đến 10:47 ngày 18/11, khớp 9 lượt gọi DeepSeek). Bảng trống tối 17/11 là do từ lúc deploy 18:50 đến 07:40 không có tin nhắn nào, không phải do quyết định sớm. Hotfix v1.16.40 vẫn giữ: bù dòng phase=early còn thiếu so với TG-32 và bỏ cảnh báo giả lúc khởi động (đã xác nhận trên production sau deploy b3ca0bd lúc 10:50). Dòng phase=early chưa thấy trên production vì sau deploy chưa có tin bị lọc sớm. Chỉ sửa tài liệu. |

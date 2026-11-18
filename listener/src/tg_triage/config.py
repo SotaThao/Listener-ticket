@@ -128,6 +128,10 @@ class AttachmentsConfig:
 @dataclass(frozen=True)
 class AssistantConfig:
     retention_days: int = 90
+    github_token_file: str = ''
+    github_repos: tuple[str, ...] = ()
+    max_tool_calls: int = 8
+    github_token: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,13 @@ class Config:
 
     def redacted(self) -> dict:
         result = asdict(self)
+        result['assistant'].pop('github_token')
+        result['assistant'].pop('github_token_file')
+        result['assistant'].pop('max_tool_calls')
+        result['assistant'].pop('github_repos')
+        if self.assistant.github_token_file or self.assistant.github_repos:
+            result['assistant']['github_repos'] = list(self.assistant.github_repos)
+            result['assistant']['github_token_configured'] = bool(self.assistant.github_token)
         for key in ("api_hash", "gh_token"):
             result[key] = {"length": len(getattr(self, key))}
         result["telegram"]["proxy"]["secret"] = {
@@ -401,6 +412,18 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
     retention_days = _integer(assistant_table.get('retention_days', 90), 'assistant.retention_days')
     if retention_days > 3650:
         raise ConfigError('assistant.retention_days: expected integer 1..3650')
+    token_file = _string(assistant_table, 'github_token_file', 'assistant.github_token_file', empty=True, default='')
+    if token_file and not Path(token_file).is_absolute():
+        raise ConfigError('assistant.github_token_file: expected absolute path')
+    repos = assistant_table.get('github_repos', [])
+    if (not isinstance(repos, list) or any(not isinstance(repo, str) or not re.fullmatch(
+            r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_.-]+', repo)
+            or repo.split('/')[-1] in ('.', '..') for repo in repos)):
+        raise ConfigError('assistant.github_repos: expected list of owner/name repositories')
+    max_calls = _integer(assistant_table.get('max_tool_calls', 8), 'assistant.max_tool_calls')
+    if max_calls > 8:
+        raise ConfigError('assistant.max_tool_calls: expected integer 1..8')
+    github_token = _assistant_token(token_file)
     return Config(
         mode=mode,
         telegram=TelegramConfig(
@@ -424,5 +447,29 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         context_quiet_seconds=context_quiet_seconds,
         context_max_wait_seconds=context_max_wait_seconds,
         decision_rules_enabled=decision_rules_enabled,
-        assistant=AssistantConfig(retention_days),
+        assistant=AssistantConfig(retention_days, token_file, tuple(repos), max_calls, github_token),
     )
+
+
+def _assistant_token(path):
+    """Optional plain-text secret, with the same Unix access rules as model keys."""
+    if not path:
+        return None
+    try:
+        target = Path(path)
+        if os.name != 'nt':
+            info = target.stat()
+            if info.st_mode & 0o027:
+                raise ValueError()
+            if info.st_mode & 0o040:
+                import grp
+                if info.st_gid != grp.getgrnam('tglistener').gr_gid:
+                    raise ValueError()
+        token = target.read_text(encoding='utf-8').strip()
+        if any(ord(ch) < 33 or ord(ch) == 127 for ch in token):
+            raise ValueError()
+        return token or None
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError):
+        raise ConfigError('assistant.github_token_file: credentials unavailable') from None
