@@ -318,14 +318,14 @@ def check_before_recovery(db_path):
         if connection is not None: connection.close()
 
 
-def check_connection_before_recovery(connection):
-    """Pure local gate; caller owns one stable read snapshot. No schema writes or tools."""
+def check_connection_before_recovery(connection,*,binding_limit=None):
+    """Pure local gate; reports may retain their historical binding validation budget."""
     tables={row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if local_binding_blockers(connection,tables):raise RulesHalt('invalid local ownership or receipt binding; Owner inspection required')
-    from .legacy_preflight import REGISTRY,_category,MAX_ROWS
+    if local_binding_blockers(connection,tables,limit=binding_limit):raise RulesHalt('invalid local ownership or receipt binding; Owner inspection required')
+    from .legacy_preflight import REGISTRY,_category
     for table,spec in REGISTRY.items():
         if table not in tables:continue
-        assessment=_category(connection,table,spec,MAX_ROWS)
+        assessment=_category(connection,table,spec,None)
         if assessment['schema']!='SUPPORTED' or not assessment['validation_complete']:
             raise RulesHalt('unknown schema, identifier, state or record; Owner inspection required')
     followup_blocker=_source_followup_blocker(connection,tables,before_recovery=True)
@@ -977,7 +977,7 @@ class RulesPendingStore:
             return row['topic_id'],ref
 
 def local_binding_blockers(connection,tables=None,limit=1000):
-    """Bounded local ownership/receipt checks, usable on a read-only old-schema snapshot."""
+    """Local ownership checks; None streams full history, integers retain report budgets."""
     tables=tables or {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     blockers=[]
     def check(code,sql):
@@ -1051,6 +1051,12 @@ def local_binding_blockers(connection,tables=None,limit=1000):
         try:
             json_columns={'plan','receipt','recurrence_keys','source_keys'}
             selected=','.join(f'CASE WHEN length(CAST({column} AS BLOB))<=262144 THEN {column} ELSE NULL END' if column in json_columns else column for column in columns.split(','))
+            if limit is None:
+                def stream():
+                    try:
+                        yield from connection.execute('SELECT '+selected+' FROM '+table)
+                    except sqlite3.Error:blockers.append('BINDING_SCHEMA_UNKNOWN')
+                return stream()
             result=[];used=0
             for index,row in enumerate(connection.execute('SELECT '+selected+' FROM '+table+' LIMIT ?',(limit+1,))):
                 used+=sum(len(v.encode('utf8')) for v in row if isinstance(v,str))
@@ -1072,20 +1078,21 @@ def local_binding_blockers(connection,tables=None,limit=1000):
                 if not found or load(connection,decode(found[0]),found[1])!=value or not source_bindings_valid(connection,value):raise ValueError()
             except (ValueError,TypeError,KeyError,IndexError,UnicodeError,sqlite3.Error):blockers.append('ANALYSIS_RECEIPT_MISMATCH')
     if 'rules_related_receipts' in tables:
-        plan_hashes={}
+        plan_hashes={};missing=object()
         if 'rules_batch_groups' in tables:
             for raw, in rows('rules_batch_groups','plan'):
                 try:
                     value=decode(raw);sha=hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-                    plan_hashes[sha]=value
+                    # Retain only receipt identity evidence, never whole historical plans.
+                    plan_hashes[sha]=value.get('source_keys',missing) if isinstance(value,dict) else missing
                 except (ValueError,TypeError):blockers.append('MALFORMED_BINDING_RECORD')
         for chat,repo,parent,sha,recurrence,source in rows('rules_related_receipts','chat_id,repo,parent_number,plan_hash,recurrence_keys,source_keys'):
             try:
-                plan=plan_hashes.get(sha);keys=decode(source);recurring=decode(recurrence)
+                keys=decode(source);recurring=decode(recurrence)
                 episode=connection.execute('SELECT source_id,answer_id FROM rules_related_episodes WHERE chat_id=? AND repo=? COLLATE NOCASE AND parent_number=?',(chat,repo,parent)).fetchone()
-                if not plan or keys!=plan['source_keys'] or not recurring or not episode or any(k not in keys for k in recurring):raise ValueError()
+                if keys!=plan_hashes.get(sha,missing) or not recurring or not episode or any(k not in keys for k in recurring):raise ValueError()
             except (ValueError,TypeError,KeyError,sqlite3.Error):blockers.append('RELATED_RECEIPT_MISMATCH')
-    blockers.extend(_lifecycle_relation_blockers(connection,tables))
+    blockers.extend(_lifecycle_relation_blockers(connection,tables,full_scan=limit is None))
     return sorted(set(blockers))
 
 def _proven_closed_chat_sources(connection):
@@ -1096,8 +1103,7 @@ def _proven_closed_chat_sources(connection):
     recoverable={(batch,ordinal) for batch,ordinal,status in _recoverable_batch_groups(connection) if status=='DONE'}
     proven=set()
     rows=connection.execute("""SELECT g.batch_id,g.ordinal,g.plan,g.status,b.fingerprint FROM rules_batch_groups g
-        JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.status IN ('RESERVED','DONE') LIMIT 1001""").fetchall()
-    if len(rows)>1000:raise RulesHalt('CHAT ownership validation incomplete; Owner inspection required')
+        JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.status IN ('RESERVED','DONE')""")
     for batch,ordinal,raw,status,fingerprint in rows:
         try:
             plan=_json(raw);snapshot=plan.get('pending_snapshot');topic=plan.get('pending_topic')
@@ -1117,21 +1123,25 @@ def _proven_closed_chat_sources(connection):
     return proven
 
 
-def _lifecycle_relation_blockers(connection,tables):
+def _lifecycle_relation_blockers(connection,tables,*,full_scan=False):
     """Question-backed A/B and direct related episodes have different durable authority proofs."""
     from .legacy_preflight import _json
     blockers=[];questions={}
     if 'rules_lifecycle_questions' in tables:
         try:
-            rows=connection.execute('''SELECT chat_id,source_id,
+            query='''SELECT chat_id,source_id,
                 CASE WHEN length(topic_id)<=1000 THEN topic_id END,parent_number,
                 CASE WHEN length(repo)<=200 THEN repo END,plan_id,fingerprint,batch_id,ordinal,
                 CASE WHEN length(evidence_answer)<=2000 THEN evidence_answer END,
                 CASE WHEN length(recurrence_answer)<=2000 THEN recurrence_answer END,
                 CASE WHEN length(question)<=2000 THEN question END
-                FROM rules_lifecycle_questions LIMIT 1001''').fetchall()
-            if len(rows)>1000:blockers.append('LIFECYCLE_VALIDATION_TRUNCATED')
-            for row in rows[:1000]:
+                FROM rules_lifecycle_questions'''
+            if full_scan:rows=connection.execute(query)
+            else:
+                rows=connection.execute(query+' LIMIT 1001').fetchall()
+                if len(rows)>1000:blockers.append('LIFECYCLE_VALIDATION_TRUNCATED')
+                rows=rows[:1000]
+            for row in rows:
                 chat,source,topic,parent,repo,planid,fp,batch,ordinal,evidence,recurrence,question_text=row
                 try:
                     saved=connection.execute('SELECT g.plan,b.fingerprint FROM rules_batch_groups g JOIN rules_batches b ON b.batch_id=g.batch_id WHERE g.batch_id=? AND g.ordinal=?',(batch,ordinal)).fetchone()
@@ -1167,9 +1177,13 @@ def _lifecycle_relation_blockers(connection,tables):
         except sqlite3.Error:blockers.append('BINDING_SCHEMA_UNKNOWN')
     if 'rules_lifecycle_answers' in tables:
         try:
-            rows=connection.execute('SELECT chat_id,source_id,answer_id,choice FROM rules_lifecycle_answers LIMIT 1001').fetchall()
-            if len(rows)>1000:blockers.append('LIFECYCLE_VALIDATION_TRUNCATED')
-            for chat,source,answer,choice in rows[:1000]:
+            query='SELECT chat_id,source_id,answer_id,choice FROM rules_lifecycle_answers'
+            if full_scan:rows=connection.execute(query)
+            else:
+                rows=connection.execute(query+' LIMIT 1001').fetchall()
+                if len(rows)>1000:blockers.append('LIFECYCLE_VALIDATION_TRUNCATED')
+                rows=rows[:1000]
+            for chat,source,answer,choice in rows:
                 try:
                     if choice not in ('evidence','recurrence'):raise ValueError()
                     question=questions.get((chat,source))

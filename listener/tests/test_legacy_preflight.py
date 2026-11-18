@@ -287,8 +287,8 @@ class LegacyPreflightTests(unittest.TestCase):
     def test_inspection_rejects_source_change_during_read_snapshot(self):
         from tg_triage import legacy_preflight
         original=legacy_preflight.check_connection_before_recovery
-        def changing(connection):
-            try:original(connection)
+        def changing(connection,**kwargs):
+            try:original(connection,**kwargs)
             finally:self.change("UPDATE messages SET text='changed while clone inspected'")
         with patch.object(legacy_preflight,'check_connection_before_recovery',side_effect=changing):
             with self.assertRaisesRegex(RulesHalt,'SNAPSHOT_CHANGED'):inspect(self.db)
