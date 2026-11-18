@@ -1,1 +1,2 @@
 start-console.sh text eol=lf
+listener/assistant/*.md text eol=lf

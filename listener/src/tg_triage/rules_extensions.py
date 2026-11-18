@@ -13,13 +13,15 @@ from .decision_rules import RulesError
 class ExtensionRules:
     """Load the approved policy exactly once; source DRAFTs fail closed."""
 
+    FILES = ('lifecycle', 'analysis-status')
+
     __slots__ = ('lifecycle', 'intents', 'explicit_evidence', 'clarification', 'fingerprint', '_frozen')
 
     def __init__(self, directory):
         directory = Path(directory)
-        lifecycle = self._table(directory / 'lifecycle.md', 'lifecycle', 'disposition',
+        lifecycle = self._table(directory / f'{self.FILES[0]}.md', 'lifecycle', 'disposition',
                                 ('Bằng chứng host đã kiểm', 'Quyết định'))
-        intents = self._table(directory / 'analysis-status.md', 'analysis_status', 'intent_routes',
+        intents = self._table(directory / f'{self.FILES[1]}.md', 'analysis_status', 'intent_routes',
                               ('Intent model đã kiểm nguồn', 'Quyết định'))
         # Supported safety semantics are constrained until the implementation
         # is deliberately changed and reviewed for additional outcomes.
@@ -66,7 +68,7 @@ class ExtensionRules:
             raise RulesError('lifecycle.md: invalid clarification values')
         self.clarification=MappingProxyType(clarification)
         digest = hashlib.sha256()
-        for name, text in (('lifecycle.md', lifecycle[0]), ('analysis-status.md', intents[0])):
+        for name, text in zip((f'{name}.md' for name in self.FILES), (lifecycle[0], intents[0])):
             digest.update(name.encode('utf8'))
             digest.update(text.encode('utf8'))
         self.fingerprint = digest.hexdigest()

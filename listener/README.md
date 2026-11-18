@@ -6,6 +6,16 @@ Runtime/operator guide. The single business authority is [Telegram triage TG-01.
 
 Agents taking over triage or GitHub ticket logging start with [AGENTS.md](AGENTS.md).
 
+## Rule pack trợ lý
+
+Rule pack `assistant-triage` ghép [nguyên tắc trợ lý](assistant/principles.md)
+với các quy tắc quyết định trong [rules/](rules/README.md), kèm fingerprint để
+kiểm tra đúng bộ nguồn. Pack được sinh bằng `python scripts/build-assistant-pack.py`
+từ repo root; CI kiểm tra bằng `python scripts/build-assistant-pack.py --check`.
+Không sửa `listener/assistant/assistant-triage.md` bằng tay. Khi đổi rule hoặc
+principles, phải dựng lại pack trong cùng PR; pack thiếu, không hợp lệ hoặc
+lệch nguồn thì bot từ chối khởi động trong rules mode.
+
 ## Offline verification (Python >= 3.11)
 
 From `listener/`, PowerShell:

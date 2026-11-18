@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.42 · **Updated**: 2026-11-18 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.43 · **Updated**: 2026-11-18 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -2379,6 +2379,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/classification_log.py",
           "symbol": "daily_summary"
+        },
+        {
+          "path": "listener/src/tg_triage/__main__.py",
+          "symbol": "_load_assistant_pack"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "_Attempt.__init__"
         }
       ],
       "tests": [
@@ -2453,6 +2461,18 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_classification_log.py",
           "symbol": "ClassificationLogTests.test_shutdown_flushes_safe_queue_and_cannot_raise_or_commit_caller_transaction"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_startup_logs_pack_fingerprint_and_pipeline_records_it"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_check_config_contains_pack_fingerprint_and_retention"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_all_classification_phases_record_pack_version_or_null"
         }
       ]
     },
@@ -2470,6 +2490,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/decision_rules.py",
           "symbol": "RulesSnapshot._validate"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_pack.py",
+          "symbol": "load"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_pack.py",
+          "symbol": "parse"
         }
       ],
       "tests": [
@@ -2488,6 +2516,26 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_rules_bootstrap.py",
           "symbol": "RulesBootstrapTests.test_draft_rules_block_check_config"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_missing_pack_uses_invalid_rules_exit_path"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_tampered_pack_uses_invalid_rules_exit_path"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_rule_drift_uses_invalid_rules_exit_path"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_runtime.py",
+          "symbol": "AssistantPackRuntimeTests.test_wheel_contains_pack_and_principles_with_valid_record"
+        },
+        {
+          "path": "listener/tests/test_assistant_pack_format.py",
+          "symbol": "AssistantPackFormatTests.test_pack_bom_crlf_and_cr_parse_and_load_with_same_fingerprint"
         }
       ]
     }
@@ -2500,7 +2548,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/prompts/thinking-topics.md": "f3295f8cdf8d3707d8844ffe61c2eeca0efc1763a0f9879c86b375c1a8b15a58",
     "listener/prompts/topics.md": "99dca8ee4272cca18bb283d489b709542661694639aad6ec720d63c7a2b47dc8",
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
-    "listener/src/tg_triage/__main__.py": "564e9f08d2df018133b2a4f48cbd4edd8926e73f4e380e12282b8413b75ce3ea",
+    "listener/src/tg_triage/__main__.py": "11c4dc4fe8563a7bf5d6c52ef78acbf75f010f909cf8812823eae798fbcb3248",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
     "listener/src/tg_triage/analysis_task.py": "f91cf1e28732c6a585eca133000065bb9c21fecb50354046ea02c791ed3def3c",
     "listener/src/tg_triage/attachments.py": "53a94fb982339aa8aba247ba763583bdc0436a73dae618c2942c61b4e7af55b6",
@@ -2530,7 +2578,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
     "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
-    "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
+    "listener/src/tg_triage/rules_extensions.py": "a8c0753ad5b1fe54cc38694d9d5f831e95bf0c7e2281078f7252e278de955c91",
     "listener/src/tg_triage/rules_extraction.py": "d275400dfc0c422dedfd8dd42aaec2c26343cc6079c1c14a8e7bc785dcdd9f04",
     "listener/src/tg_triage/rules_intake.py": "b243e6c1a25b51b2edace351c014e7b20f0f4a1131b874f813126ce8fd4ab0c3",
     "listener/src/tg_triage/rules_pending_store.py": "34ed681f62c951e8a742a5489dd12d23122032b955f5b29e2dd7cdd1056f0ccc",
@@ -2551,7 +2599,8 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/templates/github-ticket/group-replies.md": "456e766494ce45b8d508e662c48c6eff2c4e34853163d2fc7867f09f55ea9397",
     "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
     "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056",
-    "listener/src/tg_triage/classification_log.py": "6e822ca292019d028cb69bb6877eca70ac4231cd0c9093241fe5a4c2923ee298"
+    "listener/src/tg_triage/classification_log.py": "76659618dbcb5ee6260496952598c4edff42c225832ba5a8a437a629fc6abaa7",
+    "listener/src/tg_triage/assistant_pack.py": "7fc8fad40b131a0364e9e92c2c1452aa2a748ebcff7744bf06e9048954ec1c9c"
   },
   "legacy_documents": [],
   "related_documents": [
@@ -2574,7 +2623,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "15d6eb93c496a10513995b8d341ac139d31f3cf7842426df0ce8a13647e4493c",
+  "runtime_fingerprint": "c7b0340276f5b8c7de19715f4837805f0451083906cd8f5fa0e845eee02c0774",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2592,6 +2641,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.43 | 2026-11-18 | Codex / owner AlexChu | #2915: gói quy tắc trợ lý tập hợp nguyên tắc chung và các quy tắc quyết định hiện hành, có mã nhận diện nội dung (fingerprint). Khi bật rules mode, bot ghi mã này trong log khởi động, kết quả check-config và từng lượt phân loại (classification_runs.rules_version); không nạp gói thì trường này là NULL. Bot từ chối khởi động nếu gói thiếu, bị sửa hoặc không còn khớp nguồn quy tắc/nguyên tắc; sau khi cập nhật nguồn, dựng lại bằng python scripts/build-assistant-pack.py và kiểm tra bằng --check. Wheel chứa cả nguyên tắc và gói đã dựng; Git giữ xuống dòng LF, còn bộ nạp và lệnh kiểm tra chấp nhận BOM/CRLF/CR mà không đổi mã nhận diện. Chưa triển khai production. |
 | v1.16.42 | 2026-11-18 | Codex / owner AlexChu | #2931: cổng kiểm tra lúc khởi động không còn dừng khi lịch sử vượt 1.000 dòng. Trước đây, khi bảng có trường JSON (ví dụ rules_decisions, rules_batch_groups) vượt 1.000 dòng hoặc 8 MiB tổng, gate coi là chưa kiểm xong và dừng dịch vụ (dự kiến khoảng 06/12/2026 trên gw-01). Nay gate đọc lần lượt toàn bộ lịch sử bằng cursor SQLite ở bốn nhóm kiểm tra: dữ liệu JSON của các bảng, bằng chứng topic CHAT đã đóng, liên kết biên nhận/review với plan, và câu hỏi/trả lời lifecycle. Không giới hạn số dòng hoặc tổng dung lượng, nhưng vẫn giữ trần 256 KiB cho từng giá trị JSON và không nạp toàn bộ plan vào bộ nhớ (chỉ giữ mã hash và danh sách nguồn cần đối chiếu). Mọi điều kiện chặn và mã lỗi giữ nguyên: dòng JSON sai, sai kiểu, quá cỡ hoặc biên nhận không khớp vẫn dừng dịch vụ dù nằm ở bất kỳ vị trí nào. Lệnh báo cáo legacy-preflight giữ nguyên giới hạn 1.000 dòng và kết quả như cũ. Các giới hạn 1.000 dòng còn lại trên đường khởi động: trạng thái tạm thời (source-followup PLANNED; checkpoint RESERVED/AMBIGUOUS), autonomous_plans cũ đã ngừng ghi, và danh sách tin pending chưa có chủ (LIMIT 1001). Danh sách tin pending chưa có chủ có gồm cả nguồn pending_review của topic CHAT đã đóng, vốn tăng dần theo lịch sử (gw-01 hiện có 1), nên cần ticket theo dõi riêng. Kiểm thử: 1.000/1.001/10.000 dòng hợp lệ đều qua; dòng lỗi ở vị trí 1.500 và 10.000 vẫn chặn; 1.001 và 5.000 nhóm DONE với schema production có bảng biên nhận; khôi phục code cũ làm đỏ các ca qua. Chưa triển khai production. |
 | v1.16.41 | 2026-11-18 | Claude / owner AlexChu | Đính chính nguyên nhân #2914 theo dữ liệu gw-01: bản 57f4047 đã ghi classification_runs bình thường (9 dòng phase=extract từ 07:40 đến 10:47 ngày 18/11, khớp 9 lượt gọi DeepSeek). Bảng trống tối 17/11 là do từ lúc deploy 18:50 đến 07:40 không có tin nhắn nào, không phải do quyết định sớm. Hotfix v1.16.40 vẫn giữ: bù dòng phase=early còn thiếu so với TG-32 và bỏ cảnh báo giả lúc khởi động (đã xác nhận trên production sau deploy b3ca0bd lúc 10:50). Dòng phase=early chưa thấy trên production vì sau deploy chưa có tin bị lọc sớm. Chỉ sửa tài liệu. |
 | v1.16.40 | 2026-11-18 | Codex / owner AlexChu | Hotfix #2914 sau GATE 0b: quyết định sớm trong process() bỏ qua evaluate_batch nên không được ghi, trái TG-32 (đính chính ở v1.16.41: đây không phải nguyên nhân bảng trống trên production); thêm đúng một lượt phase=early, không gọi model, chỉ IDs, proposal NULL. Cảnh báo transaction là maintenance ở sweep đầu nhìn thấy UPDATE khởi tạo, không phải lượt phân loại; maintenance nay trở về yên lặng khi transaction mở. Giữ hàng đợi tối đa 500 lượt làm phòng vệ, INFO số lượt chờ có giới hạn tần suất, FIFO khi an toàn và thử flush trước đóng Store. Lỗi riêng từng dòng thì bỏ dòng có cảnh báo đếm/tên lớp, tiếp tục dòng sau; lỗi lưu trữ giữ dòng chờ nhưng không chặn retention/backfill. Không commit/rollback transaction của bên gọi, không đổi quyết định, return hay ngoại lệ. Overflow bỏ lượt cũ nhất; bộ nhớ chờ không bền qua restart. Kiểm thử hồi quy qua Store/Pipeline/enqueue/process thật cho lời xã giao và câu hỏi, không lặp sau sweep; startup không WARNING, poison row, shutdown, A/B và byte-identity. Các phép chèn UPDATE thủ công được ghi rõ là kiểm thử phòng vệ. Cập nhật trace/hash runtime. Chưa deploy hotfix. |
