@@ -603,6 +603,7 @@ class ClassificationLogTests(fallback.ProviderBase):
                      patch('tg_triage.__main__.asyncio.run', new=runner.run), \
                      patch('tg_triage.__main__.load_config', return_value=settings), \
                      patch('tg_triage.__main__._build_classifier', return_value=object()), \
+                     patch('tg_triage.__main__.validate_data_directories'), \
                      patch('tg_triage.telegram_io.run', new=AsyncMock(side_effect=transport)), \
                      patch.object(log, 'flush', side_effect=RuntimeError('PRIVATE-error') if finish == 'flush_raises' else flush), \
                      self.assertNoLogs('tg_triage.classification_log', level='ERROR'):
