@@ -101,6 +101,7 @@ def _json(raw):
 
 
 def _category(connection,name,spec,limit):
+    """Stream JSON rows; None disables report row and cumulative byte budgets."""
     result=dict(family=spec['family'],schema='SUPPORTED',total=None,terminal=None,pending=None,uncertain=None,invalid=None,
                 validation_complete=True,truncated=False,codes=[])
     result['total']=connection.execute('SELECT count(*) FROM '+_quoted(name)).fetchone()[0]
@@ -151,16 +152,21 @@ def _category(connection,name,spec,limit):
         fields=','.join(_quoted(field) for field in spec['json_fields'])
         # SQL length guards avoid bringing unbounded/private payloads into Python.
         expressions=','.join(f'CASE WHEN length(CAST({_quoted(f)} AS BLOB))<=? THEN {_quoted(f)} ELSE NULL END,{_quoted(f)} IS NOT NULL' for f in spec['json_fields'])
-        cursor=connection.execute('SELECT '+expressions+',CASE WHEN '+basic_where+' THEN 1 ELSE 0 END FROM '+table+' LIMIT ?',(*([MAX_JSON_BYTES]*len(spec['json_fields'])),*basic_params,limit+1))
+        query='SELECT '+expressions+',CASE WHEN '+basic_where+' THEN 1 ELSE 0 END FROM '+table
+        params=(*([MAX_JSON_BYTES]*len(spec['json_fields'])),*basic_params)
+        if limit is not None:
+            query+=' LIMIT ?';params=(*params,limit+1)
+        cursor=connection.execute(query,params)
         nullable={'split_plan','plan','result','original_result'}
         malformed=0;used=0
         for index,row in enumerate(cursor):
-            if index>=limit:result['truncated']=True;break
+            if limit is not None and index>=limit:result['truncated']=True;break
             for field,value,exists in zip(spec['json_fields'],row[:-1:2],row[1:-1:2]):
                 try:
                     if value is None and not exists and field in nullable:continue
-                    used+=len(value.encode('utf8')) if isinstance(value,str) else 0
-                    if used>8*1024*1024:result['truncated']=True;break
+                    if limit is not None:
+                        used+=len(value.encode('utf8')) if isinstance(value,str) else 0
+                        if used>8*1024*1024:result['truncated']=True;break
                     parsed=_json(value)
                     if not isinstance(parsed,(dict,list)):raise ValueError()
                 except (ValueError,TypeError,UnicodeError):
@@ -252,7 +258,7 @@ def inspect(path,*,include_attachment_evidence=False,limit=MAX_ROWS):
         if len(internal)>limit:blockers.append('INTERNAL_INVENTORY_TRUNCATED');incomplete=True
         try:
             if incomplete:raise RulesHalt('SCHEMA_OR_VALIDATION_UNKNOWN')
-            check_connection_before_recovery(connection)
+            check_connection_before_recovery(connection,binding_limit=MAX_ROWS)
         except RulesHalt:
             gate='UNKNOWN' if incomplete else 'HOLD';recovery_codes=['SCHEMA_OR_VALIDATION_UNKNOWN'] if incomplete else ['RECOVERY_REQUIRES_RECONCILIATION']
         else:gate='HOLD' if blockers else 'CLEAR';recovery_codes=blockers or ['RECOVERY_CHECKS_CLEAR_ONLY']
