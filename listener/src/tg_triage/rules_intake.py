@@ -419,6 +419,7 @@ def process(pipeline, message, start):
     from .models import Decision
     topic = f'{message.chat_id}:{message.message_id}'
     pipeline.rules_pending.create(topic, message.chat_id, message.message_id)
+    classification_log.record_decision(pipeline.store, pipeline.rules_snapshot, topic, [message], decision)
     pipeline.rules_pending.record_decision(topic, decision)
     state = 'chat' if decision.state == 'CHAT' else 'pending_review'
     result = Decision(state, 'rule', case_key=topic, reason=decision.rule)

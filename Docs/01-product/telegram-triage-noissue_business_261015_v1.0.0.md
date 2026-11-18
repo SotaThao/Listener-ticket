@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.39 · **Updated**: 2026-11-17 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
+**Version**: v1.16.40 · **Updated**: 2026-11-18 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -384,11 +384,11 @@ Template là nội dung tin cậy được phát hành, không phải kênh ch�
 
 Quota issue tính create attempts kể cả sibling/unknown outcome; comment không tính issue quota. Upload quota riêng. Dry-run không GitHub write/upload/text notice, có thể download/validate và reaction TG-13. SQLite giữ text/context gốc được bảo vệ; logs/usage không giữ content. Usage giữ 90 ngày; test regression không phải accuracy AI hay SLA.
 
-Rules mode lưu một dòng `classification_runs` cho mỗi lượt đánh giá, kể cả retry, lỗi và quyết định sớm không gọi model; không đổi quyết định hoặc thao tác của bot. Một nhóm ghi trạng thái/luật trực tiếp; nhiều nhóm dùng `MULTI` và kết quả cấu trúc theo nhóm. `final_state` là quyết định rules tại thời điểm đánh giá, không phản ánh override ở giai đoạn thực thi. Nhánh tài liệu chưa đọc và luồng classic (không rules) không có dòng này. `mode` hiện ghi `live` theo hợp đồng telemetry, không dùng cột này để chứng minh side effect hay dry-run đã gửi ticket.
+Rules mode lưu một dòng `classification_runs` cho mỗi lượt đánh giá, kể cả retry, lỗi và quyết định sớm không gọi model; không đổi quyết định hoặc thao tác của bot. Quyết định sớm được dùng trong `process()` ghi riêng với `phase=early`, trạng thái/luật đúng quyết định, `model_calls=0`, `proposal_json=NULL` và chỉ IDs; ví dụ câu hỏi `/question` và lời xã giao `ok`/`cảm ơn`. Quyết định MEDIA_ONLY sớm cũng được ghi. Một nhóm ghi trạng thái/luật trực tiếp; nhiều nhóm dùng `MULTI` và kết quả cấu trúc theo nhóm. `final_state` là quyết định rules tại thời điểm đánh giá, không phản ánh override hoặc kiểm tra lại ở giai đoạn thực thi; replay quyết định đã lưu không thêm lượt đánh giá. Chỉ nhánh bỏ qua đánh giá vì tài liệu chưa đọc và luồng classic (không rules) không có dòng này. `mode` hiện ghi `live` theo hợp đồng telemetry, không dùng cột này để chứng minh side effect hay dry-run đã gửi ticket.
 
 Proposal chỉ lưu IDs, tên trường, intent/loại lifecycle và cờ có task; không lưu giá trị dữ kiện, task text, trích dẫn, nội dung tin hay private reasoning. ID của pending merge/confirmation thuộc `topic_ref`, còn extract thuộc `message`; fingerprint của topic refs bao gồm topic_id và id_space để không trùng giữa hai chủ đề dùng cùng refs. Fingerprint lô chỉ dùng để truy vết, không deduplicate hoặc điều khiển xử lý. Token/chi phí cộng từ các lượt gọi thực tế; provider/model là lượt gọi cuối, fallback ghi cờ và mã lỗi, không ghi thông điệp lỗi tự do. `reasoning_tokens`, `finish_reason`, effort và tóm tắt suy luận hiện NULL. `classification_tool_calls` mới có schema/API, hiện chưa phát sinh tự động; tham số tool chỉ giữ tên, kiểu, độ dài và IDs dạng số nguyên được chỉ rõ, không giữ giá trị thô hoặc nội dung lồng nhau.
 
-`[assistant] retention_days` mặc định 90, chỉ chấp nhận số nguyên 1–3650; áp dụng riêng cho `classification_runs` và `classification_tool_calls`, dọn tối đa mỗi giờ, xóa tool rows trước run rows theo lô tối đa 5000. Không áp cấu hình này cho `model_usage` (vẫn quy tắc 90 ngày riêng), hội thoại hay journal cũ. Tối đa mỗi giờ bổ sung `ticket_ref` từ `messages.issue_url` cho lượt dưới 7 ngày, chỉ một nhóm, `id_space=message`, trạng thái READY/APPEND/APPEND_CLOSED/RELATED và chưa có link; không đổi bảng nguồn. Lỗi logging bị cô lập, không commit transaction của luồng khác. `usage-daily` chỉ đọc và xuất JSON theo ngày địa phương (mặc định +07:00), provider/model, outcome/token/cost từ usage và số lượt phân loại theo phase/final_state; database cũ thiếu hai bảng vẫn đọc được.
+`[assistant] retention_days` mặc định 90, chỉ chấp nhận số nguyên 1–3650; áp dụng riêng cho `classification_runs` và `classification_tool_calls`, dọn tối đa mỗi giờ, xóa tool rows trước run rows theo lô tối đa 5000. Không áp cấu hình này cho `model_usage` (vẫn quy tắc 90 ngày riêng), hội thoại hay journal cũ. Tối đa mỗi giờ bổ sung `ticket_ref` từ `messages.issue_url` cho lượt dưới 7 ngày, chỉ một nhóm, `id_space=message`, trạng thái READY/APPEND/APPEND_CLOSED/RELATED và chưa có link; không đổi bảng nguồn. Lỗi logging bị cô lập, không commit hoặc rollback transaction của luồng khác. Hàng đợi bộ nhớ là lớp phòng vệ, không phải nguyên nhân thiếu log production: nếu transaction đang mở, giữ metadata riêng từng Store, tối đa 500 lượt, kèm INFO số lượt chờ tối đa một lần mỗi phút. Lượt ghi kế tiếp khi an toàn hoặc mỗi lần maintenance sẽ ghi FIFO, mỗi dòng trong transaction riêng, trước khi xét lịch retention. Lỗi riêng của dòng do binding/ràng buộc thì bỏ dòng đó, cảnh báo có đếm và tên lớp ngoại lệ tối đa một lần mỗi phút rồi tiếp tục dòng sau; lỗi kết nối/lưu trữ giữ dòng chờ nhưng không chặn retention/backfill khi connection không nằm trong transaction. Maintenance gặp transaction đang mở thì trở về yên lặng, không cảnh báo startup. Khi đầy, bỏ lượt cũ nhất và cảnh báo số lượt bị bỏ tối đa một lần mỗi phút. Shutdown thử flush trước khi đóng Store, vẫn không can thiệp transaction của bên gọi; hàng đợi chưa ghi không bền qua tiến trình thoát. `usage-daily` chỉ đọc và xuất JSON theo ngày địa phương (mặc định +07:00), provider/model, outcome/token/cost từ usage và số lượt phân loại theo phase/final_state; database cũ thiếu hai bảng vẫn đọc được.
 
 `[thinking] enabled` mặc định true khi thiếu cấu hình; false + restart quay về semantic path cũ, giữ mọi journal/reservation/result bền vững. Migration chỉ thêm bảng, không xóa/đổi dữ liệu cũ. Journal quyết định hiện chưa có automatic retention; dữ liệu ngắn chỉ gồm IDs/labels/provenance, operator phải quản lý storage theo chính sách SQLite đang có.
 
@@ -2366,6 +2366,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         },
         {
           "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "record_decision"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "flush"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
           "symbol": "maintain"
         },
         {
@@ -2429,6 +2437,22 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_classification_log.py",
           "symbol": "ClassificationLogTests.test_startup_gate_1001_runs_supported_and_tool_roundtrip"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_defensive_implicit_transaction_preserves_caller_commit_and_rollback"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_defensive_pipeline_batch_preserves_run_after_uncommitted_dml_during_evaluation"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_real_pipeline_early_decisions_are_logged_once_without_model_or_startup_warning"
+        },
+        {
+          "path": "listener/tests/test_classification_log.py",
+          "symbol": "ClassificationLogTests.test_shutdown_flushes_safe_queue_and_cannot_raise_or_commit_caller_transaction"
         }
       ]
     },
@@ -2476,7 +2500,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/prompts/thinking-topics.md": "f3295f8cdf8d3707d8844ffe61c2eeca0efc1763a0f9879c86b375c1a8b15a58",
     "listener/prompts/topics.md": "99dca8ee4272cca18bb283d489b709542661694639aad6ec720d63c7a2b47dc8",
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
-    "listener/src/tg_triage/__main__.py": "b3cea5235e02029e0d2056491a4beca1350e56e03c5e41b0840b502b35478f05",
+    "listener/src/tg_triage/__main__.py": "564e9f08d2df018133b2a4f48cbd4edd8926e73f4e380e12282b8413b75ce3ea",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
     "listener/src/tg_triage/analysis_task.py": "f91cf1e28732c6a585eca133000065bb9c21fecb50354046ea02c791ed3def3c",
     "listener/src/tg_triage/attachments.py": "53a94fb982339aa8aba247ba763583bdc0436a73dae618c2942c61b4e7af55b6",
@@ -2508,7 +2532,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
     "listener/src/tg_triage/rules_extensions.py": "461066437620d88d85a6b2caa71a7a76dd7d6bdb5433dec740138da46ec8aece",
     "listener/src/tg_triage/rules_extraction.py": "d275400dfc0c422dedfd8dd42aaec2c26343cc6079c1c14a8e7bc785dcdd9f04",
-    "listener/src/tg_triage/rules_intake.py": "7c324a1bf1cd4298fd58dbb54fd1dd65a32c2a514a9722bded51dec56c1e5e1e",
+    "listener/src/tg_triage/rules_intake.py": "b243e6c1a25b51b2edace351c014e7b20f0f4a1131b874f813126ce8fd4ab0c3",
     "listener/src/tg_triage/rules_pending_store.py": "fce738c79de3a9a3981c4c2ae0a12c7bf8585e13d3420eaff569b198a88a628b",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "80bf2d7eda7011f2c26562da4740c9e91c3af696625d59d86a2c70fbab3ad783",
@@ -2527,7 +2551,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/templates/github-ticket/group-replies.md": "456e766494ce45b8d508e662c48c6eff2c4e34853163d2fc7867f09f55ea9397",
     "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
     "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056",
-    "listener/src/tg_triage/classification_log.py": "b85022bae39cc8bd074e887377f544aea2db36a532b654421105e3771be92ce4"
+    "listener/src/tg_triage/classification_log.py": "6e822ca292019d028cb69bb6877eca70ac4231cd0c9093241fe5a4c2923ee298"
   },
   "legacy_documents": [],
   "related_documents": [
@@ -2568,6 +2592,7 @@ Owner (2026-10-30): “Duyệt 8 mẫu tin và chuyển 6 rules sang ACTIVE, v�
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.40 | 2026-11-18 | Codex / owner AlexChu | Hotfix #2914 sau GATE 0b: nguyên nhân production là quyết định sớm trong process() bỏ qua evaluate_batch nên không được ghi; thêm đúng một lượt phase=early, không gọi model, chỉ IDs, proposal NULL. Cảnh báo transaction là maintenance ở sweep đầu nhìn thấy UPDATE khởi tạo, không phải lượt phân loại; maintenance nay trở về yên lặng khi transaction mở. Giữ hàng đợi tối đa 500 lượt làm phòng vệ, INFO số lượt chờ có giới hạn tần suất, FIFO khi an toàn và thử flush trước đóng Store. Lỗi riêng từng dòng thì bỏ dòng có cảnh báo đếm/tên lớp, tiếp tục dòng sau; lỗi lưu trữ giữ dòng chờ nhưng không chặn retention/backfill. Không commit/rollback transaction của bên gọi, không đổi quyết định, return hay ngoại lệ. Overflow bỏ lượt cũ nhất; bộ nhớ chờ không bền qua restart. Kiểm thử hồi quy qua Store/Pipeline/enqueue/process thật cho lời xã giao và câu hỏi, không lặp sau sweep; startup không WARNING, poison row, shutdown, A/B và byte-identity. Các phép chèn UPDATE thủ công được ghi rõ là kiểm thử phòng vệ. Cập nhật trace/hash runtime. Chưa deploy hotfix. |
 | v1.16.39 | 2026-11-17 | Codex / owner AlexChu | #2914: thêm classification_runs và classification_tool_calls; một dòng mỗi lần đánh giá rules, proposal chỉ gồm cấu trúc/IDs, tổng usage và fallback. Ghi best-effort, không commit transaction khác, không đổi quyết định bot; phân biệt evaluation với execution, không ghi nhánh unread-document/classic. Thêm retention riêng qua assistant.retention_days, backfill ticket_ref hằng giờ và usage-daily chỉ đọc. Registry không khai báo json_fields/status/enum để lịch sử trên 1000 dòng không chặn startup; không sửa bug #2931. Trace thêm classification_log.py và cập nhật hash runtime đã đổi; kiểm thử privacy, failure isolation, Pipeline A/B, retention, CLI và gate 1001 dòng. Sau review: chọn cùng run_ids theo thứ tự khi dọn retention, phân biệt topic refs trong fingerprint, chuẩn hóa token không hợp lệ về 0, dùng mặc định khi thiếu assistant config, chỉ lưu cấu trúc tham số tool. Vòng 2: đo latency bằng store.clock để đồng hồ giả cố định tạo dòng giống nhau; truyền topic chứa refs khi pending merge nằm trong batch Turn, giữ đúng topic_id và fingerprint mà không đổi Turn/budget. Chưa deploy. |
 | v1.16.38 | 2026-11-16 | Codex / owner AlexChu | Round 2 (#2178): chuyển transport và model-lock dùng chung sang `agentfleet-common==1.0.0` tại AgentBuilder, `PROTOCOL = 1`; listener giữ `thinking_transport`. Gỡ hai bản sao local, chuyển pure-module tests và giữ integration tests; thêm kiểm tra packaging/version/protocol. Runtime inventory 60→58, làm mới hash 5 file runtime và fingerprint; mọi trace symbol còn tồn tại. Hành vi model/lock/error không đổi; wheel common phải có trong cache offline và venv trước khi deploy listener. |
 | v1.16.37 | 2026-11-16 | Claude / owner AlexChu | Ranh giới repo theo yêu cầu Owner (“gỡ trước các phần cho phép”): repo chỉ giữ tính năng log ticket. Gỡ hợp đồng AgentFleet console: `receipt.py` (`agentfleet-ready.json`), `console_revision`, file tổng hợp `agentfleet-usage.json` trong `usage.py`; vẫn ghi `model_usage` và giá. Gỡ 7 tài liệu `worker-agent-fleet-1_*` khỏi repo, `legacy_documents` để trống. Runtime inventory 61→60, hash `usage.py`/`telegram_io.py`/`config.py` làm mới. Hành vi log ticket không đổi; chưa deploy, cần phiếu preflight mới. Hash khớp không thay review ngữ nghĩa của người. |

@@ -160,6 +160,12 @@ def main(argv=None) -> int:
                     asyncio.run(run(config, Pipeline(config, store, classifier, github,
                                                      uploader=uploader, **pipeline_options)))
                 finally:
+                    try:
+                        from .classification_log import flush
+                        flush(store)
+                    except Exception as error:
+                        logging.getLogger(__name__).warning('Classification shutdown flush failed exception=%s',
+                                                            type(error).__name__)
                     store.close()
         return 0
     except KeyboardInterrupt:

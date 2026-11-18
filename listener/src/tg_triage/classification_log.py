@@ -8,12 +8,16 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
+from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 
 LOG = logging.getLogger(__name__)
 CURRENT = ContextVar('classification_run', default=None)
+MAX_PENDING_RUNS = 500
+DROP_WARNING_SECONDS = 60
 
 
 def init_store(connection):
@@ -58,6 +62,88 @@ def _ids(values):
     return [value for value in values if type(value) is int and value > 0]
 
 
+def _notice(store, kind, level, message, *args):
+    now = store.clock().timestamp()
+    notices = getattr(store, '_classification_notices', None)
+    if notices is None:
+        notices = store._classification_notices = {}
+    previous = notices.get(kind)
+    if previous is not None and now - previous < DROP_WARNING_SECONDS:
+        return False
+    LOG.log(level, message, *args)
+    notices[kind] = now
+    return True
+
+
+def _warn_drops(store):
+    dropped = getattr(store, '_classification_dropped', 0)
+    if not dropped:
+        return
+    if _notice(store, 'overflow', logging.WARNING,
+               'Classification accounting queue overflow dropped=%s', dropped):
+        store._classification_dropped = 0
+
+
+def _warn_poison(store, error=None):
+    if error is not None:
+        store._classification_poison_dropped = getattr(store, '_classification_poison_dropped', 0) + 1
+        store._classification_poison_error = type(error).__name__
+    dropped = getattr(store, '_classification_poison_dropped', 0)
+    if dropped and _notice(store, 'poison', logging.WARNING,
+            'Classification accounting invalid row dropped=%s exception=%s',
+            dropped, store._classification_poison_error):
+        store._classification_poison_dropped = 0
+
+
+def _enqueue(store, values):
+    # Caller holds the Store RLock. Keep scalar metadata, never a Turn or sources.
+    queue = getattr(store, '_classification_pending', None)
+    if queue is None:
+        queue = store._classification_pending = deque()
+    if len(queue) >= MAX_PENDING_RUNS:
+        queue.popleft()
+        store._classification_dropped = getattr(store, '_classification_dropped', 0) + 1
+    queue.append(dict(values))
+    _warn_drops(store)
+
+
+def flush(store):
+    """Commit queued runs FIFO only outside a caller transaction; never raise.
+
+    Commit each row separately, retaining it on connection/storage failure.
+    Row-specific binding/constraint errors discard only that row, with counted,
+    rate-limited warnings, so later rows and maintenance can proceed. The bounded
+    memory queue is not durable across process exit. All access uses the Store RLock.
+    """
+    try:
+        with store._lock:
+            connection = store.connection
+            if connection.in_transaction:
+                return False
+            queue = getattr(store, '_classification_pending', None)
+            while queue:
+                values = queue[0]
+                try:
+                    with connection:
+                        columns = ','.join(values)
+                        connection.execute(f'INSERT INTO classification_runs ({columns}) VALUES ({",".join("?" for _ in values)})',
+                                           tuple(values.values()))
+                except (sqlite3.IntegrityError, sqlite3.InterfaceError, sqlite3.ProgrammingError) as error:
+                    # A closed/unusable connection is not a poison row. Probe it
+                    # after our transaction rolled back before discarding data.
+                    connection.execute('SELECT 1').fetchone()
+                    queue.popleft()
+                    _warn_poison(store, error)
+                else:
+                    queue.popleft()
+            _warn_drops(store)
+            _warn_poison(store)
+            return True
+    except Exception as error:
+        _failed(error)
+        return False
+
+
 class _Attempt:
     def __init__(self, turn, snapshot, sources, images, phase, topic_id=None):
         if any(type(source.chat_id) is not int or source.chat_id == 0 for source in sources):
@@ -99,18 +185,39 @@ class _Attempt:
         store = self.turn.store
         with store._lock:
             connection = store.connection
-            if connection.in_transaction:
-                LOG.warning('Classification accounting skipped: active transaction')
-                return
+            safe = not connection.in_transaction
+            flushed = flush(store) if safe else False
             if values['phase'] != 'followup_confirm':
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE name='rules_topics' AND type='table'").fetchone():
                     row = connection.execute('SELECT attempts FROM rules_topics WHERE topic_id=?',
                                              (self.turn.root_key,)).fetchone()
                     values['attempt_no'] = row[0] if row else None
-            with connection:
-                columns = ','.join(values)
-                connection.execute(f'INSERT INTO classification_runs ({columns}) VALUES ({",".join("?" for _ in values)})',
-                                   tuple(values.values()))
+            _enqueue(store, values)
+            if not safe:
+                _notice(store, 'deferred', logging.INFO,
+                        'Classification accounting deferred queued=%s', len(store._classification_pending))
+            if safe and flushed:
+                flush(store)
+
+
+def record_decision(store, snapshot, topic_id, sources, decision, *, phase='early'):
+    """Record a used, model-free rules decision; no CURRENT scope or bot side effects.
+
+    Construct a private metadata Turn without entering it or journaling it. Proposal
+    and provider fields stay NULL; source content and decision field values are never
+    projected. This API follows the same deferred-write and failure-isolation rules.
+    """
+    try:
+        from .thinking import Turn
+        sources = tuple(sources)
+        if not sources:
+            return
+        turn = Turn(store, 'rules:' + topic_id, topic_id, sources[0].message_id)
+        attempt = _Attempt(turn, snapshot, sources, None, phase)
+        attempt.result = ((sources, decision),)
+        attempt.write()
+    except Exception as error:
+        _failed(error)
 
 
 @contextmanager
@@ -246,13 +353,16 @@ def maintain(store, retention_days=90, *, config=None):
         if config is not None:
             retention_days = getattr(getattr(config, 'assistant', None), 'retention_days', 90)
         with store._lock:
+            # Every periodic call may flush; only retention/backfill are hourly.
+            connection = store.connection
+            if connection.in_transaction:
+                return
+            flush(store)
+            if connection.in_transaction:
+                return
             now = store.clock().timestamp()
             previous = getattr(store, '_classification_maintained_at', None)
             if previous is not None and now - previous < 3600:
-                return
-            connection = store.connection
-            if connection.in_transaction:
-                LOG.warning('Classification accounting skipped: active transaction')
                 return
             cutoff = now - retention_days * 86400
             while True:
