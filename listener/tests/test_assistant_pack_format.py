@@ -182,8 +182,11 @@ class AssistantPackFormatTests(unittest.TestCase):
                         load(self.directory, self.rules)
 
     def test_builder_subprocess_build_check_and_drift(self):
+        builder = ROOT / "scripts/build-assistant-pack.py"
+        if not builder.is_file():
+            self.skipTest('scripts/build-assistant-pack.py absent outside a repository checkout')
         out = self.directory / "generated" / PACK_FILE
-        command = [sys.executable, str(ROOT / "scripts/build-assistant-pack.py"),
+        command = [sys.executable, str(builder),
                    "--rules-dir", str(self.rules), "--principles",
                    str(self.directory / PRINCIPLES_FILE), "--out", str(out)]
         def run(*args):
