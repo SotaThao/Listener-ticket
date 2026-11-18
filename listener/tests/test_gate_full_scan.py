@@ -450,6 +450,9 @@ class GateFullScanTests(unittest.TestCase):
 
     def test_report_keeps_recovery_codes_when_only_binding_byte_budget_truncates(self):
         self.populate_analysis_reviews(900, padded=True)
+        with sqlite3.connect(self.db) as connection:
+            connection.execute('CREATE INDEX test_analysis_members_review ON rules_analysis_review_members(review_id,message_id)')
+        connection.close()
         check_before_recovery(self.db)
         report = inspect(self.db, limit=MAX_ROWS)
         self.assertTrue(report['inspection']['present_ledgers_validated'])

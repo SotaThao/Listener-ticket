@@ -112,3 +112,9 @@ context_max_wait_seconds = 60
 [assistant]
 # Retention for classification runs and their tool-call metadata only.
 retention_days = 90
+# Future read-only assistant tools (#2917); currently not called by classification.
+# Optional plain-text read-only GitHub token; never reuse the issue-writing token.
+# Unix: private 0600, or 0640 with group tglistener, like model key files.
+# github_token_file = "/etc/tg-triage/assistant-github-token"
+# github_repos = ["owner/repository"]
+# max_tool_calls = 8 # 1..8; cannot raise the hard limit.
