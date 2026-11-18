@@ -1,13 +1,15 @@
 """Offline attempt accounting, privacy, behavior parity and read-only reporting."""
 import contextlib
+import asyncio
 import io
 import json
 import sqlite3
+import socket
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from tg_triage import classification_log as log
 from tg_triage.__main__ import _load_decision_rules, main
@@ -36,6 +38,7 @@ class ClassificationLogTests(fallback.ProviderBase):
         self.snapshot = _load_decision_rules()
         self.clock = Clock(datetime.now(timezone.utc))
         self.store.clock = self.clock
+        self.socket_connect = socket.socket.connect
         patch('socket.socket.connect', side_effect=AssertionError('unexpected network')).start()
 
     def provider(self, upstream, http=None, **model):
@@ -264,8 +267,71 @@ class ClassificationLogTests(fallback.ProviderBase):
             evaluate_batch(self.snapshot, object(), [message(42, '/question sao?')])
         pipeline = Pipeline(replace(config(), decision_rules_enabled=True, autonomous_enabled=True), self.store,
                             object(), rules_snapshot=self.snapshot)
-        pipeline.process(message(43, '', has_document=True))
+        pipeline.process(message(43, 'đọc nội dung trong file này', has_document=True,
+                                 document_name='proof.txt', document_mime='text/plain'))
         self.assertEqual(self.runs(), [])
+
+    def test_real_pipeline_early_decisions_are_logged_once_without_model_or_startup_warning(self):
+        for text, rule in (('ok', 'F4'), ('cảm ơn', 'F4'), ('/question sao?', 'R1')):
+            with self.subTest(text=text):
+                store = Store(':memory:', clock=self.clock)
+                self.addCleanup(store.close)
+                settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
+                pipeline = Pipeline(settings, store, object(), rules_snapshot=self.snapshot)
+                self.assertTrue(store.connection.in_transaction)
+                with self.assertNoLogs('tg_triage.classification_log', level='WARNING'):
+                    log.maintain(store)
+                    self.assertTrue(store.connection.in_transaction)
+                    source = message(42, text, mentions_listener=False)
+                    store.enqueue(source)
+                    self.assertFalse(store.connection.in_transaction)
+                    result = pipeline.process(source)
+                self.assertEqual((result.decision, result.reason), ('chat', rule))
+                row, = self.runs(store)
+                self.assertEqual((row['phase'], row['final_state'], row['decision_rule'], row['model_calls']),
+                                 ('early', 'CHAT', rule, 0))
+                self.assertEqual(row['topic_id'], f'{source.chat_id}:42')
+                self.assertEqual(row['turn_key'], 'rules:' + row['topic_id'])
+                self.assertEqual(json.loads(row['message_ids']), [42])
+                for name in ('proposal_json', 'outcomes_json', 'provider', 'model'):
+                    self.assertIsNone(row[name])
+                self.assertEqual(store.model_usage_since(0), [])
+                self.assertFalse(getattr(store, '_classification_pending', None))
+                sweep(pipeline)
+                self.assertIsNone(pipeline.process(source))
+                self.assertEqual(self.runs(store), [row])
+
+    def test_early_logging_preserves_decision_state_and_current_scope_and_isolates_failure(self):
+        observations = []
+        for enabled in (False, True):
+            store = Store(':memory:', clock=self.clock)
+            self.addCleanup(store.close)
+            settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
+            github = FakeGitHub()
+            pipeline = Pipeline(settings, store, object(), github, rules_snapshot=self.snapshot)
+            source = message(42, '/question PRIVATE-marker', mentions_listener=False)
+            record = log.record_decision
+            with patch.object(log, 'record_decision', record if enabled else lambda *a, **kw: None):
+                result = pipeline.process(source)
+            state = {name: [tuple(row) for row in store.connection.execute('SELECT * FROM ' + name)]
+                     for name in ('rules_topics', 'messages', 'rules_decisions', 'thinking_decisions')}
+            observations.append((result, github.calls, state))
+            if enabled:
+                row, = self.runs(store)
+                self.assertNotIn('PRIVATE', json.dumps(row))
+        self.assertEqual(observations[0], observations[1])
+        self.assertEqual(observations[1][1], [])
+        source = message(43, '/question sao?')
+        pipeline = Pipeline(settings, self.store, object(), rules_snapshot=self.snapshot)
+        self.store.connection.execute('DROP TABLE classification_runs')
+        with self.assertLogs('tg_triage.classification_log', level='WARNING'):
+            result = pipeline.process(source)
+        self.assertEqual((result.decision, result.reason), ('chat', 'R1'))
+        with self.turn() as existing:
+            log.init_store(self.store.connection)
+            log.record_decision(self.store, self.snapshot, 'early:44', [message(44, 'PRIVATE-text')],
+                                self.snapshot.prefilter_decision('F4'))
+            self.assertIs(CURRENT.get(), existing)
 
     def test_failures_are_isolated_and_body_exceptions_propagate(self):
         expected = evaluate_batch(self.snapshot, object(), [message(42, '/question sao?')])
@@ -281,9 +347,9 @@ class ClassificationLogTests(fallback.ProviderBase):
             self.assertEqual(actual, expected)
             self.assertNotIn('PRIVATE', str(captured.output))
         real.execute('BEGIN')
-        with self.assertLogs('tg_triage.classification_log', level='WARNING'):
-            self.assertEqual(self.evaluate(object(), [message(42, '/question sao?')]), expected)
+        self.assertEqual(self.evaluate(object(), [message(42, '/question sao?')]), expected)
         self.assertTrue(real.in_transaction)
+        self.assertEqual(len(self.store._classification_pending), 1)
         real.rollback()
         real.execute('DROP TABLE classification_runs')
         with self.assertLogs('tg_triage.classification_log', level='WARNING'):
@@ -298,6 +364,296 @@ class ClassificationLogTests(fallback.ProviderBase):
         with self.assertLogs('tg_triage.classification_log', level='WARNING'):
             self.assertEqual(self.evaluate(self.hosted())[0][1].state, 'READY')
         self.assertEqual(len(self.store.model_usage_since(0)), 1)
+
+    def test_defensive_implicit_transaction_preserves_caller_commit_and_rollback(self):
+        expected = evaluate_batch(self.snapshot, object(), [message(42, '/question sao?')])
+        for finish in ('commit', 'rollback'):
+            with self.subTest(finish=finish):
+                store = Store(':memory:', clock=self.clock)
+                self.addCleanup(store.close)
+                pending = RulesPendingStore(store)
+                pending.create('test', message().chat_id, 42)
+                pending.reserve_attempt('test', 1)
+                store.enqueue(message(42, 'PRIVATE-source'))
+                before_usage = store.model_usage_since(0)
+                store.connection.execute("UPDATE messages SET sender_name='PRIVATE-uncommitted'")
+                self.assertTrue(store.connection.in_transaction)
+                statements = []
+                store.connection.set_trace_callback(statements.append)
+                with self.turn(store), patch('tg_triage.rules_intake._evaluate_batch', return_value=expected):
+                    actual = evaluate_batch(self.snapshot, object(), [message(42, '/question sao?')])
+                self.assertIs(actual, expected)
+                self.assertEqual(self.runs(store), [])
+                self.assertEqual(len(store._classification_pending), 1)
+                self.assertTrue(store.connection.in_transaction)
+                self.assertEqual(store.get(message().chat_id, 42)['sender_name'], 'PRIVATE-uncommitted')
+                self.assertFalse(log.flush(store))
+                self.assertFalse(any(sql.strip().upper().startswith(('COMMIT', 'ROLLBACK')) for sql in statements))
+                # The queued attempt number is frozen before later caller changes.
+                store.connection.execute('UPDATE rules_topics SET attempts=2')
+                getattr(store.connection, finish)()
+                self.assertFalse(store.connection.in_transaction)
+                self.assertEqual(store.get(message().chat_id, 42)['sender_name'] == 'PRIVATE-uncommitted', finish == 'commit')
+                self.assertTrue(log.flush(store))
+                self.assertTrue(log.flush(store))
+                row, = self.runs(store)
+                self.assertEqual((row['attempt_no'], row['final_state']), (1, 'CHAT'))
+                self.assertNotIn('PRIVATE', json.dumps(row))
+                self.assertEqual(len(store._classification_pending), 0)
+                self.assertEqual(store.model_usage_since(0), before_usage)
+
+    def test_next_safe_write_flushes_fifo_and_queues_are_per_store(self):
+        other = Store(':memory:', clock=self.clock)
+        self.addCleanup(other.close)
+        self.store.enqueue(message(42))
+        self.store.connection.execute("UPDATE messages SET sender_name='caller'")
+        self.evaluate(object(), [message(42, '/question sao?')])
+        self.store.connection.commit()
+        with self.turn(other):
+            evaluate_batch(self.snapshot, object(), [message(99, '/question sao?')])
+        self.assertEqual(self.runs(), [])
+        self.assertEqual([json.loads(r['message_ids']) for r in self.runs(other)], [[99]])
+        self.evaluate(object(), [message(43, '/question sao?')])
+        self.assertEqual([json.loads(r['message_ids']) for r in self.runs()], [[42], [43]])
+        self.assertTrue(log.flush(self.store))
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_uncommitted_pipeline_initializer_is_untouched_by_maintenance(self):
+        settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
+        statements = []
+        self.store.connection.set_trace_callback(statements.append)
+        Pipeline(settings, self.store, object(), rules_snapshot=self.snapshot)
+        self.assertTrue(any(sql.startswith('UPDATE autonomous_confirmations') for sql in statements))
+        self.assertTrue(self.store.connection.in_transaction)
+        statements.clear()
+        with self.assertNoLogs('tg_triage.classification_log', level='WARNING'):
+            log.maintain(self.store)
+        self.assertTrue(self.store.connection.in_transaction)
+        self.assertFalse(any(sql.strip().upper().startswith(('COMMIT', 'ROLLBACK')) for sql in statements))
+        self.store.connection.rollback()
+        log.maintain(self.store)
+        self.assertFalse(self.store.connection.in_transaction)
+
+    def test_body_exception_in_caller_transaction_is_preserved_and_hold_is_queued(self):
+        self.store.enqueue(message(42))
+        self.store.connection.execute("UPDATE messages SET sender_name='PRIVATE-caller'")
+        failure = RuntimeError('PRIVATE-body-error')
+        with self.turn(), patch('tg_triage.rules_intake._evaluate_batch', side_effect=failure):
+            with self.assertRaises(RuntimeError) as raised:
+                evaluate_batch(self.snapshot, object(), [message(42)])
+        self.assertIs(raised.exception, failure)
+        self.assertTrue(self.store.connection.in_transaction)
+        self.assertEqual(self.runs(), [])
+        self.store.connection.rollback()
+        self.assertTrue(log.flush(self.store))
+        row, = self.runs()
+        self.assertEqual((row['final_state'], row['error']), ('HOLD', 'rules_extraction_failed'))
+        self.assertNotIn('PRIVATE', json.dumps(row))
+
+    def test_maintenance_and_sweep_flush_even_within_hourly_retention_interval(self):
+        settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
+        pipeline = Pipeline(settings, self.store, object(), rules_snapshot=self.snapshot)
+        self.store.connection.commit()
+        self.store.enqueue(message(42))
+        log.maintain(self.store)
+        maintained_at = self.store._classification_maintained_at
+        for index, maintain in enumerate((log.maintain, lambda store: sweep(pipeline)), 42):
+            with self.subTest(index=index):
+                self.store.connection.execute("UPDATE messages SET sender_name='caller'")
+                self.evaluate(object(), [message(index, '/question sao?')])
+                log.maintain(self.store)
+                self.assertTrue(self.store.connection.in_transaction)
+                self.assertEqual(len(self.store._classification_pending), 1)
+                self.store.connection.commit()
+                maintain(self.store)
+                self.assertEqual(len(self.store._classification_pending), 0)
+                self.assertEqual(self.store._classification_maintained_at, maintained_at)
+        self.assertEqual([json.loads(r['message_ids']) for r in self.runs()], [[42], [43]])
+
+    def test_pending_queue_is_bounded_drops_oldest_and_rate_limits_counted_warnings(self):
+        self.store.enqueue(message(42))
+        self.store.connection.execute("UPDATE messages SET sender_name='caller'")
+        with self.assertLogs('tg_triage.classification_log', level='WARNING') as captured:
+            with self.turn():
+                for index in range(1, 505):
+                    evaluate_batch(self.snapshot, object(), [message(index, '/question sao?')])
+            self.assertEqual(len(self.store._classification_pending), 500)
+            self.assertEqual(len(captured.records), 1)
+            self.assertIn('dropped=1', captured.output[0])
+            self.clock.now += timedelta(seconds=60)
+            self.evaluate(object(), [message(505, '/question sao?')])
+            self.assertEqual(len(captured.records), 2)
+            self.assertIn('dropped=4', captured.output[1])
+        self.assertTrue(self.store.connection.in_transaction)
+        self.store.connection.rollback()
+        self.assertTrue(log.flush(self.store))
+        self.assertEqual([json.loads(r['message_ids'])[0] for r in self.runs()], list(range(6, 506)))
+
+    def test_poison_constraint_row_is_dropped_and_later_rows_and_retention_continue(self):
+        old = self.add_run(age=91)
+        log.record_tool_call(self.store, old, 1, 'lookup')
+        self.store.enqueue(message(42))
+        self.store.connection.execute("UPDATE messages SET sender_name='caller'")
+        self.evaluate(object(), [message(42, '/question sao?')])
+        self.evaluate(object(), [message(43, '/question sao?')])
+        self.evaluate(object(), [message(44, '/question sao?')])
+        self.store.connection.commit()
+        self.store.connection.execute('''CREATE TEMP TRIGGER fail_classification BEFORE INSERT ON classification_runs
+            WHEN NEW.message_ids='[43]' BEGIN SELECT RAISE(ABORT,'PRIVATE-error-text'); END''')
+        with self.assertLogs('tg_triage.classification_log', level='WARNING') as captured:
+            log.maintain(self.store)
+        self.assertEqual(len(captured.records), 1)
+        self.assertIn('IntegrityError', captured.output[0])
+        self.assertIn('dropped=1', captured.output[0])
+        self.assertNotIn('PRIVATE', str(captured.output))
+        self.assertEqual([json.loads(r['message_ids']) for r in self.runs()], [[42], [44]])
+        self.assertEqual(self.store.connection.execute('SELECT count(*) FROM classification_tool_calls').fetchone()[0], 0)
+        self.assertEqual(len(self.store._classification_pending), 0)
+        self.assertFalse(self.store.connection.in_transaction)
+        self.assertEqual(self.store.get(message().chat_id, 42)['sender_name'], 'caller')
+        self.store.connection.execute('DROP TRIGGER fail_classification')
+        self.assertTrue(log.flush(self.store))
+        self.assertTrue(log.flush(self.store))
+        self.assertEqual([json.loads(r['message_ids']) for r in self.runs()], [[42], [44]])
+
+    def test_defensive_binding_poison_drops_only_bad_rows_with_rate_limited_counts(self):
+        self.store.enqueue(message(42))
+        self.store.connection.execute("UPDATE messages SET sender_name='caller'")
+        with self.turn():
+            for index in range(42, 45):
+                with log.run(self.snapshot, [message(index)]) as attempt:
+                    if index != 44:
+                        attempt.values['cost'] = object()  # Real SQLite binding failure.
+        self.store.connection.commit()
+        with self.assertLogs('tg_triage.classification_log', level='WARNING') as captured:
+            self.assertTrue(log.flush(self.store))
+            self.assertEqual(len(captured.records), 1)
+            self.assertIn('ProgrammingError', captured.output[0])
+            self.assertIn('dropped=1', captured.output[0])
+            self.clock.now += timedelta(seconds=60)
+            log.flush(self.store)
+        self.assertEqual(len(captured.records), 2)
+        self.assertIn('dropped=1', captured.output[1])
+        self.assertEqual([json.loads(r['message_ids']) for r in self.runs()], [[44]])
+
+    def test_storage_flush_failure_keeps_queue_without_blocking_retention_or_backfill(self):
+        self.add_run(age=91)
+        ready = self.add_run(state='READY')
+        self.store.enqueue(message(42))
+        with self.store.connection:
+            self.store.connection.execute("UPDATE messages SET issue_url='https://github.com/sandbox/triage/issues/42'")
+        self.store.connection.execute("UPDATE messages SET sender_name='caller'")
+        self.evaluate(object(), [message(43, '/question sao?')])
+        self.store.connection.commit()
+        def authorizer(action, table, *args):
+            return sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_INSERT and table == 'classification_runs' else sqlite3.SQLITE_OK
+        self.store.connection.set_authorizer(authorizer)
+        try:
+            with self.assertLogs('tg_triage.classification_log', level='WARNING'):
+                log.maintain(self.store)
+            row, = self.runs()
+            self.assertEqual(row['run_id'], ready)
+            self.assertEqual(row['ticket_ref'], 'https://github.com/sandbox/triage/issues/42')
+            self.assertEqual(len(self.store._classification_pending), 1)
+        finally:
+            self.store.connection.set_authorizer(None)
+        self.assertTrue(log.flush(self.store))
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_defensive_deferred_notice_is_rate_limited_and_reports_queue_length(self):
+        self.store.enqueue(message(42))
+        self.store.connection.execute("UPDATE messages SET sender_name='PRIVATE-caller'")
+        with self.assertLogs('tg_triage.classification_log', level='INFO') as captured:
+            self.evaluate(object(), [message(42, '/question sao?')])
+            self.evaluate(object(), [message(43, '/question sao?')])
+            self.assertEqual(len(captured.records), 1)
+            self.assertIn('queued=1', captured.output[0])
+            self.clock.now += timedelta(seconds=60)
+            self.evaluate(object(), [message(44, '/question sao?')])
+        self.assertEqual(len(captured.records), 2)
+        self.assertIn('queued=3', captured.output[1])
+        self.assertNotIn('PRIVATE', str(captured.output))
+        self.assertTrue(self.store.connection.in_transaction)
+        self.store.connection.rollback()
+        log.flush(self.store)
+        self.assertEqual(len(self.runs()), 3)
+
+    def test_shutdown_flushes_safe_queue_and_cannot_raise_or_commit_caller_transaction(self):
+        for finish in ('commit', 'rollback', 'open', 'flush_raises'):
+            with self.subTest(finish=finish):
+                path = Path(self.tmp.name) / (finish + '.sqlite3')
+                settings = replace(config(), db_path=str(path), autonomous_enabled=True, decision_rules_enabled=True)
+                stores = []
+                async def transport(settings, pipeline):
+                    store = pipeline.store
+                    stores.append(store)
+                    source = message(42, 'PRIVATE-source')
+                    store.enqueue(source)
+                    store.connection.execute("UPDATE messages SET sender_name='PRIVATE-caller'")
+                    log.record_decision(store, self.snapshot, 'early:42', [source], self.snapshot.prefilter_decision('F4'))
+                    self.assertEqual(self.runs(store), [])
+                    if finish != 'open':
+                        getattr(store.connection, 'rollback' if finish == 'flush_raises' else finish)()
+                flush = log.flush
+                # Windows creates a local self-pipe while constructing its loop.
+                # Restore the network guard before running any application code.
+                with patch('socket.socket.connect', self.socket_connect):
+                    loop = asyncio.new_event_loop()
+                with asyncio.Runner(loop_factory=lambda: loop) as runner, \
+                     patch('tg_triage.__main__.asyncio.run', new=runner.run), \
+                     patch('tg_triage.__main__.load_config', return_value=settings), \
+                     patch('tg_triage.__main__._build_classifier', return_value=object()), \
+                     patch('tg_triage.telegram_io.run', new=AsyncMock(side_effect=transport)), \
+                     patch.object(log, 'flush', side_effect=RuntimeError('PRIVATE-error') if finish == 'flush_raises' else flush), \
+                     self.assertNoLogs('tg_triage.classification_log', level='ERROR'):
+                    self.assertEqual(main(['run']), 0)
+                self.assertEqual(len(stores), 1)
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    stores[0].connection.execute('SELECT 1')
+                with contextlib.closing(sqlite3.connect(path)) as connection:
+                    rows = connection.execute('SELECT final_state,model_calls,proposal_json FROM classification_runs').fetchall()
+                    self.assertEqual(rows, [('CHAT', 0, None)] if finish in ('commit', 'rollback') else [])
+                    name = connection.execute('SELECT sender_name FROM messages').fetchone()[0]
+                    self.assertEqual(name == 'PRIVATE-caller', finish == 'commit')
+
+    def test_defensive_pipeline_batch_preserves_run_after_uncommitted_dml_during_evaluation(self):
+        store = self.store
+        states = []
+        class Provider:
+            settings = SimpleNamespace(model='test')
+            think = False
+            supports_vision = False
+            def _ask(self, body, parse, attempts):
+                # Defensive fault injection, not the observed production cause.
+                # Keep real rules extraction and accounting intact.
+                store.connection.execute("UPDATE messages SET sender_name='PRIVATE-caller'")
+                states.append(store.connection.in_transaction)
+                return parse(payload((41, 42)))
+        settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
+        pipeline = Pipeline(settings, store, Provider(), rules_snapshot=self.snapshot)
+        sources = [message(41, 'POS'), message(42, 'POS')]
+        for source in sources:
+            store.enqueue(source)
+        original = log._Attempt.write
+        def observe(attempt):
+            result = original(attempt)
+            states.append(store.connection.in_transaction)
+            self.assertEqual(self.runs(), [])
+            self.assertEqual(len(store._classification_pending), 1)
+            return result
+        with patch.object(log._Attempt, 'write', observe):
+            result = _process_batch(pipeline, sources)
+        self.assertEqual(result.decision, 'dry_run_issue')
+        self.assertEqual(states, [True, True])
+        self.assertFalse(store.connection.in_transaction)
+        # Existing flow owns its later commits; periodic maintenance flushes next.
+        sweep(pipeline)
+        row, = self.runs()
+        self.assertEqual((row['final_state'], row['attempt_no'], row['template']), ('READY', 1, 'bug.md'))
+        self.assertEqual(json.loads(row['message_ids']), [41, 42])
+        self.assertNotIn('PRIVATE', json.dumps(row))
+        sweep(pipeline)
+        self.assertEqual(len(self.runs()), 1)
 
     def test_pipeline_batch_ab_has_identical_decisions_github_and_state(self):
         observations = []

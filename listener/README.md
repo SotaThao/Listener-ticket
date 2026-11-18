@@ -82,11 +82,22 @@ row and structural outcomes. Decisions reflect evaluation time; later execution
 overrides are excluded. Classic intake and the unread-document branch have no
 classification run. Proposals retain IDs, field names and enums, never text or
 field values. Provider/model identify the last recorded call; totals include all
-calls and fallback. Reasoning tokens and finish reason remain unavailable.
+calls and fallback. Early decisions in `process()` use phase `early`, zero model
+calls and a null proposal; this includes ordinary chatter and `/question`.
+Reasoning tokens and finish reason remain unavailable.
 `classification_tool_calls` is reserved for later tooling and has no current
 automatic writer. Tool arguments retain names, types/lengths and explicitly named
 integer IDs; raw values and nested content are discarded. Logging failures warn
-and leave classification behavior intact.
+and leave classification behavior intact. If a caller's SQLite transaction is
+open, completed run metadata waits in a per-Store memory queue (at most 500 rows).
+Deferral emits an INFO queue-length notice at most once per minute. The next safe
+classification write or periodic maintenance flushes oldest first, committing each
+row separately. Row-specific binding/constraint failures drop that row with counted,
+rate-limited warnings and continue; connection/storage failures retain rows for retry
+without blocking retention/backfill. Maintenance returns quietly during an existing
+transaction. Overflow drops oldest rows with counted warnings at most once per minute.
+Shutdown attempts a safe flush before closing Store. Unflushed rows are lost on process
+exit. Logging never commits or rolls back the caller's transaction.
 Hourly maintenance uses `[assistant] retention_days` (default 90, range 1–3650)
 for these two tables, deleting tool rows first. It backfills recent single-group
 message-space ticket links from `messages.issue_url`; topic references are excluded.
