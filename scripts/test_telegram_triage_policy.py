@@ -26,9 +26,11 @@ class TraceTests(unittest.TestCase):
             self.trace['rules'].append({'id': f'TG-{n:02}',
                 'code': [{'path':'listener/src/tg_triage/rules.py', 'symbol':'evaluate'}],
                 'tests': [{'path':'listener/tests/test_rules.py', 'symbol':'RulesTests.test_all_commands_are_confident_and_keep_payload'}]})
-        for folder, pattern in [('listener/src/tg_triage','*.py'),('listener/prompts','*.md'),('listener/templates','**/*.md')]:
+        for folder, pattern in [('listener/src/tg_triage','*.py'),('listener/src/tg_triage/admin_static','**/*'),
+                                ('listener/prompts','*.md'),('listener/templates','**/*.md')]:
             for path in (self.root/folder).glob(pattern):
-                self.trace['runtime_inventory'][path.relative_to(self.root).as_posix()] = checker.normalized_hash(path)
+                if path.is_file():
+                    self.trace['runtime_inventory'][path.relative_to(self.root).as_posix()] = checker.normalized_hash(path)
         self.headings = [f'### TG-{n:02} Rule' for n in range(1,34)]
         self.extra = ''
     def write(self):

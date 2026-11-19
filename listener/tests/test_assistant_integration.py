@@ -114,7 +114,8 @@ class AssistantIntegrationTests(unittest.TestCase):
         for writer in writers: writer.reset_mock()
         before = {r[0]: list(self.store.connection.execute('SELECT * FROM "' + r[0] + '"'))
                   for r in self.store.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                  if r[0] not in ('classification_runs', 'classification_tool_calls', 'sqlite_sequence')}
+                  if r[0] not in ('classification_runs', 'classification_tool_calls',
+                                  'classification_model_calls', 'sqlite_sequence')}
         runtime.drain()
         runtime._worker.join(timeout=5)
         self.assertFalse(runtime._worker.is_alive())

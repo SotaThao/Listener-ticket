@@ -60,17 +60,19 @@ def _bounded_args(arguments):
 
 class ToolBox:
     def __init__(self, github, local, *, store=None, run_id=None, max_calls=8,
-                 clock=time.monotonic):
+                 clock=time.monotonic, wall_clock=time.time):
         if type(max_calls) is not int or not 1 <= max_calls <= 8:
             raise ValueError('max_calls must be an integer 1..8')
         self._github, self._local = github, local
         self._store, self._run_id = store, run_id
         self._max_calls, self._clock = max_calls, clock
+        self._wall_clock = wall_clock
         self._calls = 0
 
-    def call(self, name: str, arguments: dict | str) -> dict:
+    def call(self, name: str, arguments: dict | str, *, render_result=None) -> dict:
         self._calls += 1
         started = self._clock()
+        started_at = self._wall_clock()
         error_class = None
         decoded = arguments
         spec = next((item for item in TOOL_SPECS if item['name'] == name), None)
@@ -103,12 +105,15 @@ class ToolBox:
             else:
                 message = 'Tool failed'
             result = dict(tool=tool, ok=False, error=message)
+        latency_ms = max(0, int((self._clock() - started) * 1000))
+        result_json = render_result(result) if render_result is not None else None
         if self._store is not None and self._run_id is not None:
             try:
                 classification_log.record_tool_call(
                     self._store, self._run_id, self._calls, tool,
                     args_json=_bounded_args(decoded), result_bytes=len(_json(result).encode('utf-8')),
-                    latency_ms=max(0, int((self._clock() - started) * 1000)), error=error_class)
+                    latency_ms=latency_ms, error=error_class, result_json=result_json,
+                    started_at=started_at, args_full_json=arguments if render_result is not None else None)
             except Exception:
                 pass  # Accounting is best effort and must never change the result.
         return result

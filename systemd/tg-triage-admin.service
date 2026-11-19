@@ -1,0 +1,31 @@
+[Unit]
+Description=Telegram Triage Admin UI
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=tglistener
+Group=tglistener
+EnvironmentFile=/etc/agentfleet/tg-triage.env
+ExecStart=/opt/agentfleet/listener/.venv/bin/python -m tg_triage admin --config /etc/tg-triage/listener.toml
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=2
+UMask=0077
+NoNewPrivileges=yes
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8 100.64.0.0/10
+RestrictAddressFamilies=AF_INET AF_UNIX
+CapabilityBoundingSet=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadOnlyPaths=/var/lib/agentfleet/tg
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

@@ -11,7 +11,7 @@ from pathlib import Path
 from . import assistant_pack
 from .attachments import GhCliUploader
 from .classifier import load_prompt
-from .config import ConfigError, load_config, load_database_path
+from .config import ConfigError, load_admin_config, load_config, load_database_path
 from .decision_rules import RulesError, RulesSnapshot
 from .rules_pending_store import RulesHalt, check_before_recovery
 from .github_issues import GitHubIssues
@@ -55,7 +55,7 @@ def main(argv=None) -> int:
     os.umask(0o077)
     parser = argparse.ArgumentParser(prog="tg-triage")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("run", "login", "export-csv", "usage-daily", "check-config", "trace", "legacy-preflight", "legacy-transition", "legacy-release"):
+    for name in ("run", "login", "export-csv", "usage-daily", "check-config", "trace", "legacy-preflight", "legacy-transition", "legacy-release", "admin"):
         command = commands.add_parser(name)
         command.add_argument("--config", default="/etc/tg-triage/listener.toml")
         if name == "export-csv":
@@ -78,10 +78,20 @@ def main(argv=None) -> int:
             command.add_argument("--message-id", type=int)
             command.add_argument("--limit", type=int, default=100)
             command.add_argument("--include-text", action="store_true")
+    passwd = commands.add_parser("admin-passwd")
+    passwd.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if args.command == "admin":
+            from .admin import serve
+            serve(load_admin_config(args.config), load_database_path(args.config))
+            return 0
+        if args.command == "admin-passwd":
+            from .admin import write_password_hash
+            write_password_hash(Path(args.out))
+            return 0
         if args.command in ('legacy-transition','legacy-release'):
             from .legacy_reconciliation import transition_pristine, release_pristine
             try:
@@ -128,7 +138,7 @@ def main(argv=None) -> int:
             finally:
                 store.close()
             return 0
-        config = load_config(args.config)
+        config = load_config(args.config, include_admin=True) if args.command == "check-config" else load_config(args.config)
         templates = load_templates() if args.command in ('run', 'check-config') else None
         decision_rules = (_load_decision_rules()
                           if config.decision_rules_enabled and args.command in ('run', 'check-config') else None)

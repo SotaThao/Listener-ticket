@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Listener Admin</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Listener Admin</h1>
+    <span id="live-status" class="live" role="status" data-status="offline" hidden>
+      <span class="dot" aria-hidden="true"></span>
+      <span id="connection-label">Đang kết nối</span>
+      <small id="last-update" hidden>· cập nhật lúc <time id="update-time"></time></small>
+    </span>
+    <button id="pause-button" type="button" class="icon-btn" aria-label="Tạm dừng cập nhật realtime" title="Tạm dừng" aria-pressed="false" hidden>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <g id="pause-icon"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></g>
+        <path id="resume-icon" d="M8 5v14l12-7z" hidden/>
+      </svg>
+    </button>
+    <nav id="filters" class="filters" aria-label="Lọc lượt" hidden>
+      <button type="button" class="chip" data-filter="" aria-pressed="true">Tất cả</button>
+      <button type="button" class="chip" data-filter="READY" aria-pressed="false">READY</button>
+      <button type="button" class="chip" data-filter="NEED_INFO" aria-pressed="false">NEED_INFO</button>
+      <button type="button" class="chip" data-filter="hold-errors" aria-pressed="false">HOLD / lỗi</button>
+      <button id="model-filter" type="button" class="chip" aria-haspopup="dialog" aria-pressed="false">Model ▾</button>
+      <button id="chat-filter" type="button" class="chip" aria-haspopup="dialog" aria-pressed="false">Chat ▾</button>
+      <button id="follow-button" type="button" class="chip" aria-pressed="true">Theo lượt mới nhất</button>
+    </nav>
+  </header>
+
+  <p id="startup-status" class="status-text" role="status">Đang kiểm tra phiên đăng nhập…</p>
+  <section id="login-view" class="login-view card" aria-labelledby="login-title" hidden>
+    <div class="c">
+      <h2 id="login-title">Đăng nhập</h2>
+      <form id="login-form" method="post" action="/api/login">
+        <label for="password">Mật khẩu</label>
+        <input id="password" class="field" type="password" autocomplete="current-password" aria-describedby="login-error" required>
+        <p id="login-error" class="error login-error" role="alert" hidden></p>
+        <button id="login-submit" class="action-btn" type="submit">Đăng nhập</button>
+      </form>
+    </div>
+  </section>
+
+  <main id="dashboard" hidden>
+    <section id="list-pane" class="list" aria-label="Danh sách lượt">
+      <ol id="runs-list" aria-label="Lượt phân loại, mới nhất trước"></ol>
+      <p id="list-status" class="status-text" role="status" hidden></p>
+      <button id="load-more" class="action-btn load-more" type="button" hidden>Tải thêm</button>
+    </section>
+    <section id="detail-pane" class="detail" aria-labelledby="run-title">
+      <button id="back-button" class="back" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+        Danh sách
+      </button>
+      <div class="head">
+        <h2 id="run-title" tabindex="-1">Chi tiết lượt</h2>
+        <div id="run-badge"></div>
+      </div>
+      <p id="detail-status" class="sub" role="status"></p>
+      <div id="run-detail" hidden>
+        <ul id="run-meta" class="meta"></ul>
+        <article class="card">
+          <h3><span class="num" aria-hidden="true">1</span>Đầu vào</h3>
+          <div id="run-inputs" class="c"></div>
+        </article>
+        <article class="card">
+          <h3><span class="num" aria-hidden="true">2</span>Thinking &amp; công cụ</h3>
+          <div id="run-steps" class="c"></div>
+        </article>
+        <article class="card">
+          <h3><span class="num" aria-hidden="true">3</span>Đầu ra của trợ lý</h3>
+          <div id="run-proposal" class="c"></div>
+        </article>
+        <article class="card">
+          <h3><span class="num" aria-hidden="true">4</span>Code quyết định</h3>
+          <div id="run-decision" class="c"></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="filter-dialog" class="filter-dialog" aria-labelledby="filter-label">
+    <form id="filter-form">
+      <label id="filter-label" for="filter-value"></label>
+      <input id="filter-value" class="field" type="text" autocomplete="off">
+      <div class="filter-actions">
+        <button id="clear-filter" class="action-btn" type="button">Bỏ lọc</button>
+        <button id="cancel-filter" class="action-btn" type="button">Hủy</button>
+        <button class="action-btn" type="submit">Áp dụng</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

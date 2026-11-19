@@ -1,8 +1,10 @@
 """Load TOML settings and credentials without exposing input in errors."""
 
+import ipaddress
 import math
 import os
 import re
+import stat
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -148,6 +150,22 @@ class AssistantConfig:
 
 
 @dataclass(frozen=True)
+class AdminConfig:
+    bind: str
+    password_hash_file: Path | None
+    session_hours: int
+
+    @property
+    def address(self):
+        host, port = self.bind.rsplit(":", 1)
+        return host, int(port)
+
+    @property
+    def configured(self):
+        return self.password_hash_file is not None and self.password_hash_file.is_file()
+
+
+@dataclass(frozen=True)
 class Config:
     mode: str
     telegram: TelegramConfig
@@ -168,9 +186,13 @@ class Config:
     context_max_wait_seconds: int = 60
     decision_rules_enabled: bool = False
     assistant: AssistantConfig = field(default_factory=AssistantConfig)
+    admin: AdminConfig | None = field(default=None, repr=False)
 
     def redacted(self) -> dict:
         result = asdict(self)
+        result.pop("admin")
+        if self.admin is not None:
+            result["admin"] = {"bind": self.admin.bind, "configured": self.admin.configured}
         result['assistant'].pop('github_token')
         result['assistant'].pop('github_token_file')
         result['assistant'].pop('router_key')
@@ -281,7 +303,53 @@ def load_database_path(path):
     return _string(_table(_read_toml(path), "storage"), "db_path", "storage.db_path")
 
 
-def load_config(path, environ=None, *, validate_only=False) -> Config:
+def load_admin_config(path):
+    return _parse_admin_config(_read_toml(path))
+
+
+def _validate_admin_secret_stat(info):
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError()
+    if os.name != "nt":
+        if info.st_mode & 0o027:
+            raise ValueError()
+        if info.st_mode & 0o040:
+            import grp
+            if info.st_gid != grp.getgrnam("tglistener").gr_gid:
+                raise ValueError()
+
+
+def _parse_admin_config(data):
+    if "admin" not in data:
+        return None
+    table = _optional_table(data, "admin")
+    bind = _string(table, "bind", "admin.bind", default="127.0.0.1:8787")
+    try:
+        host, port = bind.rsplit(":", 1)
+        address = ipaddress.IPv4Address(host)
+        allowed = address.is_loopback or address in ipaddress.IPv4Network("100.64.0.0/10")
+        if not allowed or not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
+            raise ValueError()
+    except ValueError:
+        raise ConfigError("admin.bind: expected a loopback or Tailscale IPv4 address and port") from None
+    filename = _string(table, "password_hash_file", "admin.password_hash_file", empty=True, default="")
+    target = Path(filename) if filename else None
+    if target is not None:
+        if not target.is_absolute():
+            raise ConfigError("admin.password_hash_file: expected absolute path")
+        try:
+            _validate_admin_secret_stat(target.stat())
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError):
+            raise ConfigError("admin.password_hash_file: credentials unavailable") from None
+    hours = _integer(table.get("session_hours", 12), "admin.session_hours")
+    if hours > 72:
+        raise ConfigError("admin.session_hours: expected integer from 1 to 72")
+    return AdminConfig(bind, target, hours)
+
+
+def load_config(path, environ=None, *, validate_only=False, include_admin=False) -> Config:
     env = dict(os.environ if environ is None else environ)
     if validate_only:
         # Validate persisted schema independently of private systemd EnvironmentFile credentials.
@@ -505,6 +573,7 @@ def load_config(path, environ=None, *, validate_only=False) -> Config:
         context_max_wait_seconds=context_max_wait_seconds,
         decision_rules_enabled=decision_rules_enabled,
         assistant=AssistantConfig(retention_days, token_file, tuple(repos), max_calls, github_token, **extra),
+        admin=_parse_admin_config(data) if include_admin else None,
     )
 
 
