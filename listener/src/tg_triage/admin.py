@@ -24,6 +24,7 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from .assistant_contract import PHASE_DECIDE
 from .config import ConfigError, _validate_admin_secret_stat
 
 
@@ -34,6 +35,7 @@ GLOBAL_FAILURE_LIMIT = 50
 STREAM_SECONDS = 600
 UPDATE_WINDOW = 1800
 PAGE_SIZE = 50
+THREAD_ROUND_LIMIT = 50
 MAX_INPUTS = 1000
 MAX_STEPS_PER_KIND = 256
 MAX_SQLITE_ID = 2**63 - 1
@@ -47,6 +49,15 @@ DETAIL_FIELDS = (
     "circuit_state batch_fingerprint topic_id id_space"
 ).split()
 UPDATE_FIELDS = "final_state model_calls provider error_class ticket_ref latency_ms".split()
+RULE_NAMES = {
+    "F1": "Nhờ review PR/issue", "F2": "Giao việc nội bộ", "F3": "Tin chỉ có link",
+    "F4": "Tin xã giao", "F5": "Tin đùa", "F6": "Trả lời tin xã giao",
+    "R1": "Lệnh hỏi", "R2": "Lệnh trống", "R3": "Ảnh không có chữ", "R4": "Lỗi xử lý",
+    "R5": "Xã giao trong ticket", "R6": "Bổ sung ticket đang mở", "R7": "Tin trò chuyện",
+    "R8": "Câu hỏi không kèm việc", "R9": "Báo lỗi đủ dữ kiện", "R10": "Công việc đủ dữ kiện",
+    "R11": "Góp ý đủ dữ kiện", "R12": "Thiếu dữ kiện", "R13": "Chưa xác định yêu cầu",
+    "I1": "Câu hỏi có việc", "I2": "Ý định từ trợ lý", "I3": "Ý định từ lệnh",
+}
 MODEL_FIELDS = (
     "seq started_at link model latency_ms timeout_s finish_reason prompt_tokens "
     "completion_tokens reasoning_tokens reasoning_text content_text error_class schema_error_kind"
@@ -222,6 +233,14 @@ def _columns(db, table):
     return {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
 
 
+def _thread_key(columns):
+    return "COALESCE(log_thread_id, run_id)" if "log_thread_id" in columns else "run_id"
+
+
+def _authority(phase):
+    return "Trợ lý" if phase == PHASE_DECIDE or phase.startswith("assistant_") else "Code"
+
+
 def _messages(db, run, ids, *, include_text=False):
     if run["id_space"] == "topic_ref":
         return []
@@ -282,6 +301,34 @@ def _bounded_int(value, minimum=1, maximum=MAX_SQLITE_ID):
     return number
 
 
+def _thread_summary(db, latest, now, key):
+    thread_id = dict(latest).get("log_thread_id") or latest["run_id"]
+    round_count, updated_at = db.execute(
+        f"SELECT COUNT(*), MAX(created_at) FROM classification_runs WHERE {key}=?", (thread_id,)
+    ).fetchone()
+    # Message IDs and topic references are distinct namespaces.
+    message_count = db.execute(
+        f"""SELECT COUNT(*) FROM (
+            SELECT DISTINCT chat_id, id_space, item.value
+            FROM classification_runs, json_each(CASE
+                WHEN json_valid(message_ids) THEN
+                    CASE WHEN json_type(message_ids)='array' THEN message_ids ELSE '[]' END
+                ELSE '[]' END) AS item
+            WHERE {key}=? AND item.type IN ('integer','text'))""", (thread_id,)
+    ).fetchone()[0]
+    result = _summary(db, latest, now)
+    result.update(run_id=thread_id, latest_run_id=latest["run_id"], round_count=round_count,
+                  message_count=message_count, updated_at=updated_at,
+                  decided_by=_authority(latest["phase"]))
+    if not result["ticket_ref"]:
+        ticket = db.execute(
+            f"SELECT ticket_ref FROM classification_runs WHERE {key}=? AND ticket_ref<>'' "
+            "ORDER BY run_id DESC LIMIT 1", (thread_id,)
+        ).fetchone()
+        result["ticket_ref"] = ticket[0] if ticket else None
+    return result
+
+
 def _runs(db, query, now):
     params = parse_qs(query, keep_blank_values=True, max_num_fields=16)
     predicates, values = [], []
@@ -302,11 +349,16 @@ def _runs(db, query, now):
     limit = _bounded_int(params.get("limit", [str(PAGE_SIZE)])[0])
     limit = min(limit, PAGE_SIZE)
     where = " WHERE " + " AND ".join(predicates) if predicates else ""
+    key = _thread_key(_columns(db, "classification_runs"))
+    # Filter the current round of each thread. Apply the cursor after grouping so
+    # older rounds cannot reappear as separate entries on the next page.
     rows = db.execute(
-        f"SELECT * FROM classification_runs{where} ORDER BY run_id DESC LIMIT ?", (*values, limit + 1)
+        f"SELECT * FROM classification_runs{where}"
+        f"{' AND' if where else ' WHERE'} run_id IN (SELECT MAX(run_id) FROM classification_runs GROUP BY {key})"
+        " ORDER BY run_id DESC LIMIT ?", (*values, limit + 1)
     ).fetchall()
     return {
-        "runs": [_summary(db, row, now) for row in rows[:limit]],
+        "runs": [_thread_summary(db, row, now, key) for row in rows[:limit]],
         "next_before": rows[limit - 1]["run_id"] if len(rows) > limit else None,
     }
 
@@ -356,33 +408,100 @@ def _timestamp(value):
     return (dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)).timestamp()
 
 
-def _detail(db, run_id, now):
-    row = db.execute("SELECT * FROM classification_runs WHERE run_id=?", (run_id,)).fetchone()
-    if row is None:
-        return None
+def _round_detail(db, row, now):
     ids = _list_json(row["message_ids"])
     messages = _messages(db, row, ids, include_text=True)
     run = _summary(db, row, now, ids=ids, messages=messages)
     run.update({key: row[key] for key in DETAIL_FIELDS})
     if row["id_space"] == "topic_ref":
         run["message_refs"] = ids
-    return run, messages, row["proposal_json"], row["outcomes_json"], _step_rows(db, run_id)
+    if "code_precheck_json" in row.keys():
+        run["code_precheck"] = _parse_json(row["code_precheck_json"])
+    return run, messages, row["proposal_json"], row["outcomes_json"], _step_rows(db, row["run_id"])
 
 
-def _format_detail(detail):
+def _detail(db, run_id, now):
+    key = _thread_key(_columns(db, "classification_runs"))
+    rows = db.execute(
+        f"SELECT * FROM classification_runs WHERE {key}=COALESCE("
+        f"(SELECT {key} FROM classification_runs WHERE run_id=?), ?) ORDER BY run_id DESC LIMIT ?",
+        (run_id, run_id, THREAD_ROUND_LIMIT + 1),
+    ).fetchall()
+    if rows:
+        return ([_round_detail(db, row, now) for row in reversed(rows[:THREAD_ROUND_LIMIT])],
+                len(rows) > THREAD_ROUND_LIMIT)
+    return None
+
+
+def _format_round(detail):
     run, messages, proposal, outcomes, step_rows = detail
     run.update(proposal=_parse_json(proposal), outcomes=_parse_json(outcomes))
+    if "code_precheck" in run or run["decision_rule"] or any(
+        isinstance(group, dict) and group.get("rule")
+        for group in (run["outcomes"] if isinstance(run["outcomes"], list) else ())
+    ):
+        _present_rules(run)
     for message in messages:
         message.pop("chat_username")
         message["received_at"] = _timestamp(message["received_at"])
     return {"run": run, "inputs": messages, "steps": _steps(*step_rows)}
 
 
+def _rule_label(code, text=None, *, name=None):
+    if not isinstance(code, str) or not code:
+        return None
+    return f"{code} · {name or RULE_NAMES.get(code, 'Quy tắc xử lý')} · {text or 'Không có nguyên văn trong nhật ký'}"
+
+
+def _present_rules(run):
+    trace = run.get("code_precheck")
+    trace = trace if isinstance(trace, dict) else {}
+    decided = trace.get("decided_rule")
+    checks = trace.get("checks")
+    checks = [check for check in checks if isinstance(check, dict) and isinstance(check.get("rule"), str)
+              ] if isinstance(checks, list) else []
+    match = next((check for check in checks if check["rule"] == decided), {})
+    name = match.get("name") or (RULE_NAMES.get(decided, "Quy tắc xử lý") if isinstance(decided, str) else None)
+    rule_text = trace.get("rule_text")
+    reason = trace.get("reason") or "Chưa ghi lý do"
+    if trace.get("handled_by_code") is True:
+        rule = f"{decided} · {name}" if name else "Chưa ghi luật"
+        run["precheck_summary"] = f"Code đã quyết — {rule}: {reason}"
+        run["precheck_rule"] = _rule_label(decided, rule_text, name=name)
+    elif trace.get("handled_by_code") is False:
+        run["precheck_summary"] = f"Code không xử lý được — Lý do: {reason} ⇒ Gửi lên trợ lý"
+    run["precheck_checks"] = [
+        dict(check, rule_display=_rule_label(check["rule"],
+             rule_text if check["rule"] == decided else check.get("rule_text"), name=check.get("name")))
+        for check in checks
+    ]
+    main_rule = run["decision_rule"]
+    outcomes = run["outcomes"]
+    groups = [group for group in outcomes if isinstance(group, dict)] if isinstance(outcomes, list) else []
+    matching = next((group for group in groups if group.get("rule") == main_rule and group.get("rule_text")), {})
+    run["rule_display"] = _rule_label(main_rule, matching.get("rule_text") or (rule_text if main_rule == decided else None),
+                                      name=name if main_rule == decided else None)
+    run["outcome_rule_displays"] = [
+        _rule_label(group.get("rule"), group.get("rule_text"),
+                    name=name if group.get("rule") == decided else None) for group in groups
+    ]
+
+
+def _format_detail(detail):
+    items, truncated = detail
+    rounds = [_format_round(item) for item in items]
+    latest = rounds[-1]
+    if len(rounds) == 1 and "code_precheck" not in latest["run"]:
+        return latest  # Preserve the historical response on a legacy database.
+    return {**latest, "rounds": rounds, "truncated": truncated}
+
+
 def _recent_signatures(db, cursor, now):
+    key = _thread_key(_columns(db, "classification_runs"))
     return {
-        row["run_id"]: tuple(row[key] for key in UPDATE_FIELDS)
+        row["run_id"]: tuple(row[field] for field in (*UPDATE_FIELDS, "thread_id"))
         for row in db.execute(
-            f"SELECT run_id, {', '.join(UPDATE_FIELDS)} FROM classification_runs "
+            f"SELECT run_id, {', '.join(UPDATE_FIELDS)}, {key} AS thread_id FROM classification_runs "
             "WHERE created_at >= ? AND run_id <= ?",
             (now - UPDATE_WINDOW, cursor),
         )
@@ -615,11 +734,10 @@ class _Handler(BaseHTTPRequestHandler):
             except sqlite3.Error:
                 # Headers are already sent. Reconnect with Last-Event-ID.
                 return
-            for event, summary in events:
+            for event, summary, event_cursor in events:
                 if time.monotonic() >= deadline or not self.server.sessions.valid(sid):
                     return
-                if event == "run.created":
-                    cursor = summary["run_id"]
+                cursor = event_cursor
                 self._event(event, summary, cursor)
             known = next_known
             if time.monotonic() >= next_ping:
@@ -633,7 +751,16 @@ class _Handler(BaseHTTPRequestHandler):
         ).fetchall()
         next_cursor = new[-1]["run_id"] if new else cursor
         signatures = _recent_signatures(db, next_cursor, now)
-        events = [("run.created", _summary(db, row, now)) for row in new]
+        key = _thread_key(_columns(db, "classification_runs"))
+        events = []
+        for row in new:
+            summary = _thread_summary(db, row, now, key)
+            earlier = db.execute(
+                f"SELECT 1 FROM classification_runs WHERE {key}=? AND run_id<? LIMIT 1",
+                (summary["run_id"], row["run_id"]),
+            ).fetchone()
+            event = "run.updated" if earlier else "run.created"
+            events.append((event, summary, row["run_id"]))
         changed = (run_id for run_id, signature in signatures.items()
                    if run_id <= cursor and run_id in known and signature != known[run_id])
         # Bound the work per poll without losing deferred changes.
@@ -641,8 +768,15 @@ class _Handler(BaseHTTPRequestHandler):
             if index >= PAGE_SIZE:
                 signatures[run_id] = known[run_id]
                 continue
-            row = db.execute("SELECT * FROM classification_runs WHERE run_id=?", (run_id,)).fetchone()
-            events.append(("run.updated", _summary(db, row, now)))
+            thread_id = signatures[run_id][-1]
+            row = db.execute(
+                f"SELECT * FROM classification_runs WHERE {key}=? ORDER BY run_id DESC LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            summary = _thread_summary(db, row, now, key)
+            if thread_id != known[run_id][-1] and known[run_id][-1] == run_id:
+                summary["replaced_thread_id"] = run_id
+            events.append(("run.updated", summary, next_cursor))
         return events, signatures
 
 

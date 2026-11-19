@@ -97,7 +97,11 @@ class ClassificationLogTests(fallback.ProviderBase):
             columns = {r[1]: r for r in store.connection.execute('PRAGMA table_info(classification_runs)')}
             self.assertEqual(columns['chat_id'][2:4], ('INTEGER', 1))
             self.assertEqual(len(list(store.connection.execute('PRAGMA foreign_key_list(classification_tool_calls)'))), 0)
-            self.assertEqual(len(list(store.connection.execute('PRAGMA index_list(classification_runs)'))), 3)
+            index_names = {row['name'] for row in store.connection.execute('PRAGMA index_list(classification_runs)')}
+            self.assertEqual(index_names, {
+                'idx_classification_created', 'idx_classification_batch', 'idx_classification_topic',
+                'idx_classification_chat_run', 'idx_classification_thread',
+            })
             store.close()
 
     def test_one_run_totals_equal_actual_model_usage(self):

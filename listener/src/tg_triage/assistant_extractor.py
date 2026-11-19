@@ -10,13 +10,17 @@ import json
 import logging
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 from agentfleet_common.ai_transport import redact, read_key, ProviderError
 
 from . import assistant, classification_log, router_transport
+from .assistant_contract import PHASE_DECIDE, GroupDecision
+from .assistant_errors import ToolDenied, ToolUnavailable
 from .assistant_github import GitHubReader
 from .assistant_local import LocalReader
+from .assistant_pack import AssistantPackError
 from .assistant_loop import AssistantQueue, AttemptTracker, CircuitBreaker, DailyCap, LINKS, RateLimiter
 from .assistant_tools import ToolBox
 
@@ -60,6 +64,46 @@ def redact_data(text):
     return json.dumps(clean(value), ensure_ascii=False)
 
 
+def _decide_payload(data):
+    """Read the rules_extraction packet and its separately serialized pixels."""
+    body = data.get('body', data)
+    if 'messages' in body:
+        user = body['messages'][1]
+        return json.loads(user['content']), user.get('images', ())
+    packet = data.get('packet', data)
+    if isinstance(packet, str):
+        packet = json.loads(packet)
+    return {key: value for key, value in packet.items()
+            if key not in ('images', 'image_paths', 'documents', 'read_context')}, ()
+
+
+def _decide_outcomes(result, sources, repo):
+    groups = result.decisions or ()
+    violations = result.violations or ()
+    projected = []
+    for index, group in enumerate(groups):
+        projected.append(dict(
+            message_ids=list(group.message_ids), state=group.state, rule=group.rule,
+            rule_text=group.rule_text, template=group.template,
+            ticket_ref=(f"https://github.com/{repo}/issues/{group.target['number']}"
+                        if group.target and group.targets and group.state in ('APPEND', 'APPEND_CLOSED')
+                        and result.outcome == 'ok' else None),
+            confidence=group.confidence, reasoning_summary=redact(group.reasoning_summary),
+            violations=[dict(guard=v.guard, detail=redact(v.detail)) for v in violations
+                        if v.group_index in (None, index)],
+            related=list(dict.fromkeys(
+                [ref['number'] for ref in group.refs] + list(group.related) +
+                ([group.target['number']] if group.target and group.targets and group.relation
+                 and group.state not in ('APPEND', 'APPEND_CLOSED') else []))),
+            question_block=group.question['block_id'] if group.question else None))
+    if not groups and violations:
+        projected.append(dict(message_ids=[m.message_id for m in sources], state='HOLD',
+            rule=None, rule_text=None, template=None, ticket_ref=None,
+            confidence=None, reasoning_summary=None, related=[], question_block=None,
+            violations=[dict(guard=v.guard, detail=redact(v.detail)) for v in violations]))
+    return classification_log._json(projected)
+
+
 class _BreakerView:
     def __init__(self, runtime, breaker):
         self.runtime, self.breaker = runtime, breaker
@@ -92,9 +136,13 @@ class _BreakerView:
 class AssistantExtractor:
     """One instance per pipeline/process; one serialized turn, one ToolBox per run."""
     def __init__(self, config, store, pack_text, *, chat=None, clock=time.monotonic,
-                 wall_clock=time.time, ops_notice=None):
+                 wall_clock=time.time, ops_notice=None, core_pack=None):
         self.config, self.settings, self.store = config, config.assistant, store
         self.pack_text, self.clock, self.ops_notice = pack_text, clock, ops_notice
+        core_enabled = getattr(self.settings, 'pack_mode', 'full') == 'core'
+        self.core_pack = core_pack if core_enabled else None
+        if core_enabled and self.core_pack is None:
+            raise AssistantPackError('core mode requires the verified assistant core bundle')
         self.wall_clock = wall_clock
         self.chat = chat or (lambda model, messages, **kw: router_transport.chat(
             self.settings.router_base_url, self.settings.router_key, model, messages, **kw))
@@ -435,8 +483,30 @@ class AssistantExtractor:
         return call
 
     def run(self, job, *, decision_kwargs=None, track_attempt=True):
+        return self._run(job, decision_kwargs=decision_kwargs, track_attempt=track_attempt)
+
+    def decide(self, job) -> tuple[list[GroupDecision] | None, int | None, str]:
+        """Admit one guarded decision turn and return only executable groups."""
+        if (not self.settings.enabled or self.settings.mode != 'live'
+                or self.settings.authority != 'decide'
+                or (self.settings.decide_chat_ids and job['chat_id'] not in self.settings.decide_chat_ids)
+                or job['id_space'] != 'message'):
+            raise ValueError('assistant decide is not enabled for this batch')
+        result = self._run(job, guard_ctx=job['guard_ctx'])
+        if result is None:
+            status = self.attempts.status(job['fingerprint'])
+            return None, None, 'model_error' if status in ('DONE', 'ESCALATED') else 'infra'
+        run_id = job['run_id']
+        if result.outcome == 'ok':
+            return [replace(group, run_id=run_id) for group in result.decisions], run_id, 'done'
+        if result.outcome == 'guard':
+            return None, run_id, 'guard'
+        return None, run_id, 'infra' if _attempt_outcome(result) == 'infra' else 'model_error'
+
+    def _run(self, job, *, decision_kwargs=None, track_attempt=True, guard_ctx=None):
         if self._closing:
             return None
+        deciding = guard_ctx is not None
         fp = job.get('fingerprint') or batch_fingerprint(job['sources'])
         if not self._turn_lock.acquire(blocking=False):
             if self.settings.mode == 'live':
@@ -445,6 +515,14 @@ class AssistantExtractor:
         local = None
         begun = False
         try:
+            if deciding:
+                status, admitted = self.waiting(job['sources'], fingerprint=fp)
+                if not admitted:
+                    if status not in ('DONE', 'ESCALATED'):
+                        self._refund()
+                    return None
+                with self._queue_lock:
+                    self._live_admitted.discard(fp)
             if track_attempt and not self.attempts.begin(fp):
                 if self.settings.mode == 'live' and self.attempts.status(fp) not in ('DONE', 'ESCALATED'):
                     self._refund()
@@ -462,17 +540,35 @@ class AssistantExtractor:
                 rules_fingerprint=snapshot.fingerprint,
                 rules_version=getattr(self.store, 'assistant_pack_fingerprint', None),
                 final_state='HOLD', error_class='infra')
+            if deciding:
+                values.update(phase=PHASE_DECIDE, rules_version=assistant.decide_prefix_hash(
+                                  self.pack_text, core_pack=self.core_pack),
+                              code_precheck_json=classification_log._json(job['code_precheck']),
+                              log_thread_id=job['log_thread_id'], outcomes_json='[]')
             with self.store._lock:
                 if self._closing: return None
                 with self.store.connection:
-                    cols = ','.join(values)
-                    run_id = self.store.connection.execute(
-                        f'INSERT INTO classification_runs ({cols}) VALUES ({",".join("?" for _ in values)})',
-                        tuple(values.values())).lastrowid
+                    run_id = classification_log._insert_run(self.store.connection, values)
             job['run_id'] = run_id
+            if deciding:
+                packet, pixels = _decide_payload(job['data'])
+                local_images = job['data'].get('image_paths', job['data'].get('images', {}))
+            else:
+                packet = json.loads(job['body']['messages'][1]['content'])
+                pixels = job['body']['messages'][1].get('images', [])
+                local_images = job['data']['images']
             local = LocalReader(self.config.db_path, sources[0].chat_id,
                 batch_message_ids=[m.message_id for m in sources],
-                images={str(k): v for k, v in job['data']['images'].items()}, pack_text=self.pack_text)
+                images={str(k): v for k, v in local_images.items()} if isinstance(local_images, dict) else {},
+                pack_text=self.pack_text, core_pack=self.core_pack if deciding else None)
+            if deciding and not pixels:
+                pixels = {}
+                for image_id in packet.get('images_order', ()):
+                    try:
+                        pixels[image_id] = local.get_image(str(image_id))['bytes_base64']
+                    except (ToolDenied, ToolUnavailable):
+                        pass
+                packet['images_order'] = list(pixels)
             toolbox = ToolBox(GitHubReader(self.settings.github_token, self.settings.github_repos),
                 local, store=self.store, run_id=run_id, max_calls=self.settings.max_tool_calls,
                 clock=self.clock, wall_clock=self.wall_clock)
@@ -511,7 +607,7 @@ class AssistantExtractor:
                                        cached_tokens=getattr(reply, 'cached_tokens', 0),
                                        reasoning_text=classification_log.bounded_capture(getattr(reply, 'reasoning_text', None)),
                                        tool_calls_json=json.dumps(calls, ensure_ascii=False))
-                    elif link == 'deepseek':
+                    elif link == 'deepseek' and not deciding:
                         details.update(model=self.config.model.name,
                                        prompt_tokens=usage.get('prompt_tokens', 0),
                                        completion_tokens=usage.get('completion_tokens', 0),
@@ -534,24 +630,59 @@ class AssistantExtractor:
                     raise ConnectionError('Assistant is stopping')
                 return reply
 
-            packet = json.loads(job['body']['messages'][1]['content'])
-            payload = packet['sources']
+            def decide_deepseek(model, messages, **kw):
+                if self._closing:
+                    raise ConnectionError('Assistant is stopping')
+                c = self.config.model
+                try:
+                    key = read_key(c.key_file, c.provider + '|' + c.base_url, group_name='tglistener')
+                except ProviderError:
+                    raise ConnectionError('DeepSeek credential unavailable') from None
+                if not key:
+                    raise ConnectionError('DeepSeek credential unavailable')
+                self._acquire()
+                start_call(kw['timeout'])
+                reply = router_transport.deepseek_chat(c.base_url, key, model, messages,
+                                                       max_output=c.max_output, **kw)
+                if self._closing:
+                    raise ConnectionError('Assistant is stopping')
+                return reply
+
+            payload = list(packet['sources']) if deciding else packet['sources']
+            if deciding:
+                visible = frozenset(packet.get('images_order', ()))
+                payload = [dict(row, pixels_available=row['message_id'] in visible) for row in payload]
+                guard_ctx = replace(guard_ctx, seen_image_ids=guard_ctx.seen_image_ids & visible)
+                packet['decision_context'] = dict(
+                    write_repo=guard_ctx.gh_repo, append_confidence=guard_ctx.append_confidence,
+                    question_block_ids=sorted(guard_ctx.question_block_ids),
+                    reply_targets=[dict(message_id=mid, number=number, state=state)
+                                   for mid, (number, state) in sorted(guard_ctx.reply_targets.items())])
             # Documents and historical context remain explicitly untrusted source data.
             if payload:
                 payload[0] = dict(payload[0], batch_context={k: v for k, v in packet.items()
                                   if k not in ('sources', 'source_ids', 'images_order')})
-            pixels = job['body']['messages'][1].get('images', [])
             from .provider import _image_mime
-            images = {str(mid): 'data:' + (_image_mime(encoded) or 'image/png') + ';base64,' + encoded
-                      for mid, encoded in zip(packet['images_order'], pixels)}
+            image_pairs = (pixels.items() if isinstance(pixels, dict)
+                           else zip(packet.get('images_order', ()), pixels))
+            images = {str(mid): encoded if deciding and encoded.startswith('data:')
+                      else 'data:' + (_image_mime(encoded) or 'image/png') + ';base64,' + encoded
+                      for mid, encoded in image_pairs}
             deadline = min(started + self.settings.turn_deadline_s, job.get('deadline', float('inf')))
+            decide_kwargs = {}
+            if deciding:
+                decide_kwargs.update(batch=sources, guard_ctx=guard_ctx, core_pack=self.core_pack)
+                if self.config.model.provider == 'deepseek' and self.config.model.cloud_consent:
+                    decide_kwargs.update(deepseek_link=assistant.Link('deepseek', self.config.model.name,
+                        self.settings.deepseek_timeout_s), decide_deepseek=decide_deepseek)
             result = assistant.run_turn(sources_payload=payload, images=images, pack_text=self.pack_text,
                 links=[assistant.Link(n, m, t) for n, m, t in zip(('gemini', 'gpt'), self.settings.models,
                     (self.settings.gemini_timeout_s, self.settings.gpt_timeout_s))],
                 chat=chat, toolbox=toolbox, breakers={n: _BreakerView(self, b) for n, b in self.breakers.items()},
-                redact=redact_data, deepseek=self._deepseek(job, deadline, usage, start_call),
+                redact=redact_data, deepseek=None if deciding else self._deepseek(job, deadline, usage, start_call),
                 images_carry_data=any(m.has_image for m in sources),
-                deadline_s=max(0, deadline - self.clock()), clock=self.clock, record_call=record_call)
+                deadline_s=max(0, deadline - self.clock()), clock=self.clock, record_call=record_call,
+                **decide_kwargs)
             result.model_calls = usage['calls']
             if self._closing:
                 return None  # A late worker must not write after store.close().
@@ -559,28 +690,20 @@ class AssistantExtractor:
                 result.outcome, result.error_class = 'infra', self._budget_reason
                 result.infra = True
             if track_attempt:
-                self.attempts.finish(fp, _attempt_outcome(result))
+                self.attempts.finish(fp, 'ok' if result.outcome == 'guard' else _attempt_outcome(result))
                 self._queue_live(fp, _attempt_outcome(result))
             begun = False
             if _attempt_outcome(result) == 'infra' and self.settings.mode == 'live':
                 self._refund()
-            from .rules_intake import _evaluate_batch
-            groups = job['parse'](json.dumps(result.proposal)) if result.proposal else None
-            outcomes = None
-            # Evaluate with the exact same grounding/partition/decision code, without review I/O.
-            if groups is not None:
-                class ProposalProvider:
-                    def __getattr__(self, name):
-                        return getattr(job['provider'], name)
-                outcomes = _evaluate_batch(snapshot, ProposalProvider(), sources,
-                    **(decision_kwargs or {}), proposal_groups=groups, review=False)
-            projected = SimpleNamespace(values={})
-            token = classification_log.CURRENT.set(projected)
-            try:
-                classification_log.note_proposal(groups, snapshot)
-            finally:
-                classification_log.CURRENT.reset(token)
-            states = [d for _, d in outcomes or ()]
+            projected = {}
+            if deciding:
+                states = result.decisions if result.outcome == 'ok' else []
+                projected['outcomes_json'] = _decide_outcomes(result, sources, guard_ctx.gh_repo)
+                template = states[0].template if len(states) == 1 else None
+                if template:
+                    template += '.md'
+            else:
+                states, template, projected = self._evaluate_proposal(job, result, decision_kwargs)
             values = dict(provider='deepseek' if result.link == 'deepseek' else '9router',
                 model=result.model or (self.config.model.name if result.link == 'deepseek' else None),
                 model_calls=result.model_calls, tokens_in=result.prompt_tokens + usage.get('prompt_tokens', 0),
@@ -594,10 +717,9 @@ class AssistantExtractor:
                     self._blocked_until) - self.clock())) if self.attempts.retry_at(fp) is not None else None,
                 final_state=states[0].state if len(states) == 1 else 'MULTI' if states else
                     'ESCALATED' if self.attempts.status(fp) == 'ESCALATED' else 'HOLD',
-                decision_rule=states[0].rule if len(states) == 1 else None,
-                template=(states[0].intent + '.md') if len(states) == 1 and states[0].state == 'READY'
-                         and states[0].intent in ('bug', 'task', 'feedback') else None,
-                **projected.values)
+                decision_rule=states[0].rule if len(states) == 1 else
+                    result.error_class if deciding and result.outcome == 'guard' else None,
+                template=template, **projected)
             with self.store._lock:
                 if self._closing: return None
                 with self.store.connection:
@@ -612,3 +734,27 @@ class AssistantExtractor:
             if local is not None:
                 local.close()
             self._turn_lock.release()
+
+    def _evaluate_proposal(self, job, result, decision_kwargs):
+        from .rules_intake import _evaluate_batch
+
+        groups = job['parse'](json.dumps(result.proposal)) if result.proposal else None
+        outcomes = None
+        # Evaluate with the exact same grounding/partition/decision code, without review I/O.
+        if groups is not None:
+            class ProposalProvider:
+                def __getattr__(self, name):
+                    return getattr(job['provider'], name)
+            outcomes = _evaluate_batch(job['snapshot'], ProposalProvider(), job['sources'],
+                **(decision_kwargs or {}), proposal_groups=groups, review=False)
+        projected = SimpleNamespace(values={})
+        token = classification_log.CURRENT.set(projected)
+        try:
+            classification_log.note_proposal(groups, job['snapshot'])
+        finally:
+            classification_log.CURRENT.reset(token)
+        states = [d for _, d in outcomes or ()]
+        template = None
+        if len(states) == 1 and states[0].state == 'READY' and states[0].intent in ('bug', 'task', 'feedback'):
+            template = states[0].intent + '.md'
+        return states, template, projected.values

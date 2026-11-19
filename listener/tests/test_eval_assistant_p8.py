@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import sqlite3
 import struct
 import zlib
 from pathlib import Path
@@ -11,16 +12,20 @@ import unittest
 from unittest.mock import patch
 
 from tg_triage.__main__ import _load_decision_rules, _load_assistant_pack
+from tg_triage.assistant_contract import GroupDecision, PHASE_DECIDE
 from tg_triage.router_transport import RouterReply, RouterError
 from tg_triage.rules_extraction import partition_and_extract
+from tg_triage.store import Store
+from tests import helpers
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'eval-assistant-p8.py'
 
 
 @unittest.skipUnless(SCRIPT.is_file(), 'scripts absent in deploy stage')
 class EvalAssistantP8Tests(unittest.TestCase):
-    def module(self):
-        spec = importlib.util.spec_from_file_location('eval_assistant_p8', SCRIPT)
+    def module(self, filename=SCRIPT.name):
+        spec = importlib.util.spec_from_file_location(SCRIPT.with_name(filename).stem.replace('-', '_'),
+                                                     SCRIPT.with_name(filename))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
@@ -216,6 +221,210 @@ class EvalAssistantP8Tests(unittest.TestCase):
             self.assertEqual(module.main(['--router-url', 'http://127.0.0.1:20128/v1',
                                          '--key-file', '/abs/key', '--output', 'unused']), 2)
         self.assertNotIn('secret-key', buffer.getvalue())
+
+    def test_decide_compares_directly_and_uses_audit_metrics(self):
+        module = self.module()
+        snapshot = _load_decision_rules()
+        case = module.cases(snapshot)[0]
+        jobs = []
+
+        def factory(config, store, pack, *, chat):
+            self.assertEqual((config.mode, config.assistant.authority), ('dry-run', 'decide'))
+            self.assertEqual(config.assistant.pack_mode, 'core')
+            self.assertIn('RULE INDEX', pack)
+            columns = {row['name'] for row in store.connection.execute('PRAGMA table_info(classification_runs)')}
+            with store.connection:
+                if 'log_thread_id' not in columns:
+                    store.connection.execute('ALTER TABLE classification_runs ADD COLUMN log_thread_id INTEGER')
+                if 'code_precheck_json' not in columns:
+                    store.connection.execute('ALTER TABLE classification_runs ADD COLUMN code_precheck_json TEXT')
+
+            class FakeRuntime:
+                def decide(self, job):
+                    jobs.append(job)
+                    with store.connection:
+                        run_id = store.connection.execute(
+                            """INSERT INTO classification_runs
+                               (created_at, turn_key, phase, batch_fingerprint, chat_id, message_ids,
+                                id_space, rules_fingerprint, outcomes_json)
+                               VALUES (0, 'test', ?, ?, ?, '[1]', 'message', 'rules', ?)""",
+                            (PHASE_DECIDE, job['fingerprint'], job['chat_id'],
+                             '[{"violations":[{"guard":"guard_repo"}]}]' if len(jobs) == 2 else '[]')
+                        ).lastrowid
+                        store.connection.execute(
+                            """INSERT INTO classification_model_calls
+                               (run_id, seq, link, started_at, prompt_tokens, completion_tokens, cached_tokens)
+                               VALUES (?, 1, 'gemini', 0, 20, 4, 10)""", (run_id,))
+                        store.connection.execute(
+                            """INSERT INTO classification_tool_calls (run_id,seq,tool,result_json)
+                               VALUES (?,1,'get_rule',?)""",
+                            (run_id, json.dumps(dict(ok=True, untrusted_data=dict(rule_id='facts:object')))))
+                    if len(jobs) == 2:
+                        return None, run_id, 'guard'
+                    decision = GroupDecision((1,), 'READY', 'R9', 'bug', None, None, None,
+                                             None, (), .9, '', job['chat_id'])
+                    return [decision], run_id, 'done'
+
+            return FakeRuntime()
+
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / 'key'
+            key.write_text('fixture-key', encoding='utf-8')
+            key.chmod(0o600)
+            output = Path(directory) / 'decide.jsonl'
+            recorded = io.StringIO()
+            run_eval = module.run_eval
+            with (patch.object(module, 'cases', return_value=(case, case)),
+                  patch.object(type(snapshot), 'evaluate', side_effect=AssertionError('legacy evaluator used')),
+                  patch.object(module, '_load_decision_rules', return_value=snapshot),
+                  patch.object(module, 'run_eval',
+                               side_effect=lambda **options: run_eval(**options, runtime_factory=factory)),
+                  contextlib.redirect_stdout(recorded)):
+                self.assertEqual(module.main(['--router-url', 'http://127.0.0.1:20128/v1',
+                                              '--key-file', str(key), '--output', str(output),
+                                              '--authority', 'decide', '--pack-mode', 'core']), 1)
+            first, second = map(json.loads, output.read_text(encoding='utf-8').splitlines())
+        self.assertTrue(first['passed'])
+        self.assertTrue(first['ticket_agrees'])
+        self.assertEqual(first['actual_template'], 'bug.md')
+        self.assertFalse(second['passed'])
+        self.assertEqual(second['guard_violations'], ['guard_repo'])
+        self.assertEqual((first['tokens_in'], first['tokens_out'], first['cached_tokens']), (20, 4, 10))
+        self.assertEqual((first['pack_mode'], first['get_rule_calls'], first['get_rule_ids']),
+                         ('core', 1, ['facts:object']))
+        self.assertTrue(first['creation_agrees'])
+        self.assertEqual(jobs[0]['guard_ctx'].message_ids, frozenset({1}))
+        self.assertIn('Ticket agreement (READY/APPEND) 1/2', recorded.getvalue())
+        self.assertIn('20/40 (50.0%)', recorded.getvalue())
+
+    def test_replay_refuses_the_live_path_before_opening_any_file(self):
+        replay = self.module('replay-assistant-decide.py')
+        error = io.StringIO()
+        with patch.object(replay.sqlite3, 'connect') as connect, contextlib.redirect_stderr(error):
+            status = replay.main(['--db', '/var/lib/agentfleet/tg/db.sqlite3', '--config', 'unused',
+                                  '--out', 'unused'])
+        connect.assert_not_called()
+        self.assertEqual(status, 2)
+        self.assertIn('refuses the live database', error.getvalue())
+
+    def test_replay_reconstructs_batches_without_writing_to_copy(self):
+        replay = self.module('replay-assistant-decide.py')
+        requested = []
+
+        def factory(config, store, pack):
+            self.assertEqual(config.mode, 'dry-run')
+            self.assertEqual(config.assistant.pack_mode, 'core')
+            self.assertIn('RULE INDEX', pack)
+            self.assertEqual(config.telegram.chat_ids, ())
+            self.assertFalse(config.gh_token)
+            self.assertIsNone(config.assistant.github_token)
+            self.assertNotEqual(Path(config.db_path), source)
+
+            class FakeRuntime:
+                def decide(self, job):
+                    requested.append(tuple(message.message_id for message in job['sources']))
+                    decision = GroupDecision(requested[-1], 'APPEND', 'R6', None, None,
+                                             {'number': 42, 'repo': 'sandbox/triage'}, None,
+                                             None, (), .9, '', job['chat_id'])
+                    return [decision], None, 'done'
+
+            return FakeRuntime()
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'copy.sqlite3'
+            output = Path(directory) / 'result.jsonl'
+            store = Store(str(source))
+            try:
+                older, latest = helpers.message(10), helpers.message(11, text='xin chào', reply_to_id=10)
+                for message in older, latest:
+                    store.enqueue(message)
+                    with store.connection:
+                        store.connection.execute(
+                            """INSERT INTO classification_runs
+                               (created_at, turn_key, phase, batch_fingerprint, chat_id, message_ids,
+                                id_space, rules_fingerprint, final_state, ticket_ref)
+                               VALUES (0, 'test', 'extract', 'batch', ?, ?, 'message', 'rules', 'APPEND', ?)""",
+                            (message.chat_id, json.dumps([message.message_id]),
+                             'https://github.com/sandbox/triage/issues/42'))
+            finally:
+                store.close()
+            original = source.read_bytes(), source.stat().st_mtime_ns
+            report = io.StringIO()
+            run_replay = replay.run_replay
+            with (patch.object(replay.p8, 'offline_config', return_value=helpers.config()),
+                  contextlib.redirect_stdout(report)):
+                with patch.object(replay, 'run_replay',
+                                  side_effect=lambda **options: run_replay(**options, runtime_factory=factory)):
+                    self.assertEqual(replay.main(['--db', str(source), '--config', 'unused.toml', '--limit', '1',
+                                                  '--out', str(output), '--pack-mode', 'core']), 0)
+                row = json.loads(output.read_text(encoding='utf-8'))
+                with self.assertRaises(replay.ReplayInputError):
+                    replay.run_replay(db=source, config='unused.toml', out=source, runtime_factory=factory)
+            self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), original)
+            self.assertEqual({item.name for item in source.parent.iterdir()}, {source.name, output.name})
+            self.assertEqual(json.loads(output.read_text(encoding='utf-8')), row)
+        self.assertEqual(requested, [(11,)])
+        self.assertTrue(row['passed'])
+        self.assertTrue(row['ticket_ref_agrees'])
+        self.assertTrue(row['creation_agrees'])
+        self.assertIn('APPEND\t1', report.getvalue())
+
+    def test_probe_repeats_each_link_and_never_prints_key_even_on_error(self):
+        probe = self.module('probe-prompt-cache.py')
+        secret = 'probe-secret-value'
+        calls = []
+
+        def chat(url, key, model, messages, **kwargs):
+            self.assertEqual(key, secret)
+            calls.append((model, json.dumps(messages), kwargs['tools'], kwargs['tool_choice'], kwargs['timeout']))
+            if len(calls) == 4:
+                raise ValueError(secret)
+            return RouterReply(secret, (), 'stop', 20, 4, None, 10, model, 17)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'key'
+            path.write_text(secret, encoding='utf-8')
+            path.chmod(0o600)
+            output, error = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+                status = probe.run_probe(router_url='http://127.0.0.1:20128/v1', key_file=path, chat=chat)
+        self.assertEqual(status, 1)
+        self.assertEqual(calls[0][:4], calls[1][:4])
+        self.assertEqual(calls[2][:4], calls[3][:4])
+        self.assertEqual(len(calls[0][2]), 7)
+        system = json.loads(calls[0][1])[0]['content']
+        pack = probe._load_assistant_pack()
+        self.assertTrue(system.startswith(pack.text))
+        self.assertIn('decide/v1', system)
+        self.assertTrue(all(0 < call[4] <= 60 for call in calls))
+        self.assertIn('prompt_tokens', output.getvalue())
+        self.assertIn('request failed', output.getvalue())
+        self.assertNotIn(secret, output.getvalue() + error.getvalue())
+
+    def test_probe_cli_compares_full_and_core_prefixes_offline(self):
+        probe = self.module('probe-prompt-cache.py')
+        calls = []
+
+        def chat(url, key, model, messages, **kwargs):
+            system = messages[0]['content']
+            calls.append(system)
+            content = json.dumps(dict(contract='decide/v1', groups=[dict(state='CHAT', template=None)]))
+            return RouterReply(content, (), 'stop', 10 if 'RULE INDEX' in system else 20,
+                               4, None, 5, model, 4)
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / 'key'
+            key.write_text('test-key', encoding='utf-8')
+            key.chmod(0o600)
+            with patch.object(probe.router_transport, 'chat', side_effect=chat), contextlib.redirect_stdout(output):
+                self.assertEqual(probe.main(['--router-url', 'http://127.0.0.1:20128/v1',
+                                              '--key-file', str(key), '--compare']), 0)
+        self.assertEqual(len(set(calls[:4])), 1)
+        self.assertEqual(len(set(calls[4:])), 1)
+        self.assertNotEqual(calls[0], calls[4])
+        self.assertIn('Input tokens\t80\t40', output.getvalue())
+        self.assertIn('State agreement\t4/4\t4/4', output.getvalue())
 
 
 if __name__ == '__main__': unittest.main()

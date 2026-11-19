@@ -5,6 +5,7 @@
   const list = $("runs-list");
   const dashboard = $("dashboard");
   const detail = $("run-detail");
+  const roundTemplate = $("run-round").cloneNode(true);
   const dialog = $("filter-dialog");
   const filterButtons = [...document.querySelectorAll("[data-filter]")];
   const phone = matchMedia("(max-width: 767px)");
@@ -113,8 +114,7 @@
     return element("span", "", label || "—");
   }
 
-  function renderInputs(inputs, run) {
-    const panel = $("run-inputs");
+  function renderInputs(panel, inputs, run) {
     const messages = inputs.map(input => {
       const item = element("div", "msg");
       const reference = input.message_id == null ? "" : "Tin #" + input.message_id;
@@ -138,8 +138,7 @@
     return byTime || (a.kind === b.kind ? a.seq - b.seq : a.kind === "model" ? -1 : 1);
   }
 
-  function renderSteps(steps) {
-    const panel = $("run-steps");
+  function renderSteps(panel, steps) {
     const timeline = element("ol", "steps");
     for (const step of steps) {
       const isModel = step.kind === "model";
@@ -176,8 +175,7 @@
     panel.replaceChildren(timeline.childElementCount ? timeline : element("div", "sub", "Chưa có bước được ghi lại."));
   }
 
-  function renderProposal(steps, run) {
-    const panel = $("run-proposal");
+  function renderProposal(panel, steps, run) {
     const lastModel = steps.filter(step => step.kind === "model").pop();
     const context = join(
       lastModel ? "Lần gọi cuối " + lastModel.seq : run.model_calls ? number(run.model_calls) + " lần gọi" : "",
@@ -191,10 +189,37 @@
       : codeBlock(run.proposal, "Đề xuất", { json: true }));
   }
 
-  function renderDecision(run) {
+  function legacyRuleLabel(code, text) {
+    return code ? join(code, "Quy tắc xử lý", text || "Không có nguyên văn trong nhật ký") : null;
+  }
+
+  function renderPrecheck(panel, run) {
+    if (!run.precheck_summary) {
+      panel.replaceChildren(element("div", "sub", "Chưa ghi dữ liệu lọc trước."));
+      return;
+    }
+    panel.replaceChildren(element("div", "", run.precheck_summary));
+    if (run.precheck_rule) {
+      panel.append(codeBlock(run.precheck_rule, "Nguyên văn luật", { prose: true }));
+    }
+    if (run.precheck_checks.length) {
+      const disclosure = element("details");
+      const list = element("ul");
+      for (const check of run.precheck_checks) {
+        list.append(element("li", "", join(check.rule_display,
+          check.match ? "Khớp" : "Không khớp", check.why)));
+      }
+      disclosure.append(element("summary", "", "Các bước kiểm tra"), list);
+      panel.append(disclosure);
+    }
+  }
+
+  function renderDecision(panel, run) {
     const action = run.in_progress ? "Đang xử lý" : actions.get(run.final_state);
+    const outcomes = Array.isArray(run.outcomes) ? run.outcomes.filter(group => group && typeof group === "object") : [];
+    const matching = outcomes.find(group => group.rule === run.decision_rule);
     const fields = [
-      ["Trạng thái", badge(run)], ["Luật", run.decision_rule],
+      ["Trạng thái", badge(run)], ["Luật", run.rule_display || legacyRuleLabel(run.decision_rule, matching?.rule_text)],
       ["Template", run.template], ["Hành động", action],
       ["Ticket", ticketLink(run.ticket_url, run.ticket_ref)], ["Lượt thử", run.attempt_no]
     ];
@@ -208,15 +233,36 @@
       else description.textContent = value ?? "—";
       definitions.append(element("dt", "", label), description);
     }
-    const panel = $("run-decision");
     panel.replaceChildren(definitions);
-    if (run.outcomes != null) {
-      panel.append(codeBlock(run.outcomes, "Quyết định từng nhóm tin", { json: true, collapsed: true }));
+    if (outcomes.length) {
+      const groups = outcomes.map(({ rule, rule_text, ...group }, index) => rule ? {
+        ...group, rule: run.outcome_rule_displays?.[index] || legacyRuleLabel(rule, rule_text)
+      } : group);
+      panel.append(codeBlock(groups, "Quyết định từng nhóm tin", { json: true, collapsed: true }));
     }
   }
 
-  function renderDetail({ run, inputs, steps }) {
+  function renderRound({ run, inputs, steps }, index) {
+    const round = roundTemplate.cloneNode(true);
+    const panel = key => round.querySelector("#run-" + key);
+    round.querySelector(".round-title").textContent = join("Vòng " + (index + 1), time(run.created_at));
+    renderPrecheck(panel("precheck"), run);
+    renderInputs(panel("inputs"), inputs, run);
     const orderedSteps = [...steps].sort(stepOrder);
+    renderSteps(panel("steps"), orderedSteps);
+    renderProposal(panel("proposal"), orderedSteps, run);
+    renderDecision(panel("decision"), run);
+    for (const disclosure of round.querySelectorAll("details")) {
+      disclosure.dataset.key = run.run_id + "-" + keyForDisclosure(disclosure);
+    }
+    if (index) {
+      round.removeAttribute("id");
+      for (const node of round.querySelectorAll("[id]")) node.removeAttribute("id");
+    }
+    return round;
+  }
+
+  function renderDetail({ run, inputs, steps, rounds, truncated }) {
     const expanded = new Set([...detail.querySelectorAll("details[open]")].map(keyForDisclosure));
     const focused = document.activeElement;
     const focusedKey = focused?.tagName === "SUMMARY" && detail.contains(focused)
@@ -238,10 +284,12 @@
         run.cache_hit_tokens ? "cache " + number(run.cache_hit_tokens) : ""
       )));
     }
-    renderInputs(inputs, run);
-    renderSteps(orderedSteps);
-    renderProposal(orderedSteps, run);
-    renderDecision(run);
+    detail.replaceChildren($("run-meta"), ...(rounds || [{ run, inputs, steps }]).map(renderRound));
+    if (truncated) {
+      const notice = document.createElement("p");
+      notice.textContent = "Đang hiện 50 vòng gần nhất";
+      detail.insertBefore(notice, detail.children[1]);
+    }
     setStatus($("detail-status"), "");
     detail.hidden = false;
     for (const disclosure of detail.querySelectorAll("details")) {
@@ -265,7 +313,7 @@
   }
 
   function renderList() {
-    const sorted = [...runs.values()].sort((a, b) => b.run_id - a.run_id);
+    const sorted = [...runs.values()].sort(newestFirst);
     for (const [id, row] of rows) {
       if (!runs.has(id)) {
         row.remove();
@@ -286,12 +334,14 @@
       }
       const button = item.firstElementChild;
       button.setAttribute("aria-current", String(id === selectedId));
-      const when = element("time", "", time(run.created_at));
-      if (Number.isFinite(run.created_at)) when.dateTime = new Date(run.created_at * 1000).toISOString();
+      const updated = run.updated_at ?? run.created_at;
+      const when = element("time", "", time(updated));
+      if (Number.isFinite(updated)) when.dateTime = new Date(updated * 1000).toISOString();
       button.replaceChildren(
         badge(run), element("span", "title", "#" + id + " · " + chatLabel(run)), when,
         element("span", "sub", join(
-          run.template, run.decision_rule, run.model || run.provider,
+          run.decided_by, number(run.round_count) + " vòng", number(run.message_count) + " tin",
+          run.template, run.model || run.provider,
           run.tool_calls == null ? "" : number(run.tool_calls) + " công cụ",
           duration(run.latency_ms), run.ticket_ref, run.error_class,
           run.fallback_reason ? "fallback: " + run.fallback_reason : ""
@@ -403,19 +453,20 @@
     // Both pages start at the same cursor. The newest 50 unique rows form the union page.
     const combined = new Map();
     for (const page of pages) for (const run of page.runs) combined.set(run.run_id, run);
-    const sorted = [...combined.values()].sort((a, b) => b.run_id - a.run_id);
+    const sorted = [...combined.values()].sort(newestFirst);
     const union = sorted.slice(0, 50);
     const hasMore = sorted.length > union.length || pages.some(page => page.next_before != null);
     return {
       runs: union,
-      next_before: hasMore ? union[union.length - 1]?.run_id ?? null : null
+      next_before: hasMore ? latestRound(union.at(-1)) : null
     };
   }
 
+  const latestRound = run => run?.latest_run_id ?? run?.run_id ?? null;
+  const newestFirst = (a, b) => latestRound(b) - latestRound(a);
+
   function latestId() {
-    let newest = null;
-    for (const id of runs.keys()) if (newest === null || id > newest) newest = id;
-    return newest;
+    return [...runs.values()].sort(newestFirst)[0]?.run_id ?? null;
   }
 
   async function loadPage({ append = false, reconcile = false } = {}) {
@@ -430,13 +481,14 @@
       if (reconcile) {
         const freshIds = new Set(page.runs.map(run => run.run_id));
         const floor = page.next_before ?? 0;
-        for (const id of runs.keys()) {
-          if (id >= floor && !freshIds.has(id) && !job.changes.has(id)) runs.delete(id);
+        for (const [id, run] of runs) {
+          if (latestRound(run) >= floor && !freshIds.has(id) && !job.changes.has(id)) runs.delete(id);
         }
       }
       for (const run of page.runs) {
         const updated = job.changes.get(run.run_id);
-        if (!updated || matchesFilters(updated)) runs.set(run.run_id, updated || run);
+        if (!job.changes.has(run.run_id)) runs.set(run.run_id, run);
+        else if (updated && matchesFilters(updated)) runs.set(run.run_id, updated);
       }
       if (!reconcile || nextBefore === null) nextBefore = page.next_before;
       renderList();
@@ -444,7 +496,7 @@
       const newest = latestId();
       if (hashId() === null && (selectedId === null || (!append && !reconcile && !runs.has(selectedId)))) {
         selectRun(newest);
-      } else if (reconcile && hashId() === null && follow && newest !== null && newest > selectedId) {
+      } else if (reconcile && hashId() === null && follow && newest !== null && newest !== selectedId) {
         showRun(newest);
       } else if (reconcile && selectedId !== null) {
         selectRun(selectedId, true);
@@ -490,9 +542,14 @@
     let selectedChanged = false;
     for (const { run, created } of changes) {
       const id = run.run_id;
+      if (run.replaced_thread_id != null) {
+        runs.delete(run.replaced_thread_id);
+        pageRequest?.changes.set(run.replaced_thread_id, null);
+        if (selectedId === run.replaced_thread_id) showRun(id);
+      }
       if (matchesFilters(run)) {
-        if (created || nextBefore === null || id >= nextBefore || runs.has(id)) runs.set(id, run);
-        if (created && (createdId === null || id > createdId)) createdId = id;
+        if (created || nextBefore === null || latestRound(run) >= nextBefore || runs.has(id)) runs.set(id, run);
+        if (created && (createdId === null || newestFirst(run, runs.get(createdId)) < 0)) createdId = id;
       } else {
         runs.delete(id);
       }
@@ -501,7 +558,7 @@
     }
     renderList();
     if (!pageRequest) setStatus($("list-status"), runs.size ? "" : "Không có lượt phù hợp.");
-    if (follow && createdId !== null && (selectedId === null || createdId > selectedId)) showRun(createdId);
+    if (follow && createdId !== null && latestId() === createdId && selectedId !== createdId) showRun(createdId);
     else if (selectedChanged) selectRun(selectedId, true);
     lastUpdate = Date.now() / 1000;
   }

@@ -10,7 +10,7 @@ import logging
 import re
 import sqlite3
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +21,8 @@ from .router_transport import CAPTURE_TEXT_BYTES, CAPTURE_TRUNCATION, bounded_te
 LOG = logging.getLogger(__name__)
 CURRENT = ContextVar('classification_run', default=None)
 MAX_PENDING_RUNS = 500
+THREAD_LOOKBACK_DAYS = 30
+THREAD_LOOKUP_LIMIT = 500
 DROP_WARNING_SECONDS = 60
 _JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 _CAPTURE_QUOTED = re.compile(r'"(?:[^"\\]|\\.)*(?P<end>"|\\?\Z)', re.DOTALL)
@@ -74,9 +76,15 @@ def init_store(connection):
         fallback_reason TEXT, error_class TEXT, circuit_state TEXT NOT NULL DEFAULT 'none',
         retry_at REAL, proposal_json TEXT, reasoning_summary TEXT, final_state TEXT,
         decision_rule TEXT, outcomes_json TEXT, template TEXT, ticket_ref TEXT, error TEXT)''')
+    columns = {row[1] for row in connection.execute('PRAGMA table_info(classification_runs)')}
+    for name, sql_type in (('code_precheck_json', 'TEXT'), ('log_thread_id', 'INTEGER')):
+        if name not in columns:
+            connection.execute(f'ALTER TABLE classification_runs ADD COLUMN {name} {sql_type}')
     connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_created ON classification_runs(created_at)')
     connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_batch ON classification_runs(batch_fingerprint, attempt_no)')
     connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_topic ON classification_runs(topic_id)')
+    connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_chat_run ON classification_runs(chat_id,run_id)')
+    connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_thread ON classification_runs(COALESCE(log_thread_id,run_id))')
     connection.execute('''CREATE TABLE IF NOT EXISTS classification_tool_calls (
         run_id INTEGER NOT NULL, seq INTEGER NOT NULL, tool TEXT NOT NULL, args_json TEXT,
         result_bytes INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
@@ -158,6 +166,59 @@ def _enqueue(store, values):
     _warn_drops(store)
 
 
+def _insert_run(connection, values):
+    columns = ','.join(values)
+    run_id = connection.execute(
+        f'INSERT INTO classification_runs ({columns}) VALUES ({",".join("?" for _ in values)})',
+        tuple(values.values())).lastrowid
+    if 'log_thread_id' in values and values['log_thread_id'] is None:
+        connection.execute('UPDATE classification_runs SET log_thread_id=? WHERE run_id=?',
+                           (run_id, run_id))
+    return run_id
+
+
+def find_thread(store, chat_id, *, reply_to_ids=(), topic_id=None, ticket_ref=None):
+    """Match at most 500 recent runs in this chat and resolve the thread root."""
+    try:
+        replies = set(_ids(reply_to_ids))
+        if not replies and topic_id is None and ticket_ref is None:
+            return None
+        # Intake may have only the issue number while accounting stores the URL.
+        ticket_pattern = (f'https://github.com/*/*/issues/{ticket_ref}'
+                          if type(ticket_ref) is int and ticket_ref > 0 else None)
+        cutoff = (store.clock() - timedelta(days=THREAD_LOOKBACK_DAYS)).timestamp()
+        with store._lock:
+            rows = store.connection.execute('''SELECT run_id, log_thread_id, message_ids,
+                (topic_id=:topic OR ticket_ref=:ticket OR ticket_ref GLOB :pattern) AS linked
+                FROM (SELECT run_id, log_thread_id, message_ids, topic_id, ticket_ref, created_at
+                      FROM classification_runs WHERE chat_id=:chat ORDER BY run_id DESC LIMIT :limit)
+                WHERE created_at>=:cutoff
+                ORDER BY run_id DESC''', dict(topic=topic_id, ticket=ticket_ref,
+                    pattern=ticket_pattern, chat=chat_id, cutoff=cutoff, limit=THREAD_LOOKUP_LIMIT)).fetchall()
+        for run_id, root, encoded, linked in rows:
+            if linked or (replies and replies.intersection(json.loads(encoded))):
+                return run_id if root is None else root
+    except Exception as error:
+        _failed(error)
+    return None
+
+
+def set_thread(store, run_id, thread_id):
+    """Join once and keep roots with children in place."""
+    try:
+        with store._lock:
+            connection = store.connection
+            with nullcontext() if connection.in_transaction else connection:
+                connection.execute('''UPDATE classification_runs AS run SET log_thread_id=?
+                    WHERE run.run_id=? AND (run.log_thread_id IS NULL OR run.log_thread_id=run.run_id)
+                      AND NOT EXISTS (SELECT 1 FROM classification_runs AS child
+                        WHERE COALESCE(child.log_thread_id,child.run_id)=run.run_id
+                          AND child.run_id<>run.run_id)''',
+                    (thread_id, run_id))
+    except Exception as error:
+        _failed(error)
+
+
 def flush(store):
     """Commit queued runs FIFO only outside a caller transaction; never raise.
 
@@ -176,9 +237,7 @@ def flush(store):
                 values = queue[0]
                 try:
                     with connection:
-                        columns = ','.join(values)
-                        connection.execute(f'INSERT INTO classification_runs ({columns}) VALUES ({",".join("?" for _ in values)})',
-                                           tuple(values.values()))
+                        _insert_run(connection, values)
                 except (sqlite3.IntegrityError, sqlite3.InterfaceError, sqlite3.ProgrammingError) as error:
                     # A closed/unusable connection is not a poison row. Probe it
                     # after our transaction rolled back before discarding data.
@@ -196,7 +255,8 @@ def flush(store):
 
 
 class _Attempt:
-    def __init__(self, turn, snapshot, sources, images, phase, topic_id=None):
+    def __init__(self, turn, snapshot, sources, images, phase, topic_id=None, *,
+                 code_precheck=None, log_thread_id=None):
         if any(type(source.chat_id) is not int or source.chat_id == 0 for source in sources):
             raise ValueError('invalid chat ID')
         self.turn = turn
@@ -214,6 +274,11 @@ class _Attempt:
             id_space=id_space, rules_version=getattr(turn.store, 'assistant_pack_fingerprint', None),
             image_ids=_json(sorted(images or {})), rules_fingerprint=snapshot.fingerprint,
             model_calls=0, tokens_in=0, tokens_out=0, cache_hit_tokens=0, cost=0.0, fallback=0)
+        self.code_precheck = code_precheck
+        if code_precheck is not None:
+            self.values['code_precheck_json'] = _json(code_precheck)
+        if code_precheck is not None or log_thread_id is not None:
+            self.values['log_thread_id'] = log_thread_id
 
     def write(self):
         values = self.values
@@ -233,6 +298,10 @@ class _Attempt:
                 values.update({key: outcomes[0][key] for key in ('final_state', 'decision_rule', 'template')})
             else:
                 values.update(final_state='MULTI', outcomes_json=_json(outcomes))
+            if self.code_precheck is not None:
+                for outcome in outcomes:
+                    outcome['rule_text'] = self.code_precheck.get('rule_text')
+                values['outcomes_json'] = _json(outcomes)
         store = self.turn.store
         with store._lock:
             connection = store.connection
@@ -251,7 +320,8 @@ class _Attempt:
                 flush(store)
 
 
-def record_decision(store, snapshot, topic_id, sources, decision, *, phase='early'):
+def record_decision(store, snapshot, topic_id, sources, decision, *, phase='early',
+                    code_precheck=None, log_thread_id=None):
     """Record a used, model-free rules decision; no CURRENT scope or bot side effects.
 
     Construct a private metadata Turn without entering it or journaling it. Proposal
@@ -264,7 +334,8 @@ def record_decision(store, snapshot, topic_id, sources, decision, *, phase='earl
         if not sources:
             return
         turn = Turn(store, 'rules:' + topic_id, topic_id, sources[0].message_id)
-        attempt = _Attempt(turn, snapshot, sources, None, phase)
+        attempt = _Attempt(turn, snapshot, sources, None, phase, code_precheck=code_precheck,
+                           log_thread_id=log_thread_id)
         attempt.result = ((sources, decision),)
         attempt.write()
     except Exception as error:
@@ -272,7 +343,8 @@ def record_decision(store, snapshot, topic_id, sources, decision, *, phase='earl
 
 
 @contextmanager
-def run(snapshot, sources, images=None, phase='extract', *, topic_id=None):
+def run(snapshot, sources, images=None, phase='extract', *, topic_id=None,
+        code_precheck=None, log_thread_id=None):
     """Isolate accounting failures; never suppress exceptions from evaluation.
 
     topic_id names the referenced topic when its refs differ from the Turn root's
@@ -284,7 +356,8 @@ def run(snapshot, sources, images=None, phase='extract', *, topic_id=None):
         from .thinking import CURRENT as THINKING
         turn = THINKING.get()
         if turn is not None and turn.key.startswith('rules:') and sources:
-            attempt = _Attempt(turn, snapshot, sources, images, phase, topic_id)
+            attempt = _Attempt(turn, snapshot, sources, images, phase, topic_id,
+                               code_precheck=code_precheck, log_thread_id=log_thread_id)
             token = CURRENT.set(attempt)
     except Exception as error:
         _failed(error)

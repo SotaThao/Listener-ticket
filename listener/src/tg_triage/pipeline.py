@@ -272,7 +272,8 @@ class Pipeline:
                 if self.notice_sender is not None and config.telegram.ops_chat_id is not None:
                     self.notice_sender(config.telegram.ops_chat_id, None, text)
             self.assistant_runtime = AssistantExtractor(config, store,
-                assistant_pack.text if assistant_pack is not None else '', ops_notice=ops_notice)
+                assistant_pack.text if assistant_pack is not None else '', ops_notice=ops_notice,
+                core_pack=getattr(assistant_pack, 'core', None))
             store.assistant_runtime = self.assistant_runtime
         self._lock = threading.Lock()
         self._prepared_images = None

@@ -875,6 +875,15 @@ class RulesPendingStore:
                 self.store.connection.execute('DELETE FROM rules_inflight_topics WHERE batch_id=? AND ordinal=?', (batch_id,ordinal))
             return changed
 
+    def block_planned_batch(self, batch_id):
+        """Settle unstarted groups without touching a reserved or ambiguous effect."""
+        with self.store._lock, self.store.connection:
+            return self.store.connection.execute("""UPDATE rules_batch_groups
+                SET status='BLOCKED' WHERE batch_id=? AND status='PLANNED'
+                  AND NOT EXISTS (SELECT 1 FROM rules_batch_groups
+                                  WHERE batch_id=? AND status IN ('RESERVED','AMBIGUOUS'))""",
+                (batch_id,batch_id)).rowcount
+
     def reserve_attempt(self, topic_id, max_retries):
         if type(max_retries) is not int or max_retries < 0: raise ValueError('invalid retry limit')
         with self.store._lock, self.store.connection:

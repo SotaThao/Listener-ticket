@@ -9,6 +9,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tg_triage.assistant_errors import ToolDenied, ToolUnavailable
+from tg_triage.__main__ import _load_assistant_pack
+from tg_triage.assistant_core import RULE_SECTION_MAX_BYTES
 from tg_triage.assistant_github import GitHubReader
 from tg_triage.assistant_local import LocalReader
 from tg_triage.assistant_tools import TOOL_SPECS, ToolBox
@@ -52,6 +54,32 @@ class ToolBoxTests(unittest.TestCase):
             self.assertEqual(box.call(spec['name'], json.dumps(args)),
                              dict(tool=spec['name'], ok=True, untrusted_data={'text': INJECTION}))
             getattr(reader, spec['name']).assert_called_once_with(**args)
+
+    def test_core_lookup_returns_section_and_aliases_caps_text_and_suggests_ids(self):
+        pack = _load_assistant_pack(pack_mode='core')
+        reader = LocalReader(self.root / 'store.sqlite3', message().chat_id, batch_message_ids=(),
+                             images={}, pack_text=pack.text, core_pack=pack.core)
+        self.addCleanup(reader.close)
+        box = ToolBox(self.github, reader)
+
+        def get(rule_id):
+            return box.call('get_rule', {'rule_id': rule_id})
+
+        bug = get('examples:bug')['untrusted_data']
+        self.assertIn('| X1 |', bug['text'])
+        self.assertNotIn('| X3 |', bug['text'])
+        self.assertEqual(bug['text'], pack.core.sections['examples:bug'])
+        self.assertIn('| R9 |', get('R9')['untrusted_data']['text'])
+        self.assertIn('## Bảng: link_only', get('F3')['untrusted_data']['text'])
+        self.assertEqual(get('reply_chat')['untrusted_data']['text'], pack.core.sections['readiness:reply_chat'])
+        self.assertIn('giới hạn ảnh', get('preflight:image')['untrusted_data']['text'])
+        large = get('examples:source_followup_cases')['untrusted_data']
+        self.assertTrue(large['truncated'])
+        self.assertEqual(large['max_bytes'], RULE_SECTION_MAX_BYTES)
+        self.assertLessEqual(len(large['text'].encode('utf-8')), RULE_SECTION_MAX_BYTES)
+        missing = get('readiness:reply_chats')
+        self.assertEqual((missing['ok'], missing['error']), (False, 'unknown_rule_id'))
+        self.assertIn('readiness:reply_chat', missing['suggestions'])
 
     def test_eight_call_limit_denials_recorded_without_execution(self):
         ticks = iter(i / 4 for i in range(20))

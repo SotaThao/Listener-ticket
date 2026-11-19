@@ -32,11 +32,12 @@ class LocalReader:
 
     def __init__(self, db_path: Path, chat_id: int, *,
                  batch_message_ids: Iterable[int], images: Mapping[str, Path],
-                 pack_text: str | None):
+                 pack_text: str | None, core_pack=None):
         self._chat_id = chat_id
         self._batch_message_ids = frozenset(batch_message_ids)
         self._images = dict(images)
         self._pack_text = pack_text
+        self._core_pack = core_pack
         self._connection = None
         try:
             self._connection = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
@@ -131,6 +132,8 @@ class LocalReader:
                 "bytes_base64": base64.b64encode(data).decode("ascii")}
 
     def get_rule(self, rule_id: str) -> dict:
+        if self._core_pack is not None:
+            return self._core_pack.get_rule(rule_id)
         if self._pack_text is None:
             raise ToolUnavailable("Assistant pack unavailable")
         if not isinstance(rule_id, str) or not re.fullmatch(r"[A-Z]+[1-9][0-9]*", rule_id):

@@ -4,7 +4,7 @@ import json
 import time
 
 from . import classification_log
-from .assistant_errors import ToolDenied, ToolUnavailable
+from .assistant_errors import RuleNotFound, ToolDenied, ToolUnavailable
 
 
 def _spec(name, description, properties, required=()):
@@ -105,6 +105,8 @@ class ToolBox:
             else:
                 message = 'Tool failed'
             result = dict(tool=tool, ok=False, error=message)
+            if isinstance(error, RuleNotFound):
+                result.update(error='unknown_rule_id', suggestions=error.suggestions)
         latency_ms = max(0, int((self._clock() - started) * 1000))
         result_json = render_result(result) if render_result is not None else None
         if self._store is not None and self._run_id is not None:
