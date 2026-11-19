@@ -18,6 +18,11 @@ class TraceTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]
         for folder in ('listener/src/tg_triage', 'listener/prompts', 'listener/tests', 'listener/templates'):
             shutil.copytree(source/folder, self.root/folder, ignore=shutil.ignore_patterns('__pycache__'))
+        for path in checker.DECIDE_VERIFICATION:
+            target = self.root/path
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source/path, target)
         self.policy = self.root/checker.POLICY
         self.policy.parent.mkdir(parents=True)
         self.trace = {'schema': 'telegram-triage-policy/v1', 'owner': 'AlexChu', 'rules': [],
@@ -26,11 +31,8 @@ class TraceTests(unittest.TestCase):
             self.trace['rules'].append({'id': f'TG-{n:02}',
                 'code': [{'path':'listener/src/tg_triage/rules.py', 'symbol':'evaluate'}],
                 'tests': [{'path':'listener/tests/test_rules.py', 'symbol':'RulesTests.test_all_commands_are_confident_and_keep_payload'}]})
-        for folder, pattern in [('listener/src/tg_triage','*.py'),('listener/src/tg_triage/admin_static','**/*'),
-                                ('listener/prompts','*.md'),('listener/templates','**/*.md')]:
-            for path in (self.root/folder).glob(pattern):
-                if path.is_file():
-                    self.trace['runtime_inventory'][path.relative_to(self.root).as_posix()] = checker.normalized_hash(path)
+        for path in checker.inventory_paths(self.root):
+            self.trace['runtime_inventory'][path] = checker.normalized_hash(self.root/path)
         self.headings = [f'### TG-{n:02} Rule' for n in range(1,34)]
         self.extra = ''
     def write(self):
@@ -62,6 +64,15 @@ class TraceTests(unittest.TestCase):
     def test_inventory_drift(self):
         (self.root/'listener/prompts/unreviewed.md').write_text('new')
         self.assert_rejected('REVIEW_REQUIRED runtime inventory')
+    def test_decide_verification_drift(self):
+        for path in ('scripts/probe-prompt-cache.py', 'listener/tests/test_rules_intake_decide.py',
+                     'listener/assistant/assistant-core.json'):
+            with self.subTest(path=path):
+                file = self.root/path
+                original = file.read_bytes()
+                file.write_bytes(original + b'\n# drift\n')
+                self.assert_rejected('REVIEW_REQUIRED runtime hash')
+                file.write_bytes(original)
     def test_template_drift(self):
         p=self.root/'listener/templates/github-ticket/bug.md'
         p.write_text(p.read_text(encoding='utf-8')+'\n',encoding='utf-8')

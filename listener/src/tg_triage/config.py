@@ -147,6 +147,10 @@ class AssistantConfig:
     max_calls_per_minute: int = 20
     queue_max: int = 200
     daily_cap: int = 0
+    authority: str = 'propose'
+    decide_chat_ids: tuple[int, ...] = ()
+    append_confidence: float = 0.8
+    pack_mode: str = 'full'
 
 
 @dataclass(frozen=True)
@@ -199,6 +203,7 @@ class Config:
         result['assistant'].pop('router_key_file')
         result['assistant']['router_key_configured'] = bool(self.assistant.router_key)
         result['assistant']['models'] = list(self.assistant.models)
+        result['assistant']['decide_chat_ids'] = list(self.assistant.decide_chat_ids)
         result['assistant'].pop('max_tool_calls')
         result['assistant'].pop('github_repos')
         if self.assistant.github_token_file or self.assistant.github_repos:
@@ -522,6 +527,21 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
     assistant_mode = assistant_table.get('mode', 'shadow')
     if type(enabled) is not bool or assistant_mode not in ('shadow', 'live'):
         raise ConfigError('assistant: invalid enabled or mode')
+    authority = assistant_table.get('authority', 'propose')
+    if authority not in ('propose', 'decide'):
+        raise ConfigError('assistant.authority: expected propose or decide')
+    if authority == 'decide' and (not enabled or assistant_mode != 'live'):
+        raise ConfigError('assistant.authority=decide requires enabled=true and mode=live')
+    pack_mode = assistant_table.get('pack_mode', 'full')
+    if pack_mode not in ('full', 'core'):
+        raise ConfigError('assistant.pack_mode: expected full or core')
+    if pack_mode == 'core' and authority != 'decide':
+        raise ConfigError('assistant.pack_mode=core requires authority=decide')
+    decide_chats = assistant_table.get('decide_chat_ids', [])
+    if not isinstance(decide_chats, list) or any(type(chat) is not int for chat in decide_chats):
+        raise ConfigError('assistant.decide_chat_ids: expected list of integer chat IDs')
+    append_confidence = _number(assistant_table.get('append_confidence', 0.8),
+                                'assistant.append_confidence', 0.5, 1.0)
     router_url = assistant_table.get('router_base_url', AssistantConfig.router_base_url)
     from .router_transport import validate_base_url, RouterError
     try:
@@ -541,7 +561,9 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         raise ConfigError('assistant: live mode requires a configured router key')
     models = assistant_models(assistant_table.get('models', list(AssistantConfig.models)))
     extra = dict(enabled=enabled, mode=assistant_mode, router_base_url=router_url,
-                 router_key_file=router_file, router_key=router_key, models=tuple(models))
+                 router_key_file=router_file, router_key=router_key, models=tuple(models),
+                 authority=authority, decide_chat_ids=tuple(decide_chats),
+                 append_confidence=append_confidence, pack_mode=pack_mode)
     for name, maximum in (('gemini_timeout_s', 75), ('gpt_timeout_s', 65),
                           ('deepseek_timeout_s', 40), ('turn_deadline_s', 180)):
         extra[name] = _number(assistant_table.get(name, maximum), 'assistant.' + name, .001, maximum)

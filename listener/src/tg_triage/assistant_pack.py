@@ -20,16 +20,21 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 from .decision_rules import FILES
 from .rules_extensions import ExtensionRules
 
+if TYPE_CHECKING:
+    from .assistant_core import CorePack
+
 SOURCES: tuple[str, ...] = tuple(f"{name}.md" for name in (*FILES, *ExtensionRules.FILES))
 PRINCIPLES_FILE = "principles.md"
 PACK_FILE = "assistant-triage.md"
+CORE_FILE = "assistant-core.json"
 _START = "<!-- assistant-triage pack v1\npack_fingerprint: "
 _ZEROS = "0" * 64
 _HEX = re.compile(r"[0-9a-f]{64}")
@@ -75,6 +80,8 @@ class Pack:
     fingerprint: str
     sources: Mapping[str, str]
     text: str
+    bodies: Mapping[str, str]
+    core: CorePack | None = None
 
 
 def parse(text: str) -> Pack:
@@ -95,6 +102,7 @@ def parse(text: str) -> Pack:
     if not rest.startswith("-->\n"):
         raise AssistantPackError("malformed header terminator or extra source")
     rest = rest[len("-->\n"):]
+    bodies = {}
     for name, expected in hashes.items():
         marker = f"<!-- source: {name} -->\n"
         if not rest.startswith(marker):
@@ -103,12 +111,13 @@ def parse(text: str) -> Pack:
         if (not sep or _RESERVED.search(body) or _normalize(body) != body
                 or _hash(body) != expected):
             raise AssistantPackError(f"invalid section or source hash mismatch: {name}")
+        bodies[name] = body
     if rest:
         raise AssistantPackError("extra pack content")
     zeroed = _START + _ZEROS + text[len(_START) + 64:]
     if _hash(zeroed) != fingerprint:
         raise AssistantPackError("pack fingerprint mismatch")
-    return Pack(fingerprint, MappingProxyType(hashes), text)
+    return Pack(fingerprint, MappingProxyType(hashes), text, MappingProxyType(bodies))
 
 
 def _read(path: Path) -> str:
@@ -118,7 +127,7 @@ def _read(path: Path) -> str:
         raise AssistantPackError(f"{path}: cannot read UTF-8 file: {exc}") from exc
 
 
-def load(directory: Path, rules_dir: Path) -> Pack:
+def load(directory: Path, rules_dir: Path, *, pack_mode: str = "full") -> Pack:
     """Read a pack and refuse any drift from the current normalized sources."""
     directory, rules_dir = Path(directory), Path(rules_dir)
     pack = parse(_read(directory / PACK_FILE))
@@ -126,4 +135,7 @@ def load(directory: Path, rules_dir: Path) -> Pack:
         path = (directory if name == PRINCIPLES_FILE else rules_dir) / name
         if _hash(_normalize(_read(path))) != expected:
             raise AssistantPackError(f"{path}: source drift (rebuild assistant pack)")
+    if pack_mode == "core":
+        from .assistant_core import load_core
+        return replace(pack, core=load_core(pack, directory / CORE_FILE, rules_dir))
     return pack

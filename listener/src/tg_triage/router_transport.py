@@ -1,7 +1,7 @@
-"""Bounded OpenAI function-calling transport for the local 9router only.
+"""Bounded function-calling transport for 9router and the hosted DeepSeek fallback.
 
-No proxy, redirect, hosted-provider defaults, or output-token limit is used.
-The default transport owns its socket through completion; a deadline watchdog
+Connections bypass proxies and redirects. Each transport owns its socket
+through completion; a deadline watchdog
 interrupts stalled headers and trickling bodies without leaving HTTP workers.
 """
 from collections.abc import Sequence
@@ -65,12 +65,12 @@ def bounded_text(value: str | None, limit: int = CAPTURE_TEXT_BYTES) -> str | No
     return encoded.decode('utf-8')
 
 
-def _parse(raw: bytes, latency_ms: int) -> RouterReply:
+def _parse(raw: bytes, latency_ms: int, *, decide=False, hosted=False) -> RouterReply:
     try:
         envelope = json.loads(raw)
         choice = envelope["choices"][0]
         finish = choice.get("finish_reason")
-        if finish == "length":
+        if finish == "length" and not decide:
             raise RouterError("truncated")
         message = choice["message"]
         content = message.get("content")
@@ -85,7 +85,7 @@ def _parse(raw: bytes, latency_ms: int) -> RouterReply:
             if any(not isinstance(value, str) for value in values):
                 raise ValueError
             calls.append(ToolCall(*values))
-        if content is None and not calls:
+        if content is None and not calls and finish != "length":
             raise ValueError
         model = envelope.get("model")
         if ((finish is not None and not isinstance(finish, str))
@@ -96,6 +96,8 @@ def _parse(raw: bytes, latency_ms: int) -> RouterReply:
         completion = usage.get("completion_tokens", 0)
         reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
         cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        if hosted:
+            cached = usage.get("prompt_cache_hit_tokens", cached)
         if any(type(value) is not int or value < 0 for value in (prompt, completion, cached)):
             raise ValueError
         if reasoning is not None and (type(reasoning) is not int or reasoning < 0):
@@ -137,7 +139,7 @@ def validate_base_url(base_url):
 
 
 def chat(base_url: str, key: str, model: str, messages: list[dict], *,
-         tools: Sequence[dict] = (), timeout: float, opener=None,
+         tools: Sequence[dict] = (), tool_choice: str | None = None, timeout: float, opener=None,
          clock=time.monotonic) -> RouterReply:
     """POST one request. Injected openers follow urllib's (request, timeout=) API.
 
@@ -146,6 +148,24 @@ def chat(base_url: str, key: str, model: str, messages: list[dict], *,
     """
     validate_base_url(base_url)
     match = _ENDPOINT.fullmatch(base_url)
+    return _chat(base_url, key, model, messages, tools=tools, tool_choice=tool_choice,
+                 timeout=timeout, opener=opener, clock=clock, port=int(match[2]))
+
+
+def deepseek_chat(base_url, key, model, messages, *, tools, tool_choice, timeout, max_output):
+    from agentfleet_common.ai_transport import ENDPOINTS
+
+    if base_url.rstrip('/') != ENDPOINTS['deepseek']:
+        raise RouterError("invalid_endpoint")
+    if not key or any(ord(char) < 32 for char in key):
+        raise RouterError("auth")
+    return _chat(base_url.rstrip('/'), key, model, messages, tools=tools,
+                 tool_choice=tool_choice, timeout=timeout, opener=None, clock=time.monotonic,
+                 max_output=max_output)
+
+
+def _chat(base_url, key, model, messages, *, tools, tool_choice, timeout, opener, clock,
+          port=None, max_output=None):
     started = clock()
     if not math.isfinite(timeout) or timeout <= 0:
         raise RouterError("transient")
@@ -163,7 +183,10 @@ def chat(base_url: str, key: str, model: str, messages: list[dict], *,
         # 9router streams SSE for some providers (ag/gemini-*) unless told not to.
         body = {"model": model, "messages": messages, "stream": False}
         if tools:
-            body.update(tools=list(tools), tool_choice="auto")
+            body.update(tools=list(tools), tool_choice=tool_choice or "auto")
+        if port is None:
+            body.update(thinking={"type": "disabled"}, temperature=0, max_tokens=max_output,
+                        response_format={"type": "json_object"})
         request = Request(base_url + "/chat/completions",
                           data=json.dumps(body).encode("utf-8"), method="POST",
                           headers={"Content-Type": "application/json",
@@ -175,8 +198,21 @@ def chat(base_url: str, key: str, model: str, messages: list[dict], *,
                 response = error
         else:
             # Pin localhost to IPv4 loopback: no DNS, proxies, or redirects.
-            connection = http.client.HTTPConnection("127.0.0.1", int(match[2]),
-                                                    timeout=remaining())
+            path = "/v1/chat/completions"
+            if port is not None:
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=remaining())
+            else:
+                from agentfleet_common.ai_transport import ProviderError
+                from .thinking_transport import DeadlineHTTPS, _addresses
+
+                host = "api.deepseek.com"
+                try:
+                    address = _addresses(host, deadline)[0]
+                    connection = DeadlineHTTPS(host, address, deadline)
+                except ProviderError as error:
+                    raise RouterError("invalid_endpoint" if error.code == "invalid_endpoint"
+                                      else "transient") from None
+                path = "/chat/completions"
             connection.connect()
             sock = connection.sock
 
@@ -191,7 +227,7 @@ def chat(base_url: str, key: str, model: str, messages: list[dict], *,
             watchdog.daemon = True
             watchdog.start()
             sock.settimeout(remaining())
-            connection.request("POST", "/v1/chat/completions", request.data,
+            connection.request("POST", path, request.data,
                                dict(request.header_items()))
             response = connection.getresponse()
         remaining()
@@ -218,7 +254,8 @@ def chat(base_url: str, key: str, model: str, messages: list[dict], *,
             chunks.append(chunk)
         raw = b"".join(chunks)
         _status_error(status, raw)
-        result = _parse(raw, max(0, int((clock() - started) * 1000)))
+        result = _parse(raw, max(0, int((clock() - started) * 1000)),
+                        decide=tool_choice is not None, hosted=port is None)
         remaining()
         return result
     except RouterError:

@@ -33,12 +33,12 @@ def _load_decision_rules():
     return RulesSnapshot(rules_dir, templates_dir, extensions=True)
 
 
-def _load_assistant_pack():
+def _load_assistant_pack(*, pack_mode='full'):
     source = Path(__file__).resolve().parents[2]
     installed = Path(sys.prefix) / 'share' / 'tg-triage'
     directory = source / 'assistant' if (source / 'assistant').is_dir() else installed / 'assistant'
     rules_dir = source / 'rules' if (source / 'rules').is_dir() else installed / 'rules'
-    return assistant_pack.load(directory, rules_dir)
+    return assistant_pack.load(directory, rules_dir, pack_mode=pack_mode)
 
 
 def _build_classifier(config, store):
@@ -142,10 +142,13 @@ def main(argv=None) -> int:
         templates = load_templates() if args.command in ('run', 'check-config') else None
         decision_rules = (_load_decision_rules()
                           if config.decision_rules_enabled and args.command in ('run', 'check-config') else None)
-        pack = _load_assistant_pack() if decision_rules is not None else None
+        pack = (_load_assistant_pack(pack_mode=config.assistant.pack_mode)
+                if decision_rules is not None else None)
         if args.command == "check-config":
             result = config.redacted()
             result['assistant']['pack_fingerprint'] = pack.fingerprint if pack is not None else None
+            if pack is not None and pack.core is not None:
+                result['assistant']['core_pack_fingerprint'] = pack.core.fingerprint
             result['templates'] = {'fingerprint': templates.fingerprint}
             if decision_rules is not None:
                 result['rules'] = {'fingerprint': decision_rules.fingerprint}
@@ -160,6 +163,8 @@ def main(argv=None) -> int:
             if decision_rules is not None:
                 logging.getLogger(__name__).info('rules fingerprint=%s', decision_rules.fingerprint)
                 logging.getLogger(__name__).info('assistant pack fingerprint=%s', pack.fingerprint)
+                if pack.core is not None:
+                    logging.getLogger(__name__).info('assistant core pack fingerprint=%s', pack.core.fingerprint)
             validate_data_directories(config)
             # Lock before opening the store: a second process must not recover
             # another process's in-flight records.

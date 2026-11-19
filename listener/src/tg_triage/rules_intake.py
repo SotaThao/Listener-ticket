@@ -1,7 +1,7 @@
 """Trusted code facts for the rules-based intake path."""
 from . import rules
 from . import classification_log
-from .decision_rules import CodeFacts, has_team_mention
+from .decision_rules import CodeFacts, Decision as RuleDecision, has_team_mention
 
 
 def _direct_closed_evidence(snapshot, members):
@@ -156,44 +156,126 @@ def _prefilter_source(snapshot, message):
     return _prefilter_scope(message) and snapshot.prefilter_text(message.text)
 
 
-def _local_rule(snapshot, members, banter_context=(), chat_replies=frozenset()):
+def _local_rule(snapshot, members, banter_context=(), chat_replies=frozenset(), *, checks=None):
     """F1 when every member is a review request, F3 when every member is only a link,
     F4 when every member is only small talk (chat_words), F5 when every member is a joke inside
     a group that is already joking (readiness.md · banter_only); else None."""
     from .decision_rules import PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE, is_link_only
     members = list(members)
     if not members: return None
-    if all(_prefilter_source(snapshot, m) for m in members): return PREFILTER_RULE
+    def matched(rule, name, match, yes, no):
+        if checks is not None:
+            checks.append(dict(rule=rule, name=name, match=match, why=yes if match else no))
+        return match
+
+    if matched(PREFILTER_RULE, 'nhờ review PR/issue',
+               all(_prefilter_source(snapshot, m) for m in members),
+               'mọi tin đều nhờ xem PR/issue', 'thiếu link PR/issue hoặc lời nhờ xem hợp lệ'):
+        return PREFILTER_RULE
     # W1/C1: a forwarded message is someone else's content (often a customer's), never dismissed unread.
-    if all(_prefilter_scope(m) and not m.is_forward and is_link_only(m.text) for m in members): return LINK_RULE
-    if all(_prefilter_scope(m) and not m.is_forward and snapshot.chat_only_text(m.text) for m in members): return CHAT_RULE
+    if matched(LINK_RULE, 'tin chỉ có link',
+               all(_prefilter_scope(m) and not m.is_forward and is_link_only(m.text) for m in members),
+               'mọi tin chỉ có link', 'có tin không phải tin chỉ có link'):
+        return LINK_RULE
+    if matched(CHAT_RULE, 'tin chỉ có từ xã giao',
+               all(_prefilter_scope(m) and not m.is_forward and snapshot.chat_only_text(m.text) for m in members),
+               'mọi tin chỉ có từ xã giao', 'có tin không khớp mẫu xã giao'):
+        return CHAT_RULE
     # readiness.md · reply_chat K1-K4: a Reply to a message the bot already settled as CHAT, with no problem word.
-    if chat_replies and all(m.message_id in chat_replies and snapshot.reply_chat_match(m, True) for m in members): return REPLY_CHAT_RULE
+    if matched(REPLY_CHAT_RULE, 'trả lời tin đã là CHAT',
+               bool(chat_replies) and all(m.message_id in chat_replies and snapshot.reply_chat_match(m, True) for m in members),
+               'mọi tin đều trả lời tin CHAT hợp lệ',
+               'không phải reply' if all(m.reply_to_id is None for m in members) else 'có reply không đủ điều kiện'):
+        return REPLY_CHAT_RULE
     # B1: a message that tags the bot is a direct call, never a joke. B3+B4 look at the group before the first member.
-    if (banter_context and all(_prefilter_scope(m) and not m.is_forward and not m.mentions_listener
-                               and snapshot.banter_text(m.text) for m in members)
-            and snapshot.banter_context(min(members, key=lambda m: m.message_id), banter_context)): return BANTER_RULE
+    if matched(BANTER_RULE, 'đùa trong nhóm đang đùa',
+               bool(banter_context) and all(_prefilter_scope(m) and not m.is_forward and not m.mentions_listener
+                                            and snapshot.banter_text(m.text) for m in members)
+               and snapshot.banter_context(min(members, key=lambda m: m.message_id), banter_context),
+               'mọi tin đều đùa và nhóm đang đùa', 'tin hoặc bối cảnh không khớp mẫu đùa'):
+        return BANTER_RULE
     return None
 
 
 def early_decision(snapshot, sources, *, prefilter=True, banter_context=(), chat_replies=frozenset()):
-    """Only table-prioritized outcomes independent of extraction, for a single new source.
+    decision, _ = early_decision_trace(snapshot, sources, prefilter=prefilter,
+                                       banter_context=banter_context, chat_replies=chat_replies)
+    return decision
 
-    Owner 2026-11-05 ("Duyệt lọc trước"): when every source matches the local prefilter
-    (PR/issue review request), decide CHAT (F1) before any model call. Owner 2026-11-06
-    ("Duyệt F3"): when every source is only a link, decide CHAT (F3) the same way."""
+
+_FILTER_ROWS = {
+    'F1': ('prefilter', 'P4'), 'F2': ('team_request', 'T5'), 'F3': ('link_only', 'W4'),
+    'F4': ('chat_only', 'C4'), 'F5': ('banter_only', 'B5'), 'F6': ('reply_chat', 'K4'),
+}
+_INDEPENDENT_CHECKS = {
+    'R1': ('lệnh /question', 'tin dùng lệnh /question', 'không dùng lệnh /question'),
+    'R2': ('lệnh không có nội dung', 'lệnh không có nội dung', 'không có lệnh rỗng'),
+    'R3': ('ảnh hoặc tệp không chữ', 'chỉ có tệp đính kèm', 'có chữ, có lệnh, là reply hoặc không đính kèm'),
+}
+
+
+def _snapshot_rule_rows(snapshot):
+    tables = snapshot.tables['readiness']
+    rows = {row.cells['#']: row for row in tables['decision']}
+    for rule, (table, key) in _FILTER_ROWS.items():
+        row = next((row for row in tables.get(table, ()) if row.cells['#'] == key), None)
+        if row is not None:
+            rows[rule] = row
+    return rows
+
+
+def _rule_row_text(row):
+    if row is None:
+        return ''
+    # RulesSnapshot stores the loaded Markdown cells, with the delimiters stripped.
+    text = '|' + ''.join(f' {value} |' if value else ' |' for value in row.cells.values())
+    return text.encode('utf-8')[:2048].decode('utf-8', errors='ignore')
+
+
+def early_decision_trace(snapshot, sources, *, prefilter=True, banter_context=(),
+                         chat_replies=frozenset()) -> tuple[RuleDecision | None, dict]:
+    """Record the checks taken along the same short-circuit path as the code decision."""
     sources = list(sources)
-    local = _local_rule(snapshot, sources, banter_context, chat_replies) if prefilter else None
+    checks = []
+    decision = None
+    local = _local_rule(snapshot, sources, banter_context, chat_replies, checks=checks) if prefilter else None
     if local is not None:
-        return snapshot.prefilter_decision(local)
-    if len(sources) != 1: return None
-    result = snapshot.evaluate({}, code_facts(sources, extraction_ok=False))
-    row = next((row for row in snapshot.tables['readiness']['decision'] if row.cells['#'] == result.rule), None)
-    if row is None: return None
-    independent = (row.cells['extraction_ok'] == '*' and row.cells['intent'] == '*'
-                   and row.cells['cần CÓ tất cả'] == '—' and row.cells['cần CÓ ít nhất một'] == '—')
-    if sources[0].reply_to_id is not None and row.cells['reply_target'] != '*': independent = False
-    return result if independent else None
+        decision = snapshot.prefilter_decision(local)
+    elif len(sources) == 1:
+        result = snapshot.evaluate({}, code_facts(sources, extraction_ok=False))
+        rows = snapshot.tables['readiness']['decision']
+        row = next((row for row in rows if row.cells['#'] == result.rule), None)
+        independent = (row is not None and row.cells['extraction_ok'] == '*' and row.cells['intent'] == '*'
+                       and row.cells['cần CÓ tất cả'] == '—' and row.cells['cần CÓ ít nhất một'] == '—'
+                       and (sources[0].reply_to_id is None or row.cells['reply_target'] == '*'))
+        if independent:
+            decision = result
+        for rule, (name, yes, no) in _INDEPENDENT_CHECKS.items():
+            match = decision is not None and decision.rule == rule
+            checks.append(dict(rule=rule, name=name, match=match, why=yes if match else no))
+            if match:
+                break
+    elif sources:
+        for rule, (name, _, _) in _INDEPENDENT_CHECKS.items():
+            checks.append(dict(rule=rule, name=name, match=False, why='batch nhiều tin'))
+    rule = decision.rule if decision is not None else None
+    trace = dict(handled_by_code=decision is not None, checks=checks, decided_rule=rule,
+                 rule_text=_rule_row_text(_snapshot_rule_rows(snapshot).get(rule)) if rule else None,
+                 handoff=None if rule else 'assistant',
+                 reason=checks[-1]['why'] if rule else 'không mẫu cố định nào nhận ra, cần hiểu nội dung')
+    return decision, trace
+
+
+def _decide_applies(pipeline, chat_id):
+    settings = getattr(pipeline.config, 'assistant', None)
+    return (getattr(settings, 'authority', None) == 'decide'
+            and (not settings.decide_chat_ids or chat_id in settings.decide_chat_ids))
+
+
+def _batch_thread(pipeline, sources, topic):
+    return classification_log.find_thread(
+        pipeline.store, sources[0].chat_id, topic_id=topic,
+        reply_to_ids=tuple(dict.fromkeys(m.reply_to_id for m in sources if m.reply_to_id is not None)))
 
 
 def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, topic_id=None):
@@ -402,7 +484,10 @@ def process(pipeline, message, start):
         _,chat,mid = checkpoint[0]['sources'][-1]
         anchor = _to_message(pipeline.store.get(chat,mid))
         return _complete_source_followup(pipeline, anchor, checkpoint, claim_queued=True)
-    decision = early_decision(pipeline.rules_snapshot, [message], banter_context=_banter_history(pipeline, [message]), chat_replies=_chat_reply_ids(pipeline, [message]))
+    decide = _decide_applies(pipeline, message.chat_id)
+    decision, trace = early_decision_trace(pipeline.rules_snapshot, [message],
+                                          banter_context=_banter_history(pipeline, [message]),
+                                          chat_replies=_chat_reply_ids(pipeline, [message]))
     if decision is None or decision.state == 'MEDIA_ONLY':
         # questions.source_followup: single-message hook before extensions route
         # even one source through _process_batch. Multi-source batches stay above.
@@ -412,7 +497,7 @@ def process(pipeline, message, start):
             linked = _process_source_followup(pipeline, message)
             if linked is not None: return linked
     if decision is None:
-        if pipeline.rules_snapshot.extensions:
+        if decide or pipeline.rules_snapshot.extensions:
             result = _process_batch(pipeline, [message])
         elif message.reply_to_id is not None:
             result = _process_source_reply(pipeline,message)
@@ -423,7 +508,8 @@ def process(pipeline, message, start):
     from .models import Decision
     topic = f'{message.chat_id}:{message.message_id}'
     pipeline.rules_pending.create(topic, message.chat_id, message.message_id)
-    classification_log.record_decision(pipeline.store, pipeline.rules_snapshot, topic, [message], decision)
+    audit = dict(code_precheck=trace, log_thread_id=_batch_thread(pipeline, [message], topic)) if decide else {}
+    classification_log.record_decision(pipeline.store, pipeline.rules_snapshot, topic, [message], decision, **audit)
     pipeline.rules_pending.record_decision(topic, decision)
     state = 'chat' if decision.state == 'CHAT' else 'pending_review'
     result = Decision(state, 'rule', case_key=topic, reason=decision.rule)
@@ -1319,7 +1405,115 @@ def _process_batch(pipeline, sources, batch_id=None):
             pipeline._prepared_images=None
 
 
+def _hold_rule(snapshot, rule):
+    from dataclasses import replace
+    return replace(snapshot.prefilter_decision(), state='HOLD', rule=rule)
+
+
+def _guard_reason(store, run_id):
+    """R5 returns a coarse outcome. The run carries the failing guard's ID."""
+    import json
+    from .assistant_contract import GUARDS
+    with store._lock:
+        row = store.connection.execute(
+            'SELECT decision_rule,error_class,outcomes_json FROM classification_runs WHERE run_id=?',
+            (run_id,)).fetchone()
+    if row:
+        for reason in (row['decision_rule'], row['error_class']):
+            if reason in GUARDS:
+                return reason
+        try:
+            for group in json.loads(row['outcomes_json'] or '[]'):
+                for violation in group.get('violations', ()):
+                    if violation.get('guard') in GUARDS:
+                        return violation['guard']
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return 'guard_unknown'
+
+
+def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, context, trace):
+    import json
+    import time
+    from dataclasses import replace
+    from .assistant_contract import GuardContext, PHASE_DECIDE, to_plan
+    from .assistant_extractor import batch_fingerprint
+    from .rules_extraction import partition_and_extract
+    from .ticket_templates import active
+
+    snapshot = pipeline.rules_snapshot
+    runtime = getattr(pipeline, 'assistant_runtime', None)
+    if runtime is None:
+        return None, None, 'infra'
+    body = []
+    sizes = []
+    partition_and_extract(pipeline.classifier, snapshot, sources, images=images,
+                          documents=documents, read_context=context, body_out=body, size_out=sizes)
+    thread = _batch_thread(pipeline, sources, batch_id)
+    if not body:
+        reason = 'too_large' if sizes else 'invalid_packet'
+        with classification_log.run(snapshot, sources, images, phase=PHASE_DECIDE,
+                                    topic_id=batch_id, code_precheck=trace, log_thread_id=thread) as logged:
+            if logged is not None:
+                logged.values.update(error_class=reason, error=reason)
+        return None, None, reason
+    packet = json.loads(body[0]['messages'][1]['content'])
+    chat_id = sources[0].chat_id
+    rows = _snapshot_rule_rows(snapshot)
+    blocks = active().blocks['group-replies.md']
+    reads = {row['message_id']: row for row in documents if row.get('read_status') == 'read'}
+    proofs = {mid: proof for mid, proof in proofs.items() if proof is not None}
+    guard = GuardContext(
+        message_ids=frozenset(packet['source_ids']), chat_id=chat_id, gh_repo=pipeline.config.gh_repo,
+        reply_targets={mid: (proof['number'], proof['state']) for mid, proof in proofs.items()},
+        reply_proofs=proofs, tool_targets={}, rule_ids=frozenset(rows),
+        rule_text=lambda rule: _rule_row_text(rows[rule]),
+        question_block_ids=frozenset(block for block in blocks if block.startswith(('ask.', 'question.'))),
+        max_value_chars=snapshot.limits['max_value_chars'],
+        max_fields_per_ask=snapshot.limits['max_fields_per_ask'],
+        append_confidence=pipeline.config.assistant.append_confidence,
+        seen_image_ids=frozenset(packet['images_order']), read_document_ids=frozenset(reads),
+        document_reads=reads,
+    )
+    deadline = getattr(runtime, 'clock', time.monotonic)() + pipeline.config.assistant.turn_deadline_s
+    data = dict(packet, images=images, documents=documents, read_context=context)
+    decisions, run_id, outcome = runtime.decide(dict(
+        sources=tuple(sources), snapshot=snapshot, data=data, fingerprint=batch_fingerprint(sources),
+        id_space='message', topic_id=batch_id, chat_id=chat_id, guard_ctx=guard,
+        code_precheck=trace, log_thread_id=thread, deadline=deadline,
+    ))
+    if outcome != 'done' or not decisions:
+        return None, run_id, outcome
+    return [to_plan(replace(group, run_id=run_id), rules_fingerprint=snapshot.fingerprint)
+            for group in decisions], run_id, outcome
+
+
+def _reject_decide_plan(pipeline, sources, batch_id, plans, reason):
+    from .models import Decision
+
+    pending = pipeline.rules_pending
+    if not pending.block_planned_batch(batch_id):
+        return Decision('pending_review', 'rule', case_key=batch_id, reason=reason)
+    guard = reason if reason.startswith('guard_') else 'guard_' + reason
+    result = Decision('pending_review', 'rule', case_key=batch_id, reason=guard)
+    done = {tuple(key) for _, plan, status in plans if status == 'DONE' for key in plan['source_keys']}
+    for source in sources:
+        if (source.chat_id, source.message_id) not in done:
+            pipeline.store.finish(source, result)
+    pending.record_decision(batch_id, _hold_rule(pipeline.rules_snapshot, guard))
+    with pipeline.store._lock, pipeline.store.connection:
+        pipeline.store.connection.execute("""UPDATE classification_runs
+            SET final_state='HOLD', decision_rule=?, error_class=?
+            WHERE run_id=(SELECT MAX(run_id) FROM classification_runs
+                          WHERE topic_id=? AND code_precheck_json IS NOT NULL)""",
+            (guard, guard, batch_id))
+        pipeline.store.connection.execute('UPDATE rules_topics SET attempt_reserved=0 WHERE topic_id=?', (batch_id,))
+    _escalate(pipeline, sources[0], batch_id)
+    return result
+
+
 def _process_batch_inner(pipeline, sources, batch_id=None):
+    from .assistant_contract import DEFAULT_QUESTION_BLOCK, guard_provenance
     from .models import Decision
     from .thinking import decision_turn
     pending=pipeline.rules_pending
@@ -1354,17 +1548,22 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_analysis_orphaned_receipt')
         pending.create(batch_id,sources[0].chat_id,sources[0].message_id)
         for source in sources[1:]: pending.add_source(batch_id,source.chat_id,source.message_id)
-        wait = _assistant_wait(pipeline, sources, batch_id)
+        snapshot = pipeline.rules_snapshot
+        decide = _decide_applies(pipeline, sources[0].chat_id)
+        early, trace = (early_decision_trace(snapshot, sources, banter_context=_banter_history(pipeline, sources),
+                                            chat_replies=_chat_reply_ids(pipeline, sources)) if decide else (None, None))
+        wait = _assistant_wait(pipeline, sources, batch_id) if early is None else None
         if wait is not None: return wait
         attempt=pending.reserve_attempt(batch_id,pipeline.rules_snapshot.limits['hold_max_retries'])
         if attempt is None: return _escalate(pipeline,sources[0],batch_id)
         for source in sources:
             pipeline.store.finish(source,Decision('pending_review','rule',case_key=batch_id,reason='rules_extract_pending'))
         too_large=False
+        decide_plans = None
         with decision_turn(pipeline,'rules:' + batch_id,batch_id,sources[0].message_id) as turn:
             pending_bindings={}
             proofs={}
-            if not pipeline.rules_snapshot.extensions:
+            if not decide and not snapshot.extensions:
                 try:
                     for m in external:
                         pending_bindings[m.message_id]=pending.topic_for_source_reply(m.chat_id,m.reply_to_id,
@@ -1389,14 +1588,55 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 if len(states)>1: raise ValueError('conflicting lifecycle states')
                 return ('ticket_closed' if states=={'closed'} else 'ticket_open') if targets else 'none'
             from . import document_reader, document_processing
-            documents=document_reader.read_documents(sources,pipeline.attachments.downloader)
+            documents=[] if early is not None else document_reader.read_documents(sources,pipeline.attachments.downloader)
             if documents: documents=document_processing.prepare(documents,pipeline.classifier)
             by_id={m.message_id:m for m in sources}
             unread=any(document_reader.text_intent(by_id[row['message_id']]) and row.get('read_status')!='read' for row in documents)
             images=pipeline._prepared_images.for_messages(sources) if pipeline._prepared_images is not None else {}
             context=pipeline.store.autonomous_read_context(sources) if pipeline.rules_snapshot.extensions else ()
-            groups=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,sources,images=images,documents=documents,reply_target_for=reply_target,read_context=context,banter_context=_banter_history(pipeline,sources),chat_replies=_chat_reply_ids(pipeline,sources))
-            too_large=groups is None and not unread and _too_large(turn)
+            outcome = None
+            if decide and early is None:
+                try:
+                    for member in external:
+                        pending_bindings[member.message_id] = pending.topic_for_source_reply(
+                            member.chat_id, member.reply_to_id, snapshot.limits['pending_expiry_days'])
+                    if not any(pending_bindings.values()):
+                        proofs.update((m.message_id, _resolve_reply_target(pipeline, m)) for m in external)
+                    else:
+                        # Keep the message-to-topic_ref merge on the legacy path.
+                        pending_bindings.clear()
+                        decide = False
+                except Exception:
+                    pending.finish_attempt(batch_id, attempt)
+                    return Decision('pending_review', 'rule', case_key=batch_id, reason='lifecycle_lookup_failed')
+            if decide and early is not None:
+                groups = ((tuple(sources), early),)
+                with classification_log.run(snapshot, sources, images, topic_id=batch_id, code_precheck=trace,
+                                            log_thread_id=_batch_thread(pipeline, sources, batch_id)) as logged:
+                    if logged is not None:
+                        logged.result = groups
+            elif decide:
+                decide_plans, run_id, outcome = _decide_batch(
+                    pipeline, sources, batch_id, proofs, documents, images, context, trace)
+                groups = None
+                if outcome == 'guard':
+                    groups = ((tuple(sources), _hold_rule(snapshot, _guard_reason(pipeline.store, run_id))),)
+                elif outcome == 'invalid_packet':
+                    groups = ((tuple(sources), _hold_rule(snapshot, 'guard_invalid_packet')),)
+                elif outcome == 'infra':
+                    with pipeline.store._lock, pipeline.store.connection:
+                        pipeline.store.connection.execute('''UPDATE rules_topics SET attempt_reserved=0,attempts=attempts-1
+                            WHERE topic_id=? AND attempt_reserved=1 AND attempts=?''', (batch_id, attempt))
+                    return _assistant_wait(pipeline, sources, batch_id, force=True)
+                elif outcome == 'model_error':
+                    pending.finish_attempt(batch_id, attempt)
+                    if attempt >= snapshot.limits['hold_max_retries']:
+                        return _escalate(pipeline, sources[0], batch_id)
+                    return (_assistant_wait(pipeline, sources, batch_id)
+                            or Decision('pending_review', 'rule', case_key=batch_id, reason='rules_hold'))
+            else:
+                groups=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,sources,images=images,documents=documents,reply_target_for=reply_target,read_context=context,banter_context=_banter_history(pipeline,sources),chat_replies=_chat_reply_ids(pipeline,sources))
+            too_large=outcome == 'too_large' or (groups is None and not unread and _too_large(turn))
             pending_groups={}
             if groups is not None:
                 from dataclasses import replace
@@ -1447,19 +1687,19 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                         too_large=too_large or (merged is None and _too_large(turn))
                         groups=None; break
                     pending_groups[index]=(topic,merged[0][1],tuple(m.message_id for m in members if pending_bindings.get(m.message_id)),snapshot,additions)
-        if groups is None:
+        if groups is None and decide_plans is None:
             if too_large:
                 result=_request_too_large(pipeline,sources[0],batch_id,attempt)
                 if result is not None: return result
             pending.finish_attempt(batch_id,attempt)
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_hold')
-        owner={m.message_id:i for i,(members,_) in enumerate(groups) for m in members}
-        if any(m.reply_to_id in owner and owner[m.message_id] != owner[m.reply_to_id]
+        owner={m.message_id:i for i,(members,_) in enumerate(groups or ()) for m in members}
+        if not decide and any(m.reply_to_id in owner and owner[m.message_id] != owner[m.reply_to_id]
                and groups[owner[m.message_id]][1].state not in ('ANALYZE','STATUS') for m in sources):
             pending.finish_attempt(batch_id,attempt)
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_reply_partition_conflict')
-        plans=[]
-        for index,(members,decision) in enumerate(groups):
+        plans=decide_plans if decide_plans is not None else []
+        for index,(members,decision) in enumerate(groups or ()):
             pending_group=pending_groups.get(index)
             if pending_group: decision=pending_group[1]
             if decision.state not in ('READY','APPEND','APPEND_CLOSED','NEED_INFO','CHAT','MEDIA_ONLY','ANALYZE','STATUS','HOLD','LIFECYCLE_QUESTION','RELATED'):
@@ -1495,33 +1735,56 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 lifecycle_evidence_answer=(pipeline.rules_snapshot.extensions.clarification['evidence_answer'] if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
                 lifecycle_recurrence_answer=(pipeline.rules_snapshot.extensions.clarification['recurrence_answer'] if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
                 lifecycle_source_evidence=(_source_evidence_id(members[0]) if decision.state in ('LIFECYCLE_QUESTION','RELATED') else None),
-                targets=[proofs[m.message_id] for m in members if proofs.get(m.message_id)],
+                targets=[] if decide else [proofs[m.message_id] for m in members if proofs.get(m.message_id)],
                 pending_topic=pending_group[0] if pending_group else None,
                 pending_reply_ids=list(pending_group[2]) if pending_group else [],
                 document_reads=document_reader.proof(sorted([row for row in documents if row['message_id'] in {m.message_id for m in members}],key=lambda row:row['message_id']) if decision.analysis_review else [row for row in documents if row['message_id'] in {m.message_id for m in members}])))
+            if decide:
+                plans[-1].update(authority='decide', rule_text=trace['rule_text'])
         updates=[(index,group[0],group[3],group[4]) for index,group in pending_groups.items()]
-        if not pending.save_batch(batch_id,pipeline.rules_snapshot.fingerprint,plans,updates):
+        try:
+            saved = pending.save_batch(batch_id,pipeline.rules_snapshot.fingerprint,plans,updates)
+        except Exception:
+            if decide:
+                pending.finish_attempt(batch_id, attempt)
+            raise
+        if not saved:
             pending.finish_attempt(batch_id,attempt)
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_pending_changed')
         cached=pending.batch(batch_id)
     fingerprint,plans=cached
-    if fingerprint != pipeline.rules_snapshot.fingerprint:
-        return Decision('pending_review','rule',case_key=batch_id,reason='rules_fingerprint_changed')
+    decide_batch = bool(plans) and all(plan.get('authority') == 'decide' for _, plan, _ in plans)
+
+    def reject(reason):
+        if decide_batch:
+            return _reject_decide_plan(pipeline, sources, batch_id, plans, reason)
+        return Decision('pending_review', 'rule', case_key=batch_id, reason=reason)
+
+    fingerprint_changed = fingerprint != pipeline.rules_snapshot.fingerprint
+    if fingerprint_changed and not decide_batch:
+        return reject('rules_fingerprint_changed')
     if any(status=='BLOCKED' for _,_,status in plans):
-        return Decision('pending_review','rule',case_key=batch_id,reason='rules_batch_blocked')
+        return reject('rules_batch_blocked')
     if any(status in ('RESERVED','AMBIGUOUS') for _,_,status in plans):
         for ordinal,_,status in plans:
             if status == 'RESERVED': pending.transition_group(batch_id,ordinal,'RESERVED','AMBIGUOUS')
         return Decision('pending_review','rule',case_key=batch_id,reason='rules_batch_ambiguous')
+    if fingerprint_changed:
+        return reject('rules_fingerprint_changed')
     all_keys=[tuple(key) for _,plan,_ in plans for key in plan['source_keys']]
     if len(all_keys)!=len(set(all_keys)) or set(all_keys)!=set(pending.sources(batch_id).values()):
-        return Decision('pending_review','rule',case_key=batch_id,reason='rules_partition_changed')
+        return reject('rules_partition_changed')
     for _,plan,status in plans:
         if status != 'PLANNED': continue
         rows=[pipeline.store.get(*key) for key in plan['source_keys']]
         ids={key[1] for key in plan['source_keys']}
         if any(row is None for row in rows):
-            return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
+            return reject('rules_authority_changed')
+        if plan.get('authority') == 'decide':
+            if guard_provenance(plan['state'], None):
+                return reject('guard_provenance')
+            if not rows or len({row['chat_id'] for row in rows}) != 1 or plan.get('pending_topic'):
+                return reject('rules_authority_changed')
         if plan.get('state')=='RELATED':
             from .store import _to_message
             from .lifecycle import grounded_recurrence
@@ -1559,13 +1822,13 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                     or plan.get('lifecycle_sources') and plan['lifecycle_sources']!={str(row['message_id']):_source_evidence_id(_to_message(row)) for row in rows}
                     or plan.get('lifecycle_evidence_answer')!=pipeline.rules_snapshot.extensions.clarification['evidence_answer']
                     or plan.get('lifecycle_recurrence_answer')!=pipeline.rules_snapshot.extensions.clarification['recurrence_answer']):
-                return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
+                return reject('rules_authority_changed')
         if plan['state'] in ('ANALYZE','STATUS'):
             from .analysis_task import valid_task
             if ((len(rows)!=1 and (plan['state']=='STATUS' or not plan.get('analysis_review'))) or plan.get('pending_topic') or plan.get('targets') or
                     (plan['state']=='ANALYZE' and not valid_task(plan.get('task'))) or
                     (plan['state']=='STATUS' and plan.get('task') is not None)):
-                return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
+                return reject('rules_authority_changed')
             if plan['state']=='ANALYZE':
                 from .rules_analysis import has_binding
                 if not plan.get('analysis_review') and has_binding(pipeline.store.connection,plan['source_keys']):
@@ -1595,7 +1858,12 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             row=next((row for row in rows if row['message_id']==reply_id),None)
             binding=(pending.topic_for_source_reply(row['chat_id'],row['reply_to_id'],pipeline.rules_snapshot.limits['pending_expiry_days']) if row is not None else None)
             if binding is None or binding[0] != plan.get('pending_topic'):
-                return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
+                return reject('rules_authority_changed')
+        if plan.get('authority') == 'decide':
+            # Decide APPEND rechecks only its selected proofs before writing.
+            if plan['state'] == 'APPEND' and not plan.get('targets'):
+                return reject('guard_target')
+            continue
         from .store import _to_message
         try:
             expected={p['reply_message_id']:p for p in plan.get('targets',())}
@@ -1678,22 +1946,33 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 pending.close(topic,'CLOSED')
         elif decision.state == 'READY':
             for member in source_members: _resume_source(pipeline,member)
+            options = {'related': plan.get('related'), 'refs': plan.get('refs', ())} if plan.get('authority') == 'decide' else {}
             result=_create_single(pipeline,first,topic,decision,evidence_messages=originals if plan.get('pending_topic') else None,
-                                  members=source_members,document_reads=plan.get('document_reads',()))
+                                  members=source_members,document_reads=plan.get('document_reads',()), **options)
         elif decision.state in ('APPEND','APPEND_CLOSED'):
-            result=_append_batch_group(pipeline,topic,members,decision,plan['targets'],plan.get('document_reads',()))
+            options = {'decide_plan': plan} if plan.get('authority') == 'decide' else {}
+            result=_append_batch_group(pipeline,topic,members,decision,plan['targets'],plan.get('document_reads',()), **options)
             if result.decision=='pending_review':
                 for member in members: pipeline.store.finish(member,result)
                 pending.transition_group(batch_id,ordinal,'RESERVED','BLOCKED')
                 results.append(result)
                 continue
+            if plan.get('run_id') is not None and result.decision == 'followup':
+                thread = classification_log.find_thread(pipeline.store, first.chat_id, ticket_ref=result.issue_number)
+                if thread is not None:
+                    classification_log.set_thread(pipeline.store, plan['run_id'], thread)
         else:
             state='chat' if decision.state=='CHAT' else 'pending_review'
             result=Decision(state,'rule',case_key=topic,reason=decision.rule)
             for member in members: pipeline.store.finish(member,result)
             if decision.state=='NEED_INFO':
-                pipeline._acknowledge(Plan(topic,members,first,'rule','pending_review'))
-                _question(pipeline,first,topic,decision)
+                if plan.get('authority') == 'decide':
+                    block = plan.get('question_block') or DEFAULT_QUESTION_BLOCK
+                    _question(pipeline, first, topic, replace(decision, questions=(block,),
+                                                              asked_fields=tuple(dict.fromkeys(decision.asked_fields))))
+                else:
+                    pipeline._acknowledge(Plan(topic,members,first,'rule','pending_review'))
+                    _question(pipeline,first,topic,decision)
             if decision.state=='CHAT': pending.close(topic,'CLOSED')
             if decision.state=='HOLD' and decision.rule.startswith('lifecycle_'):
                 # Do not let a later reply reclassify a held closed-issue
@@ -1709,12 +1988,37 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             from .rules_pending_store import RulesHalt
             raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
     # Completing a cached batch never calls the model again.
+    _link_decide_tickets(pipeline.store, plans)
     blocked=any(status=='BLOCKED' for _,_,status in pending.batch(batch_id)[1])
     pending.close(batch_id,'ESCALATED' if blocked else 'CLOSED')
     if cached is not None:
         with pipeline.store._lock,pipeline.store.connection:
             pipeline.store.connection.execute("UPDATE rules_topics SET attempt_reserved=0,phase='WAITING',attempts=0 WHERE topic_id=?",(batch_id,))
     return pipeline._combine(batch_id,results) if results else Decision('chat','rule',case_key=batch_id,reason='rules_batch_complete')
+
+
+def _link_decide_tickets(store, plans):
+    """Link completed decide groups to their issue using the existing ticket_ref URL format."""
+    import logging
+    run_ids = {plan['run_id'] for _, plan, _ in plans if plan.get('run_id') is not None}
+    if not run_ids:
+        return
+    try:
+        with store._lock, store.connection:
+            for run_id in run_ids:
+                urls = set()
+                for _, plan, _ in plans:
+                    if plan.get('run_id') != run_id or plan['state'] not in ('READY', 'APPEND', 'APPEND_CLOSED'):
+                        continue
+                    for key in plan['source_keys']:
+                        row = store.get(*key)
+                        if row is not None and row['issue_url']:
+                            urls.add(row['issue_url'])
+                if len(urls) == 1:
+                    store.connection.execute('UPDATE classification_runs SET ticket_ref=? WHERE run_id=? AND ticket_ref IS NULL',
+                                             (urls.pop(), run_id))
+    except Exception:
+        logging.getLogger(__name__).warning('Decide ticket audit link unavailable', exc_info=True)
 
 
 def _resolve_reply_target(pipeline,message):
@@ -1774,7 +2078,19 @@ def _finish_comment_proven(pipeline, chat_id, message_id, number, comment_id):
         raise RulesHalt('comment outcome unresolved; Owner inspection required') from error
 
 
-def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,asset_proofs=None,evidence_plan=None,plan_origin=None):
+def _search_target_current(pipeline, proof):
+    observed = pipeline.github.lifecycle_snapshot(proof['number'])
+    return (observed.get('number') == proof['number']
+            and observed.get('repo', '').casefold() == pipeline.config.gh_repo.casefold()
+            and observed.get('state') == proof['state'] and bool(observed.get('observed_at')))
+
+
+def _related_lines(related, refs):
+    numbers = [related, *(ref['number'] for ref in refs)]
+    return [f'Related to #{number}' for number in dict.fromkeys(numbers) if type(number) is int and number > 0]
+
+
+def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,asset_proofs=None,evidence_plan=None,plan_origin=None,decide_plan=None):
     from .models import Decision
     from .pipeline import Plan
     from .followups import _enrichment_comment, _source_body
@@ -1782,10 +2098,19 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     from .ticket_templates import active
     if not proofs or len({p['number'] for p in proofs}) != 1: raise ValueError('invalid append target')
     proof=proofs[0]; number=proof['number']
-    authority=next(m for m in members if (m.chat_id,m.message_id)==(proof['chat_id'],proof['reply_message_id']))
-    current=_resolve_lifecycle_target(pipeline,authority,proof)
     expected_state = 'closed' if decision.state == 'APPEND_CLOSED' else 'open'
-    if current != proof or current['state'] != expected_state:
+    search = decide_plan is not None and len(proofs) == 1 and proof.get('basis') == 'search'
+    if search:
+        authority = min(members, key=lambda m: m.message_id)
+        try:
+            valid = expected_state == proof['state'] and _search_target_current(pipeline, proof)
+        except Exception:
+            valid = False
+    else:
+        authority=next(m for m in members if (m.chat_id,m.message_id)==(proof['chat_id'],proof['reply_message_id']))
+        current=_resolve_lifecycle_target(pipeline,authority,proof)
+        valid = current == proof and current['state'] == expected_state
+    if not valid:
         return Decision('pending_review','rule',case_key=topic,reason='lifecycle_lookup_failed')
     if pipeline.config.mode=='dry-run':
         result=Decision('chat','rule',case_key=topic,reason='dry_run_append')
@@ -1805,9 +2130,18 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
         body += ''.join('\n\n!['+alt+']('+url+')' for alt,url in found.images)
         body += ''.join('\n\n['+name+']('+url+')' for name,url in found.documents)
         body += ''.join('\n\n'+note for note in found.notes)
+    if decide_plan is not None:
+        body += ''.join('\n\n' + line for line in _related_lines(decide_plan.get('related'), decide_plan.get('refs', ())))
     for target_proof in proofs:
-        target_source=next(m for m in members if (m.chat_id,m.message_id)==(target_proof['chat_id'],target_proof['reply_message_id']))
-        if _resolve_lifecycle_target(pipeline,target_source,target_proof)!=target_proof:
+        if search:
+            try:
+                unchanged = _search_target_current(pipeline, target_proof)
+            except Exception:
+                unchanged = False
+        else:
+            target_source=next(m for m in members if (m.chat_id,m.message_id)==(target_proof['chat_id'],target_proof['reply_message_id']))
+            unchanged = _resolve_lifecycle_target(pipeline,target_source,target_proof) == target_proof
+        if not unchanged:
             from .rules_pending_store import RulesHalt
             raise RulesHalt('comment target changed after attachment processing; Owner inspection required')
     if evidence_plan is not None:
@@ -1818,8 +2152,16 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     if type(comment_id) is not int or comment_id<=0:
         _send_ops(pipeline,authority,topic,'error',active().render('group-replies.md','notice.comment_ambiguous'))
         return Decision('error','rule',case_key=topic,reason='comment_ambiguous')
-    target=pipeline.store.get(authority.chat_id,proof.get('recurrence_parent_source_id',proof.get('target_source_id',authority.reply_to_id)))
     expected=f'https://github.com/{pipeline.config.gh_repo}/issues/{number}'
+    if search:
+        with pipeline.store._lock:
+            target = pipeline.store.connection.execute('''SELECT case_key,group_key FROM messages
+                WHERE chat_id=? AND issue_number=? AND issue_url=? AND decision IN ('issue','followup')
+                ORDER BY message_id LIMIT 1''', (authority.chat_id, number, expected)).fetchone()
+        if target is None:
+            target = {'case_key': topic, 'group_key': topic}
+    else:
+        target=pipeline.store.get(authority.chat_id,proof.get('recurrence_parent_source_id',proof.get('target_source_id',authority.reply_to_id)))
     _map_append_proven(pipeline,members,number,expected,target)
     if not _send_ops(pipeline,authority,topic,'other',active().render('group-replies.md','followup.updated')+'\n'+expected):
         from .rules_pending_store import RulesHalt
@@ -1873,7 +2215,8 @@ def _ready_summary(intent, present):
     return text[:200]
 
 
-def _create_single(pipeline, source, topic, decision, evidence_messages=None, members=None, document_reads=()):
+def _create_single(pipeline, source, topic, decision, evidence_messages=None, members=None, document_reads=(), *, related=None, refs=()):
+    from dataclasses import replace
     from .models import Classification
     from .pipeline import Plan
     from . import group_notices
@@ -1886,6 +2229,19 @@ def _create_single(pipeline, source, topic, decision, evidence_messages=None, me
                 key_ids=tuple(m.message_id for m in members) if evidence_messages is None else (),
                 evidence_messages=tuple(evidence_messages) if evidence_messages is not None else None,
                 document_reads=tuple(document_reads),details=_ready_details(decision.present),rule_id=decision.rule)
+    lines = _related_lines(related, refs)
+    if lines:
+        # Add trusted references to the normal issue renderer's evidence notes
+        # without changing the shared renderer or the stored source messages.
+        from copy import copy
+        pipeline = copy(pipeline)
+        collect = pipeline._images
+
+        def collect_with_refs(*args, **kwargs):
+            found = collect(*args, **kwargs)
+            return replace(found, notes=[*found.notes, *lines])
+
+        pipeline._images = collect_with_refs
     sender = pipeline.notice_sender
     pipeline.notice_sender = None
     pipeline._rules_warning_sender = sender
@@ -1893,7 +2249,6 @@ def _create_single(pipeline, source, topic, decision, evidence_messages=None, me
     finally:
         pipeline.notice_sender = sender
         pipeline._rules_warning_sender = None
-    from dataclasses import replace
     result=replace(result,reaction_chat_id=source.chat_id,
                    reaction_targets=((source.chat_id,source.message_id),) if result.issue_number is not None else ())
     pipeline.store.close_case(case,result,0)
@@ -2506,14 +2861,18 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
     return results
 
 
-def _assistant_wait(pipeline, sources, topic):
+def _assistant_wait(pipeline, sources, topic, *, force=False):
     """Admission before reserving a foreground attempt; disabled flow is untouched."""
     runtime = getattr(pipeline, 'assistant_runtime', None)
-    if runtime is None or runtime.settings.mode != 'live': return None
-    status, due = runtime.waiting(sources, admit=False)
+    waiting = getattr(runtime, 'waiting', None)
+    if waiting is not None and getattr(getattr(runtime, 'settings', None), 'mode', None) == 'live':
+        status, due = waiting(sources, admit=False)
+    elif force:
+        status, due = None, False
+    else:
+        return None
     if status == 'ESCALATED': return _escalate(pipeline, sources[0], topic)
-    if status == 'DONE': return None  # Foreground reconciliation may have held a valid proposal.
-    if due: return None
+    if not force and (status == 'DONE' or due): return None
     from .models import Decision
     result = Decision('pending_review', 'rule', case_key=topic, reason='rules_hold')
     with pipeline.store._lock, pipeline.store.connection:

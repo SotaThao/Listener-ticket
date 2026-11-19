@@ -110,6 +110,7 @@ context_quiet_seconds = 30
 context_max_wait_seconds = 60
 
 [assistant]
+# pack_mode = "full" # "core" requires authority = "decide"
 # Retention for classification runs and their tool-call metadata only.
 retention_days = 90
 # Assistant is disabled when these keys are absent. Shadow records only; live replaces extraction.

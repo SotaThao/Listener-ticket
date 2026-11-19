@@ -12,7 +12,7 @@ Owner quy trình/data/state: **AlexChu**. Executor (Codex, Gemini/Antigravity, C
 
 ## Nguyên tắc nền (Owner, 2026-10-29)
 
-Mọi quyết định của bot phải dựa trên **file markdown cụ thể với trạng thái liệt kê cụ thể**, không dựa hoàn toàn vào model. Model chỉ trích dữ kiện; code áp quy tắc. Ba lớp file, mỗi lớp một việc:
+Mọi quyết định của bot phải dựa trên **file markdown cụ thể với trạng thái liệt kê cụ thể**. Với `authority = "propose"` (mặc định), model trích dữ kiện và code áp quy tắc. Thiết kế `authority = "decide"` yêu cầu `mode = "live"`. Code giữ bộ lọc đầu vào, trợ lý trả `decide/v1` cho phần còn lại, rồi code kiểm bằng chứng, quyền, mẫu phản hồi và thực thi. Xem [quy tắc nạp luật §5](rules/README.md#5-phần-nào-gửi-cho-model-phần-nào-không) để biết trạng thái triển khai. Ba lớp file, mỗi lớp một việc:
 
 | Thư mục | Quyết định gì | Bot đọc lúc chạy? |
 |---|---|---|
@@ -34,7 +34,7 @@ Tài liệu Worker Agent Fleet không còn trong repo này (repo chỉ chứa t�
 ## Khi phân loại và log ticket
 
 - **"Đủ rõ" — tạo ticket hay hỏi** (TG-07, TG-08, TG-09, TG-12): tra bảng, không tự suy diễn.
-  - Trạng thái được phép: [`rules/states.md`](rules/states.md) (`READY`, `APPEND`, `NEED_INFO`, `MEDIA_ONLY`, `CHAT`, `HOLD`).
+  - Trạng thái nền: [`rules/states.md`](rules/states.md) (`READY`, `APPEND`, `NEED_INFO`, `MEDIA_ONLY`, `CHAT`, `HOLD`). Bản [DRAFT](rules/drafts/decide-v1/states.md) ghi thêm các trạng thái mà executor hỗ trợ qua các luật mở rộng.
   - Dữ kiện cần có, khi nào một trường được tính là CÓ (V1–V4, chuẩn hóa N1–N5, cụm chung chung): [`rules/facts.md`](rules/facts.md).
   - Quyết định: bảng I1–I3 (intent, command thắng model) và R1–R13 (đọc từ trên xuống, dòng đầu khớp thắng) trong [`rules/readiness.md`](rules/readiness.md).
   - Hỏi gì khi thiếu: [`rules/questions.md`](rules/questions.md). Bot nói ở đâu: [`rules/channels.md`](rules/channels.md) — **group gốc chỉ có reaction**, mọi tin chữ của bot ở group xử lý chung.

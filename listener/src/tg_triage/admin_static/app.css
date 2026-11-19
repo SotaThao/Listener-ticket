@@ -63,6 +63,8 @@ main { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; height: c
 .num { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
        background: var(--link); color: var(--on-light); font-size: var(--t-xs); font-weight: 700; }
 .card .c { padding: var(--sp-3) var(--sp-4); }
+.round-title { font-size: 1rem; margin: var(--sp-4) 0 var(--sp-2); }
+.round .c { overflow-wrap: anywhere; }
 .msg { display: grid; grid-template-columns: 112px 1fr; gap: var(--sp-3); padding: var(--sp-1) 0; }
 .msg .who { color: var(--fg-muted); font-size: var(--t-xs); padding-top: 2px; }
 .img { display: inline-flex; gap: var(--sp-1); margin-left: var(--sp-1); padding: 2px var(--sp-2);

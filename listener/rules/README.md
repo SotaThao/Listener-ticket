@@ -88,6 +88,8 @@ K1–K10 đã có trong `test_rules_markdown`; K11 kiểm khi có code nạp con
 
 ## 5. Phần nào gửi cho model, phần nào không
 
+**`authority = "propose"` (mặc định).** Bảng dưới áp dụng cho prompt trích dữ kiện. Trợ lý propose có thể đọc pack ACTIVE để đề xuất dữ kiện, rồi code áp luật và chốt trạng thái.
+
 | Gửi cho model | Không bao giờ gửi cho model |
 |---|---|
 | `facts.md`: bảng `fields` và mục "Cách model ghi giá trị" (để model biết trích gì, khi nào để trống) | `states.md`, `readiness.md`, `questions.md`, `channels.md`, `roles.md`, `preflight.md` |
@@ -96,6 +98,12 @@ K1–K10 đã có trong `test_rules_markdown`; K11 kiểm khi có code nạp con
 - Lý do: model không được biết bảng quyết định hay danh sách chung chung, để không "điền dữ kiện cho khớp kết quả" và để quyết định không đổi khi đổi model.
 - Bot **sinh schema JSON** trả về của model từ bảng `fields` (đúng tên trường, đúng kiểu, mỗi trường có `source_ids`). Trường thừa ⇒ bỏ; trường thiếu ⇒ trống; `source_ids` không thuộc chủ đề ⇒ trường trống (V2).
 - Prompt model (`listener/prompts/`) chỉ chứa hướng dẫn trích dữ kiện chung; định nghĩa trường lấy từ `facts.md` lúc nạp, không chép tay vào prompt.
+
+**`authority = "decide"` (thiết kế #3018, yêu cầu `mode = "live"`).** Code chạy bộ lọc đầu vào trước. Với batch còn lại, trợ lý đọc pack luật và kết quả công cụ chỉ đọc, rồi trả trạng thái, mã luật, nguồn cho các trường ticket và mã khối phản hồi theo `decide/v1`. Code kiểm schema, bằng chứng, quyền và thực thi.
+
+T1 cung cấp contract và cấu hình. [Nguyên tắc và pack bản thảo](../assistant/drafts/decide-v1/principles.md) dùng các luật ACTIVE làm nguồn. [Trạng thái v6](drafts/decide-v1/states.md) và [dữ kiện v8](drafts/decide-v1/facts.md) chờ Owner duyệt theo §8. Thư mục bản thảo nằm ngoài đường nạp runtime để giữ nguyên fingerprint của các plan và log propose.
+
+Kiểm lại pack bản thảo từ repo root bằng `python scripts/build-assistant-pack.py --check --principles listener/assistant/drafts/decide-v1/principles.md --out listener/assistant/drafts/decide-v1/assistant-triage.md`.
 
 ## 6. Code dùng các file thế nào (bước 3 của luồng)
 

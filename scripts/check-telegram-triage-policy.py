@@ -8,6 +8,22 @@ import sys
 
 POLICY = 'Docs/01-product/telegram-triage-noissue_business_261015_v1.0.0.md'
 MARKER = 'telegram-triage-trace'
+DECIDE_VERIFICATION = (
+    'listener/assistant/assistant-core.json',
+    'listener/tests/test_admin_decide.py',
+    'listener/tests/test_assistant_contract.py',
+    'listener/tests/test_assistant_decide_turn.py',
+    'listener/tests/test_assistant_pack_format.py',
+    'listener/tests/test_assistant_pack_runtime.py',
+    'listener/tests/test_assistant_tools.py',
+    'listener/tests/test_classification_log_decide.py',
+    'listener/tests/test_eval_assistant_p8.py',
+    'listener/tests/test_rules_intake_decide.py',
+    'scripts/eval-assistant-p8.py',
+    'scripts/build-assistant-pack.py',
+    'scripts/probe-prompt-cache.py',
+    'scripts/replay-assistant-decide.py',
+)
 
 class PolicyError(ValueError):
     pass
@@ -34,6 +50,17 @@ def symbols(path):
 
 def normalized_hash(path):
     return hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+
+def inventory_paths(root):
+    paths = set(DECIDE_VERIFICATION)
+    for folder, pattern in (
+        ('listener/src/tg_triage', '*.py'),
+        ('listener/src/tg_triage/admin_static', '**/*'),
+        ('listener/prompts', '*.md'),
+        ('listener/templates', '**/*.md'),
+    ):
+        paths.update(p.relative_to(root).as_posix() for p in (root / folder).glob(pattern) if p.is_file())
+    return sorted(paths)
 
 def check(root, policy=POLICY):
     root = Path(root).resolve()
@@ -75,11 +102,7 @@ def check(root, policy=POLICY):
         for prompt in rule.get('prompts', []):
             local_path(root, prompt)
     inventory = trace.get('runtime_inventory', {})
-    actual = {str(p.relative_to(root)).replace('\\', '/') for p in (root/'listener/src/tg_triage').glob('*.py')}
-    actual |= {p.relative_to(root).as_posix() for p in (root/'listener/src/tg_triage/admin_static').rglob('*') if p.is_file()}
-    actual |= {str(p.relative_to(root)).replace('\\', '/') for p in (root/'listener/prompts').glob('*.md')}
-    actual |= {str(p.relative_to(root)).replace('\\', '/') for p in (root/'listener/templates').rglob('*.md')}
-    if set(inventory) != actual:
+    if set(inventory) != set(inventory_paths(root)):
         raise PolicyError('REVIEW_REQUIRED runtime inventory changed')
     for path, digest in inventory.items():
         if normalized_hash(local_path(root, path)) != digest:

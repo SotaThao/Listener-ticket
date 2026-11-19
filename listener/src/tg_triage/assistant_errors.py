@@ -11,3 +11,9 @@ class ToolDenied(ToolError):
 
 class ToolUnavailable(ToolError):
     """The tool cannot run right now (no token configured, network/API error)."""
+
+
+class RuleNotFound(ToolDenied):
+    def __init__(self, suggestions):
+        super().__init__("Unknown rule id")
+        self.suggestions = suggestions

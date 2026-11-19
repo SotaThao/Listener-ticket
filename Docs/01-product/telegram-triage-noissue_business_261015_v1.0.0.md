@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.46 · **Updated**: 2026-11-19 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
+**Version**: v1.16.47 · **Updated**: 2026-11-19 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -445,6 +445,8 @@ Trạng thái closed hoặc một câu "đã xử lý" không tự chứng minh 
 
 Owner chốt: mọi quyết định của bot dựa trên file markdown trong [`listener/rules/`](../../listener/rules/README.md) với trạng thái liệt kê cụ thể; model chỉ trích dữ kiện, code áp quy tắc. Sáu file quyết định đã `ACTIVE` theo Owner ngày 2026-10-30; `lifecycle.md` và `analysis-status.md` ACTIVE v2 theo duyệt ngày 2026-11-03; `roles.md` và `preflight.md` vẫn `DRAFT`. Các rule TG ở trên mô tả hành vi mặc định khi chưa bật rules. Đặc tả: [rules-spec](../04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md).
 
+Từ v1.16.47, chế độ mặc định `authority = "propose"` giữ cách trích dữ kiện và áp quy tắc trên. Khi bật `authority = "decide"` trong chế độ live, code vẫn áp bộ lọc đầu vào và ghi lý do. Trợ lý quyết định phần còn lại. Code kiểm bằng chứng, dữ kiện bắt buộc, đích ghi và mẫu phản hồi trước khi thực thi. Câu trả lời cho tin hỏi của bot tiếp tục theo luồng hiện hành.
+
 Worktree bổ sung đường opt-in `thinking.decision_rules_enabled`: mặc định tắt nên hành vi đang chạy và các đường ANALYZE/STATUS cũ không đổi. Đường mới giữ intake theo sáu trạng thái, câu hỏi thông tin/chat là `CHAT`, cùng extension lifecycle và ANALYZE/STATUS đã duyệt; cần bộ rules ACTIVE và group ops riêng. Reply ticket đã đóng theo bảng vòng đời, chứng cứ host và reservation; không tự reopen. PDF/Office chưa đọc vẫn có thể đính kèm nếu caption tự đủ dữ kiện; yêu cầu phụ thuộc nội dung chưa đọc hoặc trích text lỗi/vượt budget được giữ lại. Tin mới ngoài batch chỉ nối pending cũ khi có Reply thật, không dựa similarity/thời gian. Owner đã duyệt tám câu chữ ops và chuyển sáu rules sang ACTIVE; bot vẫn tắt và chưa có GO. Tiến độ test giả lập và review được báo riêng, không suy từ fingerprint.
 
 Owner 2026-11-04 duyệt mọi tin chữ của rules mode vào ops, group nguồn chỉ nhận reaction; ANALYZE và STATUS nhận ❤️. Câu hỏi lifecycle và STATUS thiếu target được trả lời bằng Reply vào tin hỏi trong ops; L1 chạy lại readiness chỉ cho NEED_INFO. Nếu tin nguồn không có link, header ghi `Tin gốc: (group thường, không có link) · mã tin <message_id>`. Code ở rules mode chặn mọi tin chữ tới chat khác ops (guard `Pipeline.notice_sender`). Bản phát hành `7ba210b`: 1670 test OK (skipped=2), review độc lập read-only APPROVED vòng 2.
@@ -702,6 +704,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/rules_intake.py",
           "symbol": "_complete_source_followup"
+        },
+        {
+          "path": "listener/src/tg_triage/classification_log.py",
+          "symbol": "find_thread"
         }
       ],
       "tests": [
@@ -816,6 +822,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_source_followup.py",
           "symbol": "SourceFollowupTests.test_no_followup_gate_and_ambiguity_match_head_for_all_batch_states"
+        },
+        {
+          "path": "listener/tests/test_rules_intake_decide.py",
+          "symbol": "RealDecideIntakeTests.test_reply_after_30_minutes_and_search_append_join_real_thread"
         }
       ],
       "prompts": [
@@ -993,6 +1003,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/decision_rules.py",
           "symbol": "RulesSnapshot.evaluate"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_contract.py",
+          "symbol": "parse"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_core.py",
+          "symbol": "build_core"
         }
       ],
       "tests": [
@@ -1011,6 +1029,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_decision_rules.py",
           "symbol": "DecisionRulesTest.test_command_overrides_model_and_confidence_does_not_decide"
+        },
+        {
+          "path": "listener/tests/test_rules_intake_decide.py",
+          "symbol": "RealDecideIntakeTests.test_search_duplicate_below_threshold_creates_related_ticket"
+        },
+        {
+          "path": "listener/tests/test_assistant_decide_turn.py",
+          "symbol": "AssistantDecideTurnTests.test_core_prefix_stable_across_batches_repair_and_links_and_audits_lookup"
         }
       ]
     },
@@ -1595,6 +1621,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_source_followup.py",
           "symbol": "SourceFollowupTests.test_unseen_bare_image_does_not_link_or_call_model"
+        },
+        {
+          "path": "listener/tests/test_rules_intake_decide.py",
+          "symbol": "RealDecideIntakeTests.test_intake_passes_images_documents_and_read_context_to_both_links"
         }
       ]
     },
@@ -1667,6 +1697,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/assistant_errors.py",
           "symbol": "ToolDenied"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_contract.py",
+          "symbol": "guard_target"
         }
       ],
       "tests": [
@@ -1685,6 +1719,14 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_assistant_tools.py",
           "symbol": "ToolBoxTests.test_prompt_injection_end_to_end_keeps_scope_and_budget"
+        },
+        {
+          "path": "listener/tests/test_rules_intake_decide.py",
+          "symbol": "RealDecideIntakeTests.test_unproven_search_holds_with_real_guard_name"
+        },
+        {
+          "path": "listener/tests/test_assistant_decide_turn.py",
+          "symbol": "AssistantDecideTurnTests.test_other_repo_number_and_collision_cannot_prove_append_or_refs"
         }
       ]
     },
@@ -2071,6 +2113,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/src/tg_triage/rules_pending_store.py",
           "symbol": "_recoverable_batch_groups"
+        },
+        {
+          "path": "listener/src/tg_triage/assistant_contract.py",
+          "symbol": "guard_provenance"
         }
       ],
       "tests": [
@@ -2113,6 +2159,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_rules_bootstrap.py",
           "symbol": "RulesBootstrapTests.test_startup_halt_checks_reserved_comment_before_any_recovery"
+        },
+        {
+          "path": "listener/tests/test_rules_intake_decide.py",
+          "symbol": "RealDecideIntakeTests.test_phase_one_provenance_holds_whole_batch_including_ready_sibling"
         }
       ]
     },
@@ -2653,6 +2703,10 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
         {
           "path": "listener/tests/test_admin_static.py",
           "symbol": "AdminStaticTests.test_files_exist_in_listener_package"
+        },
+        {
+          "path": "listener/tests/test_admin_decide.py",
+          "symbol": "AdminDecideTests.test_sixty_round_thread_shows_latest_fifty_and_list_stays_paged"
         }
       ]
     },
@@ -2721,6 +2775,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     }
   ],
   "runtime_inventory": {
+    "listener/assistant/assistant-core.json": "5d1dab329a1d15a0a0c31d5ab4ab77094057f5492695ded81b950e140c156afa",
     "listener/prompts/autonomous.md": "9c1f0738ca44265bce8c601dc04694a064d77f2b4ce8d85dd709d97b4b188b22",
     "listener/prompts/case.md": "2a5f671cd9a9dbfb1316497dc6dfcd07c404a5abd038411bc66b4ccc9e6f190b",
     "listener/prompts/classify.md": "1af9f58ef64737dfe47e480dd47c047d8c682d7c8b0c573d98fb13cfd469d249",
@@ -2728,27 +2783,29 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/prompts/thinking-topics.md": "f3295f8cdf8d3707d8844ffe61c2eeca0efc1763a0f9879c86b375c1a8b15a58",
     "listener/prompts/topics.md": "99dca8ee4272cca18bb283d489b709542661694639aad6ec720d63c7a2b47dc8",
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
-    "listener/src/tg_triage/__main__.py": "d5d6c1a0a55655fa2764899bb904eba7ba06206caedb8694c0497336873aeb32",
-    "listener/src/tg_triage/admin.py": "130a39d98a28192f5d490251e9533cf7a264c1d36b18c9ab8a840010d3827eeb",
-    "listener/src/tg_triage/admin_static/app.css": "75e5fc73e440789fa71b163add4c28f43ff84323546e9dbb246d5ec4f3242961",
-    "listener/src/tg_triage/admin_static/app.js": "51bedd68ef9860d397abb4c5465101c744a40e59ba317e696cf9167e488a0db1",
-    "listener/src/tg_triage/admin_static/index.html": "3d51bec7499f07ec41e7df39678e8adfd0a2b62abf950f286448b4ad7e6dd9de",
+    "listener/src/tg_triage/__main__.py": "62decae7f45233c889af0e3f281901c341cb9642d92c45b5b6af679f7c0ce562",
+    "listener/src/tg_triage/admin.py": "ef88db2d7b4836b47e70c84c1800e4c20f8a13177aa699f8ffb46642ffa97374",
+    "listener/src/tg_triage/admin_static/app.css": "0fa019e91400ff3ddc0b84010c95a71083ce0c2fff45bb729302ad13074a175f",
+    "listener/src/tg_triage/admin_static/app.js": "da25f260d6a5e4d3ad65cf19bc28d2aeb580c59f4679c5ec670e7ac0cfea2eae",
+    "listener/src/tg_triage/admin_static/index.html": "ab10d38cce419b819a46b1b2d9e2a0547b39561df3ebe1a8e7c5fffdd008a0c0",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
     "listener/src/tg_triage/analysis_task.py": "f91cf1e28732c6a585eca133000065bb9c21fecb50354046ea02c791ed3def3c",
-    "listener/src/tg_triage/assistant.py": "814073878bbd22d5effe8d545f14c400a0089544ff460737735f56e601a827c5",
-    "listener/src/tg_triage/assistant_errors.py": "1b7ca1a59b71c55cd8b41754435328a04686fc9e8cde74c302c60cfdaf2fa732",
-    "listener/src/tg_triage/assistant_extractor.py": "fe633c25dc2f150e6f213d49a39c0ee339ccbb7ff963f89215a75703925f08a3",
+    "listener/src/tg_triage/assistant.py": "876061010645021a602a5af1729d3d2c47ba0b56a8c9390a6449cf1f3aa5298e",
+    "listener/src/tg_triage/assistant_contract.py": "be13bdf290f9570f82391cae4a70a8de5200f36c81e89e6f4f32a0a0ec1ba45f",
+    "listener/src/tg_triage/assistant_core.py": "58f991132b7652445e075a224f5f64f3bad73af243a0ff028838e15065af9b69",
+    "listener/src/tg_triage/assistant_errors.py": "3e0f18bc83d6136cf3ec9700fbfd1ac56854b72577c41317c19929e97d6eefd3",
+    "listener/src/tg_triage/assistant_extractor.py": "07137b030bf1d71e96d4b703da553da0ef84609f8adaa040be154efe9d7b8bc2",
     "listener/src/tg_triage/assistant_github.py": "9f1e25a83d12229360d6cd5e8f6c7ad50d8647df83367dc21416de7a9972ec35",
-    "listener/src/tg_triage/assistant_local.py": "a37ad5275488cfd1d35a6aeabfa8b3a3dba94d68a28542cd5b4706f48d0e3a79",
+    "listener/src/tg_triage/assistant_local.py": "48f970ad1bb407388c1fa1f031492f4c5b1efb2bc804f5b41c99cc8613b0c011",
     "listener/src/tg_triage/assistant_loop.py": "598291851c72e956e83045dc847956011fb2fee0ee98ffe7ad029669378cfa35",
-    "listener/src/tg_triage/assistant_pack.py": "7fc8fad40b131a0364e9e92c2c1452aa2a748ebcff7744bf06e9048954ec1c9c",
-    "listener/src/tg_triage/assistant_tools.py": "0732abf7344a98510bdc9573db90b241f48712c9fe05de6a6dd526b3bc0d65dc",
+    "listener/src/tg_triage/assistant_pack.py": "8e3267b3ced47e676312666d95ac4059c17a3664b29a8f8e5ade66cfbe43ea67",
+    "listener/src/tg_triage/assistant_tools.py": "07c884019f11f082b5039d4967b0ba6c0044ddef02a835570f06de5acc85bd72",
     "listener/src/tg_triage/attachments.py": "53a94fb982339aa8aba247ba763583bdc0436a73dae618c2942c61b4e7af55b6",
     "listener/src/tg_triage/autonomous.py": "7688848460e8ae91e3ce26caaf084fe6409584bf285009b8e753cdfea46832c3",
     "listener/src/tg_triage/autonomy_store.py": "3ef24df0f53891152dfffd004c8901d43261343781a1282521064f320d1b483a",
-    "listener/src/tg_triage/classification_log.py": "c2e8302f1707dfba680aff777aa3737a93a1b7ef12e5bcabe3c091a4a936213d",
+    "listener/src/tg_triage/classification_log.py": "c8fb0dc4271dfe37d277aed84c4bd817d6a1679e43423448037ea5ac66a1c714",
     "listener/src/tg_triage/classifier.py": "9551c55253041bf6bc66310262542bf183381e5b2ad2043c6b77f54f6201d5bc",
-    "listener/src/tg_triage/config.py": "7bd53c0c93f3fe0f723efedf64c4751e001b217b87a1188952eeb1f0db9db1af",
+    "listener/src/tg_triage/config.py": "df4f7b25a862bc12ac80998a91af3f250322317a6e8b98344a7b0d4628b86aa7",
     "listener/src/tg_triage/decision_rules.py": "581bc1f97c0408054ab9687796962df5204cc491738bb9b37fc6cf78d5510367",
     "listener/src/tg_triage/document_processing.py": "c2ee264bacb8145116156305cfafef22472ec72f0ad9a4bbb309153c76599abe",
     "listener/src/tg_triage/document_reader.py": "e24ccde2c8402ff6e62292f0eb0241a9baa3df3b2a4dffef0f465d253eecd3c8",
@@ -2766,16 +2823,16 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/models.py": "4f5eccde0c4b989e7ae8fac637a3a1ee29c38b523c6b289c32a592b6dd672f79",
     "listener/src/tg_triage/offline_snapshot.py": "07589cfcb814048842bce602aeb5d1bd5e48705bd8ad1bafa0c79fb653b2909e",
     "listener/src/tg_triage/pacing.py": "6d104e30d9b51883dfb27d56ad107089e93a42e88c085ae72e03c0f06af0793e",
-    "listener/src/tg_triage/pipeline.py": "15c4f2846deb614d0a3e4f08c45c3c6b69b57591211a3883e743455fdc6ceee8",
+    "listener/src/tg_triage/pipeline.py": "201c0383271254c9be1089f37cec4b7abf484e61a00ce66b9fbcac73bca9b540",
     "listener/src/tg_triage/provider.py": "9e019d81ed79efc09d7206771ed56559a10f2d4b4b91c5a99ac4b470ca6f0f57",
     "listener/src/tg_triage/reactions.py": "eb5e1f13db0127412239cdc0275bc4ffbc90f287eb87c060124328a0dcc53e71",
-    "listener/src/tg_triage/router_transport.py": "d306de48ca4d39d47f427bd279443e8cb7676c45e597877234a48cba401f15b2",
+    "listener/src/tg_triage/router_transport.py": "16a50a2d316fcdaca874ea796c475aae15fb80bdd5f444d416f4e605a29eb510",
     "listener/src/tg_triage/rules.py": "93778eef5df2abe88ae4424179ec509595cd6dcf14d5d94ddb70d5852454bccd",
     "listener/src/tg_triage/rules_analysis.py": "b66303c8aaf7266f1b8173c02387c8efbbe4596248c775cc08e728c36b16b1b1",
     "listener/src/tg_triage/rules_extensions.py": "a8c0753ad5b1fe54cc38694d9d5f831e95bf0c7e2281078f7252e278de955c91",
     "listener/src/tg_triage/rules_extraction.py": "f0d374c6e2f95da2e046a2adb2b90d749e4adb480ccceb288b26087657b2d419",
-    "listener/src/tg_triage/rules_intake.py": "b2eba0ef2a8756e63a01e10c84e94011edd1ac5339c9d5862bb54a726e338e08",
-    "listener/src/tg_triage/rules_pending_store.py": "34ed681f62c951e8a742a5489dd12d23122032b955f5b29e2dd7cdd1056f0ccc",
+    "listener/src/tg_triage/rules_intake.py": "279bde7f03bf4f61f5d3c46fb088910efd98792a7dca75ce82bcf8d600544cc1",
+    "listener/src/tg_triage/rules_pending_store.py": "084dc6ffad1a376758e2fdc960b07b2fe9673b88713adb18e40fa2ca7cf88bc6",
     "listener/src/tg_triage/runtime.py": "c1e922a4246c2fffbce4c5634a7695a471c74f86aa860ca074b7fefb7f18f649",
     "listener/src/tg_triage/store.py": "80bf2d7eda7011f2c26562da4740c9e91c3af696625d59d86a2c70fbab3ad783",
     "listener/src/tg_triage/telegram_io.py": "e17c6b37da0b49cda37f7be51a286b2b49df7a12bd8a96f6d3afb4c2e8142539",
@@ -2792,7 +2849,20 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/templates/github-ticket/feedback.md": "97082da5b8503b743d2b3df18502498c05a65d9975621eef2dad812e67565dbc",
     "listener/templates/github-ticket/group-replies.md": "456e766494ce45b8d508e662c48c6eff2c4e34853163d2fc7867f09f55ea9397",
     "listener/templates/github-ticket/needs-human.md": "e128286f7416d26b0217680d1b9ee2d0e528b513998f0409ed6aa02e61897c26",
-    "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056"
+    "listener/templates/github-ticket/task.md": "c141ad2e985e28a85944e67ecec7b19746ae8b75ffcedfa1cf53217e5e4db056",
+    "listener/tests/test_admin_decide.py": "790d8f637340f215cc744b3b9987a7ec17d1343a09ef8deb809fa17a37111438",
+    "listener/tests/test_assistant_contract.py": "08668ca1eaef40f46af6395d91b3eac588ec8b565f6c1743c8b74045dd09d727",
+    "listener/tests/test_assistant_decide_turn.py": "b89cf39c447af47bab2a81bc31e36ebf1d175d2ed450ef355eb08fbe8ebaca03",
+    "listener/tests/test_assistant_pack_format.py": "8ca88a76f17c22fb583fb2964ce73ebadaaf7058d4756538ec3139e951fa3bfb",
+    "listener/tests/test_assistant_pack_runtime.py": "baa7e08fca9dc0f59ae3486af7ac1c1b432dd98308ed0a2b501b60b2d3e7c71b",
+    "listener/tests/test_assistant_tools.py": "e10f62c8683b4f56df1647e77f4bac88fa40715effbc1b64806af94345b86621",
+    "listener/tests/test_classification_log_decide.py": "d3c6201173842f30eaea0bb3df61e6cef8d6488f802111da2d84e688874cef00",
+    "listener/tests/test_eval_assistant_p8.py": "90708f37ec8e6835bfc88429ba17ac054046f30630152667dfd664d395395ab3",
+    "listener/tests/test_rules_intake_decide.py": "2c4a26ff82782c24abc9a8bf8943956658aa5bc395f8981e4675bce1fcb8fcf7",
+    "scripts/build-assistant-pack.py": "afed17a4a3b1c897921c5c58b6d9cd3c457cc38116acdbe33f38436ed75b1c67",
+    "scripts/eval-assistant-p8.py": "7e6d34a514fcd607195fe54495b202d9a441bfdda552d963ba09d6374a80969a",
+    "scripts/probe-prompt-cache.py": "6982724f23843a632ccf1b416c0fb55f1a74aa7100a3fd35d60b960b63b6259c",
+    "scripts/replay-assistant-decide.py": "98ab40274b3ca7447520b28385763b929615cdde3cbea12998d1157ce43359c7"
   },
   "legacy_documents": [],
   "related_documents": [
@@ -2864,6 +2934,7 @@ flowchart TD
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.47 | 2026-11-19 | Codex / owner AlexChu | #3018 (#3019–#3022). Quyền quyết định của trợ lý (`authority = "decide"`) mặc định tắt và chỉ bật trong chế độ live. Bộ lọc đầu vào vẫn do code quyết định và lưu vết từng phép kiểm. Mỗi gói tin có một dòng nhật ký phân loại, các lượt liên quan nối thành một mục nhật ký. Trang quản trị hiện tối đa 50 lượt gần nhất trong mỗi mục. Code kiểm dữ kiện, nguồn và quyền trước khi thực thi. Lỗi kiểm tra không sửa được giữ ở HOLD kèm mã lý do. Gemini, GPT và DeepSeek dùng cùng gói luật và công cụ chỉ đọc. Gói có ảnh đi qua Gemini hoặc GPT. Ticket tìm thấy qua tra cứu chỉ được bổ sung (APPEND) khi đúng kho, đúng trạng thái, có bằng chứng trong lượt và đủ chắc chắn là trùng. Khi chưa đủ chắc, hệ thống xử lý theo dữ kiện và ghi `Related to #N` trong nội dung ticket mới hoặc phần bổ sung vào ticket đã xác minh qua Reply. Ở giai đoạn 1, yêu cầu ANALYZE, RELATED, LIFECYCLE_QUESTION hoặc APPEND_CLOSED từ trợ lý giữ toàn bộ gói ở HOLD với mã `guard_provenance` trước khi thực thi bất kỳ nhóm nào. STATUS vẫn gửi một thông báo chỉ đọc vào nhóm ops. Quyết định của Owner ngày 2026-11-19 cho phép dùng ticket đã đọc bằng `get_ticket` hoặc tìm qua tra cứu trong cùng lượt làm bằng chứng cho APPEND. Code bỏ tham chiếu thiếu bằng chứng cùng kho và ghi lý do. Số xuất hiện ở nhiều kho hoặc chỉ xuất hiện ngoài kho cấu hình không chứng minh được APPEND hay tham chiếu. #3028 bổ sung `pack_mode = "core"` cho chế độ decide, mặc định dùng `"full"`. Trợ lý nhận phần cốt lõi và chỉ mục mỗi lượt, dùng công cụ chỉ đọc `get_rule` để tra chi tiết và ví dụ khi cần. Mỗi mục tra tối đa 8 KiB UTF-8 và được ghi nhật ký công cụ. Phần cốt lõi và tài liệu tra cứu dùng chung một fingerprint. Owner chỉ bật core khi replay cho thấy giảm ít nhất 50% token đầu vào và mức khớp trạng thái, quyết định tạo ticket và mẫu không giảm. Các bản thảo luật và gói lời nhắc chờ Owner duyệt. |
 | v1.16.46 | 2026-11-19 11:15 | Codex / owner AlexChu | #2999 (#3000–#3002): Trang quản trị chỉ đọc theo dõi theo thời gian thực đầu vào, thinking và công cụ, đề xuất của trợ lý và quyết định của code. Lưu thinking và đầu ra của từng lần gọi mô hình cùng kết quả công cụ theo thời hạn lưu giữ. Dịch vụ quản trị chạy riêng, chỉ truy cập qua Tailscale và yêu cầu đăng nhập. Bot giữ nguyên hành vi khi chưa cấu hình dịch vụ quản trị. Với 10 lần gọi mô hình (tối đa 3 × 64 KiB/lần) và 8 lượt dùng công cụ (tối đa 80 KiB/lượt), dữ liệu chi tiết có thể chiếm khoảng 2,6 MB mỗi lượt phân loại. Hai tuyến mô hình có giới hạn riêng và có thể thêm một lần gọi dự phòng, nên trần bảo thủ cho dữ liệu chi tiết là khoảng 4,8 MB, chưa tính chi phí lưu trữ SQLite. Mặc định giữ 90 ngày. Theo dõi dung lượng cơ sở dữ liệu sau triển khai. |
 | v1.16.45 | 2026-11-18 | Codex / owner AlexChu | #2917: nối trợ lý có công cụ vào bước trích dữ kiện qua 9router cục bộ: Gemini flash-medium → GPT (dùng lại kết quả tra cứu) → DeepSeek một lượt không công cụ; gói có ảnh không bao giờ sang DeepSeek. Code vẫn quyết định trạng thái và mẫu. Mặc định tắt: config hiện tại chạy y hệt bản trước. Chế độ shadow chỉ ghi classification_runs/tool_calls, không ghi GitHub, không gửi Telegram, không đổi trạng thái; live chỉ bật khi `mode = "live"` và có key. Mỗi lượt tối đa 8 lần tra cứu, hạn 180 giây; một lượt chạy một lúc, tối đa 20 lần gọi/phút, hàng đợi 200, sau sự cố nhả 1 gói/20 giây. Lỗi hạ tầng không trừ lượt thử, chờ tối đa 24 giờ; lỗi model trừ lượt, 3 lần thì leo thang. Key router đọc từ file, không bao giờ in. P8 qua 9router thật: 27/27, cả 27 ca do Gemini trả lời. Chưa deploy. |
 | v1.16.44 | 2026-11-18 | Codex / owner AlexChu | #2916: bảy công cụ tra cứu chỉ đọc; giới hạn kho/chat/lô ảnh, tối đa 40 tin, nội dung ticket 4 KB và 8 lần gọi. Kết quả bọc dữ liệu chưa tin cậy, không làm theo chỉ dẫn trong tin/ticket; ghi classification_tool_calls kể cả lần bị từ chối, lỗi ghi không chặn tra cứu. Token GitHub tùy chọn, không công bố bí mật; thêm cấu hình và kiểm thử phạm vi, giới hạn, prompt injection, lỗi lưu trữ. Cập nhật trace/hash bốn module mới và config. Chưa nối vào phân loại (#2917), chưa deploy. |

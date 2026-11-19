@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tg_triage import decision_rules, rules_extensions
+from tg_triage.assistant_core import REFERENCE_FILES, build_core
 from tg_triage.assistant_pack import (
     AssistantPackError, PACK_FILE, PRINCIPLES_FILE, SOURCES, load, parse, render,
 )
@@ -17,6 +18,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class AssistantPackFormatTests(unittest.TestCase):
+    def test_core_identity_covers_reference_content_and_preserves_full_fingerprint(self):
+        listener = ROOT / 'listener'
+        rules = listener / 'rules'
+        pack = load(listener / 'assistant', rules, pack_mode='core')
+        extras = {name: (rules / name).read_text(encoding='utf-8') for name in REFERENCE_FILES}
+        self.assertEqual(build_core(pack, extras), pack.core)
+        for name in REFERENCE_FILES:
+            with self.subTest(source=name):
+                changed = build_core(pack, extras | {name: extras[name] + '\n<!-- metadata change -->\n'})
+                self.assertNotEqual(changed.fingerprint, pack.core.fingerprint)
+        self.assertEqual(pack.fingerprint, load(listener / 'assistant', rules).fingerprint)
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

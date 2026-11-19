@@ -106,6 +106,7 @@ class AssistantPackRuntimeTests(unittest.TestCase):
         assistant = json.loads(out)['assistant']
         self.assertEqual(assistant['retention_days'], self.settings.assistant.retention_days)
         self.assertEqual(assistant['pack_fingerprint'], self.fingerprint)
+        self.assertEqual(assistant['pack_mode'], 'full')
         self.assertFalse(assistant['enabled'])
         self.assertEqual(assistant['mode'], 'shadow')
         self.assertEqual(assistant['models'], ['ag/gemini-3.8-flash-medium', 'cx/gpt-6.1-sol'])
@@ -130,6 +131,24 @@ class AssistantPackRuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(out)['assistant']['pack_fingerprint'], self.fingerprint)
         (installed / 'assistant' / assistant_pack.PACK_FILE).unlink()
         self.assert_rules_failure('cannot read UTF-8 file')
+
+    def test_core_check_config_and_installed_bundle_with_no_reference_source_files(self):
+        settings = replace(self.settings, assistant=replace(self.settings.assistant, enabled=True,
+                            mode='live', authority='decide', pack_mode='core', router_key='fake'))
+        core = _load_assistant_pack(pack_mode='core').core
+        installed = self.root / 'prefix/share/tg-triage'
+        installed.parent.mkdir(parents=True)
+        self.source.rename(installed)
+        for name in ('README.md', 'preflight.md'):
+            (installed / 'rules' / name).unlink()
+        with patch('tg_triage.__main__.load_config', return_value=settings):
+            code, out, err = self.cli('check-config')
+            self.assertEqual(code, 0, err)
+            assistant = json.loads(out)['assistant']
+            self.assertEqual((assistant['pack_mode'], assistant['pack_fingerprint'],
+                              assistant['core_pack_fingerprint']), ('core', self.fingerprint, core.fingerprint))
+            (installed / 'assistant' / assistant_pack.CORE_FILE).write_text('{}', encoding='utf-8')
+            self.assert_rules_failure('invalid assistant core bundle')
 
     def test_all_classification_phases_record_pack_version_or_null(self):
         snapshot = _load_decision_rules()
@@ -166,7 +185,8 @@ class AssistantPackRuntimeTests(unittest.TestCase):
         with zipfile.ZipFile(wheel_path) as wheel:
             resources = {name.rsplit('/', 1)[-1]: name for name in wheel.namelist()
                          if '/share/tg-triage/assistant/' in name}
-            self.assertEqual(set(resources), {assistant_pack.PRINCIPLES_FILE, assistant_pack.PACK_FILE})
+            self.assertEqual(set(resources), {assistant_pack.PRINCIPLES_FILE, assistant_pack.PACK_FILE,
+                                              assistant_pack.CORE_FILE})
             self.assertIn('tg_triage/assistant_pack.py', wheel.namelist())
             for name, entry in resources.items():
                 self.assertEqual(wheel.read(entry), (ROOT / 'assistant' / name).read_bytes())
