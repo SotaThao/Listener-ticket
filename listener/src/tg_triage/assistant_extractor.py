@@ -380,7 +380,7 @@ class AssistantExtractor:
                 self.store.connection.execute('''UPDATE rules_topics SET attempts=max(0,attempts-1),
                     attempt_reserved=0 WHERE topic_id=? AND attempt_reserved=1''', (turn.root_key,))
 
-    def _deepseek(self, job, deadline, usage):
+    def _deepseek(self, job, deadline, usage, start_call):
         """Bind the zero-arg callback to ONE bounded hosted request; never Ollama."""
         c = self.config.model
         if c.provider != 'deepseek' or not c.cloud_consent:
@@ -417,7 +417,7 @@ class AssistantExtractor:
             if timeout <= 0:
                 raise assistant.TurnBudgetExhausted()
             self._acquire()
-            usage['calls'] += 1
+            start_call(timeout)
             started = self.clock()
             try:
                 value = complete('deepseek', c.base_url, c.name, messages, body['format'],
@@ -426,6 +426,8 @@ class AssistantExtractor:
                 kind = {'auth_failed': 'auth', 'invalid_json': 'schema',
                         'rate_limited': 'rate_limited', 'input_too_large': 'too_large',
                         'response_too_large': 'too_large'}.get(error.code, 'transient')
+                if error.code == 'invalid_json':
+                    usage['schema_error_kind'] = 'invalid_json'
                 raise router_transport.RouterError(kind) from None
             if self.clock() >= deadline or self.clock() - started >= timeout:
                 raise assistant.TurnBudgetExhausted()
@@ -472,8 +474,53 @@ class AssistantExtractor:
                 batch_message_ids=[m.message_id for m in sources],
                 images={str(k): v for k, v in job['data']['images'].items()}, pack_text=self.pack_text)
             toolbox = ToolBox(GitHubReader(self.settings.github_token, self.settings.github_repos),
-                local, store=self.store, run_id=run_id, max_calls=self.settings.max_tool_calls)
+                local, store=self.store, run_id=run_id, max_calls=self.settings.max_tool_calls,
+                clock=self.clock, wall_clock=self.wall_clock)
             usage = {'calls': 0}
+            call_timing = None
+
+            def start_call(timeout):
+                nonlocal call_timing
+                usage['calls'] += 1
+                call_timing = (self.wall_clock(), self.clock(), timeout)
+
+            def record_call(link, model, reply, *, error_class=None, schema_error_kind=None,
+                            content_text=None, finish_reason=None):
+                nonlocal call_timing
+                timing, call_timing = call_timing, None
+                if timing is None or self._closing:
+                    return  # Local admission failures do not make a provider call.
+                started_at, started_monotonic, timeout = timing
+                try:
+                    details = dict(link=link, model=model, started_at=started_at, timeout_s=timeout,
+                                   latency_ms=max(0, int((self.clock() - started_monotonic) * 1000)),
+                                   error_class=error_class, schema_error_kind=schema_error_kind,
+                                   finish_reason=finish_reason)
+                    if reply is not None:
+                        content_text = reply.content
+                        calls = [dict(id=classification_log.bounded_capture(c.id),
+                                      name=classification_log.bounded_capture(c.name),
+                                      arguments=classification_log.bounded_capture(c.arguments))
+                                 for c in reply.tool_calls]
+                        details.update(model=getattr(reply, 'model', None) or model,
+                                       latency_ms=getattr(reply, 'latency_ms', details['latency_ms']),
+                                       finish_reason=reply.finish_reason,
+                                       prompt_tokens=getattr(reply, 'prompt_tokens', 0),
+                                       completion_tokens=getattr(reply, 'completion_tokens', 0),
+                                       reasoning_tokens=getattr(reply, 'reasoning_tokens', None),
+                                       cached_tokens=getattr(reply, 'cached_tokens', 0),
+                                       reasoning_text=classification_log.bounded_capture(getattr(reply, 'reasoning_text', None)),
+                                       tool_calls_json=json.dumps(calls, ensure_ascii=False))
+                    elif link == 'deepseek':
+                        details.update(model=self.config.model.name,
+                                       prompt_tokens=usage.get('prompt_tokens', 0),
+                                       completion_tokens=usage.get('completion_tokens', 0),
+                                       cached_tokens=usage.get('cache_hit_tokens', 0),
+                                       schema_error_kind=schema_error_kind or usage.get('schema_error_kind'))
+                    classification_log.record_model_call(self.store, run_id, usage['calls'],
+                        content_text=classification_log.bounded_capture(content_text), **details)
+                except Exception as error:
+                    LOG.warning('Assistant capture failed exception=%s', type(error).__name__)
 
             def chat(model, messages, **kw):
                 if self._closing:
@@ -481,7 +528,7 @@ class AssistantExtractor:
                 if not self.settings.router_key:
                     raise ConnectionError('Router credential unavailable')
                 self._acquire()
-                usage['calls'] += 1
+                start_call(kw['timeout'])
                 reply = self.chat(model, messages, **kw)
                 if self._closing:
                     raise ConnectionError('Assistant is stopping')
@@ -502,9 +549,9 @@ class AssistantExtractor:
                 links=[assistant.Link(n, m, t) for n, m, t in zip(('gemini', 'gpt'), self.settings.models,
                     (self.settings.gemini_timeout_s, self.settings.gpt_timeout_s))],
                 chat=chat, toolbox=toolbox, breakers={n: _BreakerView(self, b) for n, b in self.breakers.items()},
-                redact=redact_data, deepseek=self._deepseek(job, deadline, usage),
+                redact=redact_data, deepseek=self._deepseek(job, deadline, usage, start_call),
                 images_carry_data=any(m.has_image for m in sources),
-                deadline_s=max(0, deadline - self.clock()), clock=self.clock)
+                deadline_s=max(0, deadline - self.clock()), clock=self.clock, record_call=record_call)
             result.model_calls = usage['calls']
             if self._closing:
                 return None  # A late worker must not write after store.close().

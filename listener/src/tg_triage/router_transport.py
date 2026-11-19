@@ -5,7 +5,8 @@ The default transport owns its socket through completion; a deadline watchdog
 interrupts stalled headers and trickling bodies without leaving HTTP workers.
 """
 from collections.abc import Sequence
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, field
 import http.client
 import json
 import math
@@ -19,6 +20,9 @@ from urllib.request import Request
 
 _ENDPOINT = re.compile(r"http://(127\.0\.0\.1|localhost):([0-9]{1,5})/v1", re.ASCII)
 _RESPONSE_LIMIT = 4 * 1024 * 1024
+CAPTURE_TEXT_BYTES = 65536
+CAPTURE_TRUNCATION = '…[truncated]'
+_TRUNCATED = CAPTURE_TRUNCATION.encode('utf-8')
 _KINDS = frozenset({"transient", "auth", "schema", "truncated", "too_large",
                     "invalid_endpoint", "rate_limited"})
 
@@ -49,6 +53,16 @@ class RouterReply:
     cached_tokens: int
     model: str | None
     latency_ms: int
+    reasoning_text: str | None = field(default=None, repr=False)
+
+
+def bounded_text(value: str | None, limit: int = CAPTURE_TEXT_BYTES) -> str | None:
+    if value is None:
+        return None
+    encoded = value[:limit].encode('utf-8', errors='replace')
+    if len(value) > limit or len(encoded) > limit:
+        return encoded[:limit - len(_TRUNCATED)].decode('utf-8', errors='ignore') + CAPTURE_TRUNCATION
+    return encoded.decode('utf-8')
 
 
 def _parse(raw: bytes, latency_ms: int) -> RouterReply:
@@ -86,8 +100,10 @@ def _parse(raw: bytes, latency_ms: int) -> RouterReply:
             raise ValueError
         if reasoning is not None and (type(reasoning) is not int or reasoning < 0):
             raise ValueError
+        reasoning_text = message.get('reasoning_content')
         return RouterReply(content, tuple(calls), finish, prompt, completion,
-                           reasoning, cached, model, latency_ms)
+                           reasoning, cached, model, latency_ms,
+                           bounded_text(reasoning_text) if isinstance(reasoning_text, str) else None)
     except (ValueError, KeyError, IndexError, TypeError, AttributeError, RecursionError):
         raise RouterError("schema") from None
 
@@ -209,12 +225,14 @@ def chat(base_url: str, key: str, model: str, messages: list[dict], *,
         raise
     except (OSError, URLError, http.client.HTTPException):
         raise RouterError("transient") from None
-    except (ValueError, TypeError, AttributeError, RecursionError):
+    except Exception:
         raise RouterError("schema") from None
     finally:
         if watchdog is not None:
             watchdog.cancel()
         if response is not None:
-            response.close()
+            with suppress(Exception):
+                response.close()
         if connection is not None:
-            connection.close()
+            with suppress(Exception):
+                connection.close()

@@ -76,6 +76,7 @@ def check(root, policy=POLICY):
             local_path(root, prompt)
     inventory = trace.get('runtime_inventory', {})
     actual = {str(p.relative_to(root)).replace('\\', '/') for p in (root/'listener/src/tg_triage').glob('*.py')}
+    actual |= {p.relative_to(root).as_posix() for p in (root/'listener/src/tg_triage/admin_static').rglob('*') if p.is_file()}
     actual |= {str(p.relative_to(root)).replace('\\', '/') for p in (root/'listener/prompts').glob('*.md')}
     actual |= {str(p.relative_to(root)).replace('\\', '/') for p in (root/'listener/templates').rglob('*.md')}
     if set(inventory) != actual:

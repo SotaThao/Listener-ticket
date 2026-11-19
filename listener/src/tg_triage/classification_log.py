@@ -1,7 +1,7 @@
 """Best-effort rules-attempt accounting. Proposals retain structure and IDs only.
 
 The recorded decision precedes execution overrides. Classic intake and unread-document
-branches do not enter this scope. This module owns both accounting tables and writes.
+branches do not enter this scope. This module also owns the assistant capture tables.
 """
 
 import hashlib
@@ -14,14 +14,52 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 
+from agentfleet_common.ai_transport import redact
+
+from .router_transport import CAPTURE_TEXT_BYTES, CAPTURE_TRUNCATION, bounded_text
+
 LOG = logging.getLogger(__name__)
 CURRENT = ContextVar('classification_run', default=None)
 MAX_PENDING_RUNS = 500
 DROP_WARNING_SECONDS = 60
+_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_CAPTURE_QUOTED = re.compile(r'"(?:[^"\\]|\\.)*(?P<end>"|\\?\Z)', re.DOTALL)
+
+
+def capture_text(text):
+    """Redact JSON strings (including escapes) while preserving the original layout."""
+    if text is None:
+        return None
+
+    def clean(match):
+        try:
+            value = json.loads(match[0])
+        except ValueError:
+            return redact(match[0])
+        redacted = redact(value)
+        return match[0] if redacted == value else json.dumps(redacted, ensure_ascii=False)
+
+    try:
+        structured = isinstance(json.loads(text), (dict, list))
+    except (ValueError, RecursionError):
+        structured = False
+    if structured:
+        return _JSON_STRING.sub(clean, text)
+    return redact(_JSON_STRING.sub(clean, text))
+
+
+def bounded_capture(text, limit=CAPTURE_TEXT_BYTES):
+    clipped = bounded_text(text, limit)
+    if clipped is not None and clipped.endswith(CAPTURE_TRUNCATION):
+        # A clipped JSON escape may hide sensitive text from the redactor.
+        for match in _CAPTURE_QUOTED.finditer(clipped):
+            if match['end'] != '"' and '\\' in match[0]:
+                clipped = clipped[:match.start()] + CAPTURE_TRUNCATION
+    return bounded_text(capture_text(clipped), limit)
 
 
 def init_store(connection):
-    """Add only new tables/indexes; the caller owns the initialization transaction."""
+    """Apply additive accounting schema changes in the caller's transaction."""
     connection.execute('''CREATE TABLE IF NOT EXISTS classification_runs (
         run_id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
         turn_key TEXT NOT NULL, topic_id TEXT, phase TEXT NOT NULL,
@@ -42,7 +80,20 @@ def init_store(connection):
     connection.execute('''CREATE TABLE IF NOT EXISTS classification_tool_calls (
         run_id INTEGER NOT NULL, seq INTEGER NOT NULL, tool TEXT NOT NULL, args_json TEXT,
         result_bytes INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
-        error TEXT, PRIMARY KEY(run_id, seq))''')
+        error TEXT, result_json TEXT, started_at REAL, args_full_json TEXT,
+        PRIMARY KEY(run_id, seq))''')
+    columns = {row[1] for row in connection.execute('PRAGMA table_info(classification_tool_calls)')}
+    for name, sql_type in (('result_json', 'TEXT'), ('started_at', 'REAL'), ('args_full_json', 'TEXT')):
+        if name not in columns:
+            connection.execute(f'ALTER TABLE classification_tool_calls ADD COLUMN {name} {sql_type}')
+    connection.execute('''CREATE TABLE IF NOT EXISTS classification_model_calls (
+        run_id INTEGER NOT NULL, seq INTEGER NOT NULL, link TEXT NOT NULL,
+        model TEXT, started_at REAL NOT NULL, latency_ms INTEGER NOT NULL DEFAULT 0,
+        timeout_s REAL, finish_reason TEXT, prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER,
+        cached_tokens INTEGER NOT NULL DEFAULT 0, reasoning_text TEXT, content_text TEXT,
+        tool_calls_json TEXT, error_class TEXT, schema_error_kind TEXT,
+        PRIMARY KEY(run_id, seq))''')
 
 
 def _failed(error):
@@ -326,8 +377,9 @@ def _tool_args(args):
     return _json(result)
 
 
-def record_tool_call(store, run_id, seq, tool, args_json=None, result_bytes=0, latency_ms=0, error=None):
-    """Store argument names and types/lengths, never raw argument values or text.
+def record_tool_call(store, run_id, seq, tool, args_json=None, result_bytes=0, latency_ms=0, error=None,
+                     *, result_json=None, started_at=None, args_full_json=None):
+    """Store the legacy argument projection and optional redacted admin detail.
 
     Only integer values named id/*_id and integer lists named ids/*_ids survive.
     Nested object/array content and non-identifier argument names are discarded.
@@ -335,14 +387,41 @@ def record_tool_call(store, run_id, seq, tool, args_json=None, result_bytes=0, l
     the input's type and length. None remains SQL NULL.
     """
     try:
+        values = (run_id, seq, tool, _tool_args(args_json), result_bytes, latency_ms, _code(error),
+                  bounded_text(result_json), started_at, bounded_capture(args_full_json, 16384))
         with store._lock:
             if store.connection.in_transaction:
                 LOG.warning('Classification accounting skipped: active transaction')
                 return
             with store.connection:
                 store.connection.execute('''INSERT INTO classification_tool_calls
-                    (run_id,seq,tool,args_json,result_bytes,latency_ms,error) VALUES (?,?,?,?,?,?,?)''',
-                    (run_id, seq, tool, _tool_args(args_json), result_bytes, latency_ms, _code(error)))
+                    (run_id,seq,tool,args_json,result_bytes,latency_ms,error,result_json,started_at,args_full_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                    values)
+    except Exception as failure:
+        _failed(failure)
+
+
+def record_model_call(store, run_id, seq, *, link, started_at, model=None, latency_ms=0,
+                      timeout_s=None, finish_reason=None, prompt_tokens=0, completion_tokens=0,
+                      reasoning_tokens=None, cached_tokens=0, reasoning_text=None, content_text=None,
+                      tool_calls_json=None, error_class=None, schema_error_kind=None):
+    """Store one model attempt with caller-redacted text, on a best-effort basis."""
+    try:
+        values = (run_id, seq, link, model, started_at, latency_ms, timeout_s, finish_reason, prompt_tokens,
+                  completion_tokens, reasoning_tokens, cached_tokens, bounded_text(reasoning_text),
+                  bounded_text(content_text), bounded_text(tool_calls_json), _code(error_class),
+                  _code(schema_error_kind))
+        with store._lock:
+            if store.connection.in_transaction:
+                LOG.warning('Classification accounting skipped: active transaction')
+                return
+            with store.connection:
+                store.connection.execute('''INSERT INTO classification_model_calls
+                    (run_id,seq,link,model,started_at,latency_ms,timeout_s,finish_reason,prompt_tokens,
+                     completion_tokens,reasoning_tokens,cached_tokens,reasoning_text,content_text,
+                     tool_calls_json,error_class,schema_error_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    values)
     except Exception as failure:
         _failed(failure)
 
@@ -368,6 +447,8 @@ def maintain(store, retention_days=90, *, config=None):
             while True:
                 with connection:
                     connection.execute('''DELETE FROM classification_tool_calls WHERE run_id IN
+                        (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,))
+                    connection.execute('''DELETE FROM classification_model_calls WHERE run_id IN
                         (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,))
                     deleted = connection.execute('''DELETE FROM classification_runs WHERE run_id IN
                         (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,)).rowcount

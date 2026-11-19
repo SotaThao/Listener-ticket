@@ -131,3 +131,10 @@ retention_days = 90
 # github_token_file = "/etc/tg-triage/assistant-github-token"
 # github_repos = ["owner/repository"]
 # max_tool_calls = 8 # 1..8; cannot raise the hard limit.
+
+# Optional Listener Admin UI. The bind address must be loopback or Tailscale IPv4.
+# Create the hash with: python -m tg_triage admin-passwd --out /etc/tg-triage/admin-password
+# [admin]
+# bind = "127.0.0.1:8787"
+# password_hash_file = "/etc/tg-triage/admin-password"
+# session_hours = 12 # 1..72

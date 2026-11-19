@@ -888,7 +888,8 @@ class ClassificationLogTests(fallback.ProviderBase):
                     pass
         row = self.runs(store)[0]
         log.record_tool_call(store, row['run_id'], 1, 'lookup', '{"message_id":42}', 13, 9, 'timeout')
-        call = tuple(store.connection.execute('SELECT * FROM classification_tool_calls').fetchone())
+        call = tuple(store.connection.execute('''SELECT run_id, seq, tool, args_json, result_bytes, latency_ms, error
+            FROM classification_tool_calls''').fetchone())
         self.assertEqual(call[:3], (row['run_id'], 1, 'lookup'))
         self.assertEqual(json.loads(call[3])['arguments']['message_id'], {'type': 'integer', 'id': 42})
         self.assertEqual(call[4:], (13, 9, 'timeout'))
