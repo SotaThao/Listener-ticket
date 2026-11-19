@@ -12,6 +12,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 p8 = import_module('eval-assistant-p8')
 
+from router_usage import RouterUsageError, UsageWindow, add_db_argument, print_usage
 from tg_triage import assistant, router_transport
 from tg_triage.assistant_contract import CONTRACT, STATES
 from tg_triage.__main__ import _load_assistant_pack
@@ -50,7 +51,7 @@ def _probe_metrics(reply):
 
 
 def run_probe(*, router_url, key_file, config=None, chat=None, clock=time.monotonic,
-              pack_mode='full', metrics_out=None):
+              pack_mode='full', metrics_out=None, router_usage_db=None):
     router_transport.validate_base_url(router_url)
     path = Path(key_file)
     if not path.is_absolute():
@@ -67,11 +68,16 @@ def run_probe(*, router_url, key_file, config=None, chat=None, clock=time.monoto
         {'role': 'user', 'content': '\nUNTRUSTED BATCH DATA:\n' + json.dumps(payload, ensure_ascii=False)},
     ]
     tools = assistant._tools()
+    window = UsageWindow.from_db(router_usage_db)
+    usage = window.usage
     failed = False
     rows = []
     print(f'{pack_mode} prefix: {assistant.decide_prefix_hash(pack.text, core_pack=pack.core)}')
-    print('Link     Call  prompt_tokens  output_tokens  cached_tokens  latency_ms')
+    response = ' (response)' if usage is not None else ''
+    print(f'Link     Call  prompt_tokens  output_tokens  cached_tokens  latency_ms{response}')
     for link, model, send, timeout in _links(router_url, key, settings, chat or router_transport.chat):
+        if link != 'deepseek':
+            send = window.wrap(send)
         deadline = clock() + 60
         for call in (1, 2):
             remaining = deadline - clock()
@@ -79,22 +85,27 @@ def run_probe(*, router_url, key_file, config=None, chat=None, clock=time.monoto
                 print(f'{link:<8} {call:>4}  cache window elapsed')
                 failed = True
                 break
+            window.start()
             try:
                 reply = send(model, messages, tools=tools, tool_choice='none',
                              timeout=min(remaining, timeout))
             except Exception:
                 # Transport and injected errors may include a credential.
                 print(f'{link:<8} {call:>4}  request failed')
-                rows.append(dict(expected_state='CHAT', actual_state='NO_DECISION',
-                                 creation_agrees=False, template_agrees=False))
+                row = dict(expected_state='CHAT', actual_state='NO_DECISION',
+                           creation_agrees=False, template_agrees=False)
                 failed = True
             else:
-                rows.append(_probe_metrics(reply))
+                row = _probe_metrics(reply)
                 print(f'{link:<8} {call:>4}  {reply.prompt_tokens:>13d}  '
                       f'{reply.completion_tokens:>13d}  {reply.cached_tokens:>13d}  {reply.latency_ms:>10d}')
+            row.update(window.finish())
+            rows.append(row)
+            if usage is not None:
+                print_usage(row)
     if metrics_out is None:
         print('Fixed synthetic CHAT probe. Tool calls are disabled.')
-        p8.print_pack_comparison({pack_mode: rows})
+        p8.print_pack_comparison({pack_mode: rows}, usage_enabled=usage is not None)
     else:
         metrics_out.extend(rows)
     return 1 if failed else 0
@@ -107,17 +118,21 @@ def main(argv=None):
     parser.add_argument('--config', help='Use configured model links, including hosted DeepSeek when enabled')
     parser.add_argument('--pack-mode', choices=('full', 'core'), default='full')
     parser.add_argument('--compare', action='store_true', help='Probe both prefixes per configured link')
+    add_db_argument(parser)
     args = parser.parse_args(argv)
     try:
         options = vars(args)
         if not options.pop('compare'):
             return run_probe(**options)
         options.pop('pack_mode')
+        options['router_usage_db'] = UsageWindow.from_db(options['router_usage_db'])
         rows = {'full': [], 'core': []}
         statuses = [run_probe(**options, pack_mode=mode, metrics_out=results) for mode, results in rows.items()]
         print('Fixed synthetic CHAT probe. Tool calls are disabled.')
         p8.print_pack_comparison(rows)
         return max(statuses)
+    except RouterUsageError as error:
+        print(str(error), file=sys.stderr)
     except Exception as error:
         print('Cache probe failed: ' + type(error).__name__, file=sys.stderr)
     return 2

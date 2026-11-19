@@ -19,10 +19,12 @@ DECIDE_VERIFICATION = (
     'listener/tests/test_classification_log_decide.py',
     'listener/tests/test_eval_assistant_p8.py',
     'listener/tests/test_rules_intake_decide.py',
+    'listener/tests/test_router_usage.py',
     'scripts/eval-assistant-p8.py',
     'scripts/build-assistant-pack.py',
     'scripts/probe-prompt-cache.py',
     'scripts/replay-assistant-decide.py',
+    'scripts/router_usage.py',
 )
 
 class PolicyError(ValueError):

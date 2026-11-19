@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.47 · **Updated**: 2026-11-19 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
+**Version**: v1.16.48 · **Updated**: 2026-11-19 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -2858,11 +2858,13 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/tests/test_assistant_tools.py": "e10f62c8683b4f56df1647e77f4bac88fa40715effbc1b64806af94345b86621",
     "listener/tests/test_classification_log_decide.py": "d3c6201173842f30eaea0bb3df61e6cef8d6488f802111da2d84e688874cef00",
     "listener/tests/test_eval_assistant_p8.py": "90708f37ec8e6835bfc88429ba17ac054046f30630152667dfd664d395395ab3",
+    "listener/tests/test_router_usage.py": "718b941fd8dc77acf1ae44cf75b66de50d692e88834c39a32cf7b80c282275eb",
     "listener/tests/test_rules_intake_decide.py": "2c4a26ff82782c24abc9a8bf8943956658aa5bc395f8981e4675bce1fcb8fcf7",
     "scripts/build-assistant-pack.py": "afed17a4a3b1c897921c5c58b6d9cd3c457cc38116acdbe33f38436ed75b1c67",
-    "scripts/eval-assistant-p8.py": "7e6d34a514fcd607195fe54495b202d9a441bfdda552d963ba09d6374a80969a",
-    "scripts/probe-prompt-cache.py": "6982724f23843a632ccf1b416c0fb55f1a74aa7100a3fd35d60b960b63b6259c",
-    "scripts/replay-assistant-decide.py": "98ab40274b3ca7447520b28385763b929615cdde3cbea12998d1157ce43359c7"
+    "scripts/eval-assistant-p8.py": "755b2168d38298a4a0540de7010d37935976def5cf6238b8d1ac9328536aac1d",
+    "scripts/probe-prompt-cache.py": "a757c31722e3c66faf117b068f1825fe70ce8feda9c727c27227b8d24835ccb7",
+    "scripts/replay-assistant-decide.py": "f4157e07645d7a6b329afa0ec701ef9cef3d1eb297f2749acccd007f39faf380",
+    "scripts/router_usage.py": "b723eee0290f3252a06868d904d46c21590809069a08c7fea8a3a2eca46d3b65"
   },
   "legacy_documents": [],
   "related_documents": [
@@ -2934,6 +2936,7 @@ flowchart TD
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.48 | 2026-11-19 22:23 | Codex / owner AlexChu | #3022: Các script đo cache và chi phí theo cơ sở dữ liệu sử dụng của 9router vì phản hồi HTTP thiếu chi tiết cache và chi phí tính cước. Bot và trang quản trị chạy dưới tài khoản `tglistener`, không đọc được cơ sở dữ liệu này nên `cached_tokens` trên trang quản trị vẫn là 0 cho đến khi 9router trả `prompt_tokens_details`. |
 | v1.16.47 | 2026-11-19 | Codex / owner AlexChu | #3018 (#3019–#3022). Quyền quyết định của trợ lý (`authority = "decide"`) mặc định tắt và chỉ bật trong chế độ live. Bộ lọc đầu vào vẫn do code quyết định và lưu vết từng phép kiểm. Mỗi gói tin có một dòng nhật ký phân loại, các lượt liên quan nối thành một mục nhật ký. Trang quản trị hiện tối đa 50 lượt gần nhất trong mỗi mục. Code kiểm dữ kiện, nguồn và quyền trước khi thực thi. Lỗi kiểm tra không sửa được giữ ở HOLD kèm mã lý do. Gemini, GPT và DeepSeek dùng cùng gói luật và công cụ chỉ đọc. Gói có ảnh đi qua Gemini hoặc GPT. Ticket tìm thấy qua tra cứu chỉ được bổ sung (APPEND) khi đúng kho, đúng trạng thái, có bằng chứng trong lượt và đủ chắc chắn là trùng. Khi chưa đủ chắc, hệ thống xử lý theo dữ kiện và ghi `Related to #N` trong nội dung ticket mới hoặc phần bổ sung vào ticket đã xác minh qua Reply. Ở giai đoạn 1, yêu cầu ANALYZE, RELATED, LIFECYCLE_QUESTION hoặc APPEND_CLOSED từ trợ lý giữ toàn bộ gói ở HOLD với mã `guard_provenance` trước khi thực thi bất kỳ nhóm nào. STATUS vẫn gửi một thông báo chỉ đọc vào nhóm ops. Quyết định của Owner ngày 2026-11-19 cho phép dùng ticket đã đọc bằng `get_ticket` hoặc tìm qua tra cứu trong cùng lượt làm bằng chứng cho APPEND. Code bỏ tham chiếu thiếu bằng chứng cùng kho và ghi lý do. Số xuất hiện ở nhiều kho hoặc chỉ xuất hiện ngoài kho cấu hình không chứng minh được APPEND hay tham chiếu. #3028 bổ sung `pack_mode = "core"` cho chế độ decide, mặc định dùng `"full"`. Trợ lý nhận phần cốt lõi và chỉ mục mỗi lượt, dùng công cụ chỉ đọc `get_rule` để tra chi tiết và ví dụ khi cần. Mỗi mục tra tối đa 8 KiB UTF-8 và được ghi nhật ký công cụ. Phần cốt lõi và tài liệu tra cứu dùng chung một fingerprint. Owner chỉ bật core khi replay cho thấy giảm ít nhất 50% token đầu vào và mức khớp trạng thái, quyết định tạo ticket và mẫu không giảm. Các bản thảo luật và gói lời nhắc chờ Owner duyệt. |
 | v1.16.46 | 2026-11-19 11:15 | Codex / owner AlexChu | #2999 (#3000–#3002): Trang quản trị chỉ đọc theo dõi theo thời gian thực đầu vào, thinking và công cụ, đề xuất của trợ lý và quyết định của code. Lưu thinking và đầu ra của từng lần gọi mô hình cùng kết quả công cụ theo thời hạn lưu giữ. Dịch vụ quản trị chạy riêng, chỉ truy cập qua Tailscale và yêu cầu đăng nhập. Bot giữ nguyên hành vi khi chưa cấu hình dịch vụ quản trị. Với 10 lần gọi mô hình (tối đa 3 × 64 KiB/lần) và 8 lượt dùng công cụ (tối đa 80 KiB/lượt), dữ liệu chi tiết có thể chiếm khoảng 2,6 MB mỗi lượt phân loại. Hai tuyến mô hình có giới hạn riêng và có thể thêm một lần gọi dự phòng, nên trần bảo thủ cho dữ liệu chi tiết là khoảng 4,8 MB, chưa tính chi phí lưu trữ SQLite. Mặc định giữ 90 ngày. Theo dõi dung lượng cơ sở dữ liệu sau triển khai. |
 | v1.16.45 | 2026-11-18 | Codex / owner AlexChu | #2917: nối trợ lý có công cụ vào bước trích dữ kiện qua 9router cục bộ: Gemini flash-medium → GPT (dùng lại kết quả tra cứu) → DeepSeek một lượt không công cụ; gói có ảnh không bao giờ sang DeepSeek. Code vẫn quyết định trạng thái và mẫu. Mặc định tắt: config hiện tại chạy y hệt bản trước. Chế độ shadow chỉ ghi classification_runs/tool_calls, không ghi GitHub, không gửi Telegram, không đổi trạng thái; live chỉ bật khi `mode = "live"` và có key. Mỗi lượt tối đa 8 lần tra cứu, hạn 180 giây; một lượt chạy một lúc, tối đa 20 lần gọi/phút, hàng đợi 200, sau sự cố nhả 1 gói/20 giây. Lỗi hạ tầng không trừ lượt thử, chờ tối đa 24 giờ; lỗi model trừ lượt, 3 lần thì leo thang. Key router đọc từ file, không bao giờ in. P8 qua 9router thật: 27/27, cả 27 ca do Gemini trả lời. Chưa deploy. |
