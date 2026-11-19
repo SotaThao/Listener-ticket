@@ -16,7 +16,7 @@ Other seen media lacking a narrative description are fixture errors with case ID
 """
 import argparse
 from collections import Counter
-from functools import lru_cache
+from functools import lru_cache, partial
 import json
 import math
 import os
@@ -32,7 +32,10 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'listener' / 'src'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from router_usage import RouterUsageError, UsageWindow, add_db_argument, billing_summary, print_usage
+from tg_triage import router_transport
 from tg_triage.__main__ import _load_assistant_pack, _load_decision_rules
 from tg_triage.assistant_contract import GUARDS, DecideRuntime, GuardContext
 from tg_triage.assistant_errors import ToolDenied
@@ -314,7 +317,7 @@ def decide_result(runtime: DecideRuntime, store, job):
 TICKET_STATES = {'READY', 'APPEND'}
 
 
-def pack_metrics(rows):
+def pack_metrics(rows, *, usage_enabled=False):
     comparable = [row for row in rows if row.get('comparable', True)]
     create = [row.get('creation_agrees', False) for row in comparable
               if row.get('creation_agrees', False) is not None]
@@ -322,10 +325,11 @@ def pack_metrics(rows):
     ids = sorted({rule for row in rows for rule in row.get('get_rule_ids', ())})
     def percentile(q):
         return latencies[math.ceil(q * len(latencies)) - 1] if latencies else 'n/a'
-    return {
-        'Input tokens': sum(row.get('tokens_in', 0) or 0 for row in rows),
-        'Output tokens': sum(row.get('tokens_out', 0) or 0 for row in rows),
-        'Cached tokens': sum(row.get('cached_tokens', 0) or 0 for row in rows),
+    response = ' (response)' if usage_enabled else ''
+    metrics = {
+        'Input tokens' + response: sum(row.get('tokens_in', 0) or 0 for row in rows),
+        'Output tokens' + response: sum(row.get('tokens_out', 0) or 0 for row in rows),
+        'Cached tokens' + response: sum(row.get('cached_tokens', 0) or 0 for row in rows),
         'get_rule calls': sum(row.get('get_rule_calls', 0) for row in rows),
         'get_rule ids (successful)': ', '.join(ids) or '—',
         'State agreement': f"{sum(row['actual_state'] == row['expected_state'] for row in comparable)}/{len(comparable)}",
@@ -333,19 +337,27 @@ def pack_metrics(rows):
         'Template agreement': f"{sum(bool(row.get('template_agrees')) for row in comparable)}/{len(comparable)}",
         'Latency p50 / p95 (ms)': f'{percentile(.50)} / {percentile(.95)}',
     }
+    if usage_enabled:
+        metrics.update(billing_summary(rows))
+    return metrics
 
 
-def print_pack_comparison(results):
-    metrics = {mode: pack_metrics(rows) for mode, rows in results.items()}
+def print_pack_comparison(results, *, usage_enabled=None):
+    if usage_enabled is None:
+        usage_enabled = any(row.get('usage_source', 'response') != 'response'
+                            for rows in results.values() for row in rows)
+    metrics = {mode: pack_metrics(rows, usage_enabled=usage_enabled) for mode, rows in results.items()}
     print('\nMetric\tfull\tcore')
     for name in next(iter(metrics.values())):
         print(f"{name}\t{metrics.get('full', {}).get(name, '—')}\t{metrics.get('core', {}).get(name, '—')}")
-    if 'full' in metrics and 'core' in metrics and metrics['full']['Input tokens']:
-        reduction = 1 - metrics['core']['Input tokens'] / metrics['full']['Input tokens']
-        print(f'Core input token reduction: {reduction:.1%}')
+    input_metric = 'Input tokens (response)' if usage_enabled else 'Input tokens'
+    if 'full' in metrics and 'core' in metrics and metrics['full'][input_metric]:
+        reduction = 1 - metrics['core'][input_metric] / metrics['full'][input_metric]
+        label = 'Core input token reduction (response)' if usage_enabled else 'Core input token reduction'
+        print(f'{label}: {reduction:.1%}')
 
 
-def print_summary(rows):
+def print_summary(rows, *, usage_enabled=False):
     comparable = [row for row in rows if row.get('comparable', True)]
     ticket_matches = sum(row.get('ticket_agrees',
         row['actual_state'] not in ('ERROR', 'NO_DECISION') and
@@ -367,9 +379,13 @@ def print_summary(rows):
     print(f'Ticket agreement (READY/APPEND) {ticket_matches}/{len(comparable)}')
     print(f'Template agreement             {template_matches}/{len(comparable)}')
     print(f'Guard violations               {sum(guards.values())} {dict(sorted(guards.items()))}')
-    print(f'Tokens in / out                {in_tokens} / {out_tokens}')
-    print(f'Cached tokens / input tokens   {cached}/{in_tokens} ({cached / in_tokens:.1%})'
-          if in_tokens else 'Cached tokens / input tokens   n/a')
+    response = ' (response)' if usage_enabled else ''
+    print(f'Tokens in / out                {in_tokens} / {out_tokens}{response}')
+    cache = f'{cached}/{in_tokens} ({cached / in_tokens:.1%})' if in_tokens else 'n/a'
+    print(f'Cached tokens / input tokens   {cache}{response}')
+    if usage_enabled:
+        for name, value in billing_summary(rows).items():
+            print(f'{name:<31}{value}')
     print(f'Batch latency p50 / p95 (ms)   {percentile(.50)} / {percentile(.95)}')
 
 
@@ -451,7 +467,7 @@ def evaluate_decide_case(runtime, config, store, snapshot, rules, row, index):
 
 
 def run_eval(*, router_url, key_file, output, models=None, chat=None, authority='propose',
-             runtime_factory=None, pack_mode='full', append_output=False):
+             runtime_factory=None, pack_mode='full', append_output=False, router_usage_db=None):
     validate_base_url(router_url)
     key_path = Path(key_file)
     if not key_path.is_absolute():
@@ -461,6 +477,10 @@ def run_eval(*, router_url, key_file, output, models=None, chat=None, authority=
         raise ValueError('router key unavailable')
     snapshot, pack = _load_decision_rules(), load_pack(authority, pack_mode)
     selected = assistant_models(list(models or AssistantConfig.models))
+    window = UsageWindow.from_db(router_usage_db, output=output)
+    usage = window.usage
+    if usage is not None:
+        chat = window.wrap(chat or partial(router_transport.chat, router_url, key))
     rows = []
     with tempfile.TemporaryDirectory(prefix='assistant-p8-') as directory:
         db = str(Path(directory) / 'examples.db')
@@ -481,6 +501,7 @@ def run_eval(*, router_url, key_file, output, models=None, chat=None, authority=
                 runtime = _EvalExtractor(config, store, pack.text, chat=chat)
             with Path(output).open('a' if append_output else 'w', encoding='utf-8') as artifact:
                 for index, row in enumerate(cases(snapshot), 1):
+                    window.start()
                     try:
                         if authority == 'decide':
                             result = evaluate_decide_case(runtime, config, store, snapshot, rules, row, index)
@@ -495,6 +516,7 @@ def run_eval(*, router_url, key_file, output, models=None, chat=None, authority=
                             proposal_link=None, fallback_reason=None, calls=list(getattr(runtime, 'calls', ())),
                             links={}, media_fixture={'kind': 'fixture_or_turn_error'})
                     rows.append(result)
+                    result.update(window.finish())
                     result['pack_mode'] = pack_mode
                     if pack.core:
                         result['core_pack_fingerprint'] = pack.core.fingerprint
@@ -503,13 +525,15 @@ def run_eval(*, router_url, key_file, output, models=None, chat=None, authority=
                     print(f"{result['case']}: expected {result['expected_state']}/{result['expected_template']} "
                           f"actual {result['actual_state']}/{result['actual_template']} "
                           f"{'PASS' if result['passed'] else 'FAIL'}")
+                    if usage is not None:
+                        print_usage(result, response=True)
         finally:
             store.close()
     total = sum(row['passed'] for row in rows)
     print(f'{total}/{len(rows)}')
-    print_summary(rows)
+    print_summary(rows, usage_enabled=usage is not None)
     if authority == 'decide':
-        print_pack_comparison({pack_mode: rows})
+        print_pack_comparison({pack_mode: rows}, usage_enabled=usage is not None)
     return rows
 
 
@@ -522,19 +546,21 @@ def main(argv=None):
     parser.add_argument('--authority', choices=('propose', 'decide'), default='propose')
     parser.add_argument('--pack-mode', choices=('full', 'core'), default='full')
     parser.add_argument('--compare', action='store_true', help='Run both pack modes on the same decide cases')
+    add_db_argument(parser)
     args = parser.parse_args(argv)
     try:
         if args.compare and args.authority != 'decide':
             raise FixtureError('--compare requires --authority decide')
         modes = ('full', 'core') if args.compare else (args.pack_mode,)
+        usage_db = UsageWindow.from_db(args.router_usage_db, output=args.output) if args.compare else args.router_usage_db
         results = {mode: run_eval(router_url=args.router_url, key_file=args.key_file,
                                   output=args.output, models=args.models, authority=args.authority,
-                                  pack_mode=mode, append_output=index > 0)
+                                  pack_mode=mode, append_output=index > 0, router_usage_db=usage_db)
                    for index, mode in enumerate(modes)}
         if args.compare:
             print_pack_comparison(results)
         return 0 if all(row['passed'] for rows in results.values() for row in rows) else 1
-    except (FixtureError, DecideRuntimeUnavailable) as error:
+    except (FixtureError, DecideRuntimeUnavailable, RouterUsageError) as error:
         print(str(error), file=sys.stderr)
         return 2
     except Exception as error:

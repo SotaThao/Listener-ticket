@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 from contextlib import closing
 from dataclasses import replace
+from functools import partial
 from hashlib import sha256
 from importlib import import_module
 import json
@@ -17,6 +18,8 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 p8 = import_module('eval-assistant-p8')
 
+from router_usage import RouterUsageError, UsageWindow, add_db_argument, print_usage
+from tg_triage import router_transport
 from tg_triage.store import Store, _to_message
 
 
@@ -129,11 +132,14 @@ def _print_confusion(rows):
     print(f'Ticket reference agreement {sum(tickets)}/{len(tickets)}')
 
 
-def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='full', append_output=False):
+def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='full', append_output=False,
+               router_usage_db=None):
     source = _copy_path(db)
     output = _output_path(out, source, config)
     if limit < 1:
         raise ReplayInputError('The replay limit must be positive.')
+    window = UsageWindow.from_db(router_usage_db, output=output)
+    usage = window.usage
     settings = p8.offline_config(config)
     snapshot, pack = p8._load_decision_rules(), p8.load_pack('decide', pack_mode)
     rows = []
@@ -146,7 +152,11 @@ def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='f
                                                        ops_chat_id=None, source_reactions=False))
         store = Store(audit_path)
         try:
-            runtime = p8.decide_runtime(config, store, pack, runtime_factory)
+            transport = {}
+            if usage is not None:
+                transport['chat'] = window.wrap(partial(router_transport.chat, assistant.router_base_url,
+                                                        assistant.router_key))
+            runtime = p8.decide_runtime(config, store, pack, runtime_factory, **transport)
             rules = p8.rule_lookup(audit_path, pack.text, snapshot)
             seen = set()
             uri = source.as_uri() + '?mode=ro&immutable=1'
@@ -157,6 +167,7 @@ def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='f
                                            (limit,)).fetchall()
                 with output.open('a' if append_output else 'w', encoding='utf-8') as artifact:
                     for batch in batches:
+                        window.start()
                         sources, skipped = _sources(original, batch)
                         groups, metrics = [], {}
                         if sources:
@@ -183,16 +194,19 @@ def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='f
                                    skipped=skipped, comparable=not skipped and batch['final_state'] is not None,
                                    pack_mode=pack_mode, pack_fingerprint=pack.fingerprint,
                                    core_pack_fingerprint=pack.core.fingerprint if pack.core else None,
-                                   **_comparison(groups, batch, config.gh_repo), **metrics)
+                                   **_comparison(groups, batch, config.gh_repo), **metrics, **window.finish())
                         rows.append(row)
                         artifact.write(json.dumps(row, ensure_ascii=False) + '\n')
                         artifact.flush()
+                        if usage is not None:
+                            print(f"Batch {row['run_id']}")
+                            print_usage(row, response=True)
         finally:
             store.close()
     _print_confusion(rows)
     print(f"Skipped batches {sum(row['skipped'] is not None for row in rows)}/{len(rows)}")
-    p8.print_summary(rows)
-    p8.print_pack_comparison({pack_mode: rows})
+    p8.print_summary(rows, usage_enabled=usage is not None)
+    p8.print_pack_comparison({pack_mode: rows}, usage_enabled=usage is not None)
     return rows
 
 
@@ -204,17 +218,20 @@ def main(argv=None):
     parser.add_argument('--out', required=True)
     parser.add_argument('--pack-mode', choices=('full', 'core'), default='full')
     parser.add_argument('--compare', action='store_true', help='Replay both pack modes against the same copy')
+    add_db_argument(parser)
     args = parser.parse_args(argv)
     try:
         options = vars(args)
         compare = options.pop('compare')
         selected = options.pop('pack_mode')
         modes = ('full', 'core') if compare else (selected,)
+        if compare:
+            options['router_usage_db'] = UsageWindow.from_db(options['router_usage_db'], output=options['out'])
         results = {mode: run_replay(**options, pack_mode=mode, append_output=index > 0)
                    for index, mode in enumerate(modes)}
         if compare:
             p8.print_pack_comparison(results)
-    except (ReplayInputError, p8.DecideRuntimeUnavailable) as error:
+    except (ReplayInputError, p8.DecideRuntimeUnavailable, RouterUsageError) as error:
         print(str(error), file=sys.stderr)
         return 2
     except Exception as error:
