@@ -46,12 +46,23 @@ class LegacyPreflightTests(unittest.TestCase):
 
     def test_complete_known_family_registry_and_absent_is_never_zero(self):
         result=inspect(self.db)
-        required='messages cases groups reconciliation attachments group_notices model_usage classification_runs classification_tool_calls followup_roots followup_jobs followup_operations followup_analysis_retries followup_episodes followup_episode_sources followup_job_sources autonomous_routes autonomous_confirmations autonomous_outages autonomous_clarifications autonomous_plans triage_topic_hydration triage_topics triage_topic_messages triage_topic_events triage_current_topics triage_current_topic_events rules_topics rules_sources rules_ops_replies rules_inflight_topics rules_deferred_ops rules_notices rules_decisions rules_batches rules_batch_groups rules_comments rules_append_completions rules_readonly_notices rules_lifecycle_questions rules_lifecycle_answers rules_related_episodes rules_legacy_transitions rules_legacy_releases thinking_decisions thinking_decision_events rules_related_receipts rules_analysis_reviews rules_analysis_review_members'.split()
+        required='messages cases groups reconciliation attachments group_notices model_usage classification_runs classification_tool_calls classification_run_sources collection_batches collection_batch_messages followup_roots followup_jobs followup_operations followup_analysis_retries followup_episodes followup_episode_sources followup_job_sources autonomous_routes autonomous_confirmations autonomous_outages autonomous_clarifications autonomous_plans triage_topic_hydration triage_topics triage_topic_messages triage_topic_events triage_current_topics triage_current_topic_events rules_topics rules_sources rules_ops_replies rules_inflight_topics rules_deferred_ops rules_notices rules_decisions rules_batches rules_batch_groups rules_comments rules_append_completions rules_readonly_notices rules_lifecycle_questions rules_lifecycle_answers rules_related_episodes rules_legacy_transitions rules_legacy_releases thinking_decisions thinking_decision_events rules_related_receipts rules_analysis_reviews rules_analysis_review_members'.split()
         self.assertEqual(set(required),set(result['inventory']))
         self.assertEqual('ABSENT_UNKNOWN',result['inventory']['rules_analysis_reviews']['schema'])
         self.assertIsNone(result['inventory']['rules_analysis_reviews']['total'])
         self.assertFalse(result['inventory']['rules_analysis_reviews']['validation_complete'])
         self.assertFalse(result['inspection']['schema_coverage_complete']);self.assertFalse(result['inspection']['validation_complete'])
+
+    def test_collection_observation_tables_are_supported_accounting(self):
+        self.change("INSERT INTO collection_batches VALUES ('batch', -1, 'PRIVATE', 0, 'queued')")
+        self.change("INSERT INTO collection_batch_messages VALUES ('batch', 42, 0)")
+        self.change("INSERT INTO classification_run_sources VALUES (1, 0, 42, -1, 42)")
+        result = inspect(self.db)
+        for table in ('collection_batches', 'collection_batch_messages', 'classification_run_sources'):
+            row = result['inventory'][table]
+            self.assertEqual(('accounting', 'SUPPORTED', 1), (row['family'], row['schema'], row['total']))
+        self.assertEqual(0, result['unsupported_history']['nonempty_tables'])
+        self.assertNotIn('PRIVATE', json.dumps(result))
 
     def test_terminal_notice_accounting_root_and_lineage_are_visible_blockers(self):
         cases=[('group_notices',"INSERT INTO group_notices(chat_id,message_id,kind,status,reserved_at,notice_message_id) VALUES(-1001234567890,42,'issue','sent','now',900)"),

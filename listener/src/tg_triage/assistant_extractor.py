@@ -540,6 +540,8 @@ class AssistantExtractor:
                 rules_fingerprint=snapshot.fingerprint,
                 rules_version=getattr(self.store, 'assistant_pack_fingerprint', None),
                 final_state='HOLD', error_class='infra')
+            if values['id_space'] == 'message':
+                values['_source_keys'] = classification_log.source_keys(sources)
             if deciding:
                 values.update(phase=PHASE_DECIDE, rules_version=assistant.decide_prefix_hash(
                                   self.pack_text, core_pack=self.core_pack),

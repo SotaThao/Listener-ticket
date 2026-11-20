@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import re
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -64,6 +65,31 @@ async def spin_until(predicate,limit=2000):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_observer_retries_a_busy_sqlite_write_and_restart_interrupts_batches(self):
+        from contextlib import closing
+        from tg_triage import collection_log
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        path = root / "busy.sqlite"
+        store = Store(path)
+        try:
+            db = store.connection
+            db.execute("PRAGMA busy_timeout=0")
+            with closing(sqlite3.connect(path)) as other:
+                other.execute("BEGIN IMMEDIATE")
+                admission = [("batch", "collecting", (-1, None, 42.0, 5, 0))]
+                self.assertFalse(collection_log.persist(store, admission))
+                self.assertFalse(db.in_transaction)
+                other.rollback()
+                self.assertTrue(collection_log.persist(store, admission))
+                self.assertTrue(collection_log.persist(store, [("batch", "queued", None)]))
+        finally:
+            store.close()
+        reopened = Store(path)
+        self.addCleanup(reopened.close)
+        row = reopened.connection.execute("SELECT status FROM collection_batches WHERE batch_id='batch'").fetchone()
+        self.assertEqual("interrupted", row[0])
+
     def test_trailing_quiet_and_absolute_cap(self):
         collector=ChatCollector()
         for mid,when in ((1,0),(2,20),(3,45)):
@@ -159,20 +185,110 @@ class WorkerPacingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([1,2],notices); self.assertEqual(1,len(http.calls))
         await self.shutdown()
 
+    async def test_admin_batch_status_tracks_live_windows_and_interruption(self):
+        from tg_triage import admin
+
+        store = self.store
+
+        class BlockingPipeline:
+            def __init__(self):
+                self.config = replace(config("live"), autonomous_enabled=True)
+                self.store = store
+                self.started = threading.Event()
+                self.release = threading.Event()
+                self.processed = []
+
+            def process(self, incoming):
+                self.started.set()
+                if not self.release.wait(30):
+                    raise AssertionError("Missing thread release")
+                self.processed.append((incoming.chat_id, incoming.message_id))
+
+        pipeline = BlockingPipeline()
+        self.task = asyncio.create_task(telegram_io.worker(
+            self.queue, pipeline, self.stop, _clock=self.clock, _receive=self.clock.receive
+        ))
+
+        def summaries():
+            with store._lock:
+                return admin._batches(store.connection)["batches"]
+
+        def has_status(chat, status):
+            return any(row["chat_id"] == chat and row["status"] == status for row in summaries())
+
+        await self.send(message(1, chat_id=-1, chat_title="First"))
+        await spin_until(lambda: has_status(-1, "collecting"))
+        first = summaries()[0]
+        await self.advance(5)
+        await self.send(message(1, chat_id=-2))
+        await spin_until(lambda: has_status(-2, "collecting"))
+        try:
+            await self.advance(30)
+            await spin_until(pipeline.started.is_set)
+            await spin_until(lambda: has_status(-1, "processing"))
+            await self.advance(35)
+            await spin_until(lambda: has_status(-2, "queued"))
+            await self.send(message(2, chat_id=-2))
+            await spin_until(lambda: has_status(-2, "collecting"))
+        finally:
+            pipeline.release.set()
+
+        await spin_until(lambda: has_status(-1, "finished") and has_status(-2, "finished"))
+        self.assertEqual([(-1, 1), (-2, 1)], pipeline.processed)
+        await self.shutdown()
+        by_status = {row["status"]: row for row in summaries() if row["chat_id"] == -2}
+        self.assertEqual({"finished", "interrupted"}, set(by_status))
+        self.assertNotEqual(by_status["finished"]["batch_id"], by_status["interrupted"]["batch_id"])
+        with store._lock:
+            detail = admin._batch_detail(store.connection, first["batch_id"])
+        self.assertEqual("finished", detail["batch"]["status"])
+        self.assertEqual("First", detail["batch"]["chat_label"])
+        self.assertEqual(1, detail["messages"][0]["message_id"])
+        self.assertEqual([], detail["messages"][0]["run_ids"])
+
     async def test_stop_then_replay_waits_again_without_lost_queued_messages(self):
-        model,http=self.model([self.wire([1,2])]); p=self.build(model)
-        await self.send(message(1)); await self.advance(10); await self.send(message(2))
-        await self.shutdown(); await asyncio.wait_for(self.queue.join(),2)
+        from tg_triage import admin
+
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        path = folder / "replay.sqlite"
+        self.store = Store(path)
+        self.addCleanup(self.store.close)
+        model, http = self.model([self.wire([1, 2])])
+        pipeline = self.build(model)
+        await self.send(message(1))
+        await self.advance(10)
+        await self.send(message(2))
+        await self.shutdown()
+        await asyncio.wait_for(self.queue.join(), 2)
         self.assertFalse(http.calls)
-        self.assertEqual([1,2],[m.message_id for m in self.store.queued_messages()])
-        self.queue=asyncio.Queue(); self.stop=asyncio.Event(); self.clock=VirtualClock()
-        for item in self.store.queued_messages(): self.queue.put_nowait(item)
-        self.task=asyncio.create_task(telegram_io.worker(self.queue,p,self.stop,_clock=self.clock,_receive=self.clock.receive))
-        await spin_until(lambda:len(self.clock.received)==2)
-        for _ in range(20): await asyncio.sleep(0)
-        await self.advance(29.99); self.assertFalse(http.calls)
-        await self.advance(30); await spin_until(lambda:len(p.github.calls)==1)
-        await asyncio.wait_for(self.queue.join(),2); self.assertEqual(1,len(http.calls))
+
+        self.store.close()
+        self.store = Store(path)
+        self.addCleanup(self.store.close)
+        self.queue = asyncio.Queue()
+        self.stop = asyncio.Event()
+        self.clock = VirtualClock()
+        recovered = self.store.queued_messages()
+        self.assertEqual([1, 2], [m.message_id for m in recovered])
+        for item in recovered:
+            self.queue.put_nowait(item)
+        pipeline = self.build(model)
+        self.assertFalse(self.store.connection.in_transaction)
+
+        def summaries():
+            with self.store._lock:
+                return admin._batches(self.store.connection)["batches"]
+
+        await spin_until(lambda: any(row["status"] == "collecting" and row["message_count"] == 2 for row in summaries()))
+        active, interrupted = summaries()
+        self.assertEqual(("collecting", "interrupted"), (active["status"], interrupted["status"]))
+        self.assertNotEqual(active["batch_id"], interrupted["batch_id"])
+        await self.advance(29.99)
+        self.assertFalse(http.calls)
+        await self.advance(30)
+        await spin_until(lambda: len(pipeline.github.calls) == 1)
+        await asyncio.wait_for(self.queue.join(), 2)
+        self.assertEqual(1, len(http.calls))
 
     async def test_cancellation_releases_pending_queue_but_preserves_database(self):
         model,http=self.model([self.wire([1])]); self.build(model)

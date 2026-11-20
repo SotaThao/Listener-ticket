@@ -22,7 +22,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .assistant_contract import PHASE_DECIDE
 from .config import ConfigError, _validate_admin_secret_stat
@@ -408,9 +408,10 @@ def _timestamp(value):
     return (dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)).timestamp()
 
 
-def _round_detail(db, row, now):
+def _round_detail(db, row, now, *, messages=None):
     ids = _list_json(row["message_ids"])
-    messages = _messages(db, row, ids, include_text=True)
+    if messages is None:
+        messages = _messages(db, row, ids, include_text=True)
     run = _summary(db, row, now, ids=ids, messages=messages)
     run.update({key: row[key] for key in DETAIL_FIELDS})
     if row["id_space"] == "topic_ref":
@@ -431,6 +432,77 @@ def _detail(db, run_id, now):
         return ([_round_detail(db, row, now) for row in reversed(rows[:THREAD_ROUND_LIMIT])],
                 len(rows) > THREAD_ROUND_LIMIT)
     return None
+
+
+_BATCH_SUMMARY = """SELECT b.batch_id,b.chat_id,b.chat_label,b.started_at,b.status,
+    (SELECT COUNT(*) FROM collection_batch_messages m WHERE m.batch_id=b.batch_id) AS message_count
+    FROM collection_batches b"""
+
+
+def _batches(db):
+    if not _columns(db, "collection_batches"):
+        return {"batches": []}
+    by_activity = _BATCH_SUMMARY + """
+        WHERE (b.status IN ('collecting','queued','processing')) = ?
+        ORDER BY b.started_at DESC,b.batch_id DESC"""
+    batches = [dict(row) for row in db.execute(by_activity, (1,))]
+    batches.extend(dict(row) for row in db.execute(by_activity + " LIMIT ?", (0, PAGE_SIZE)))
+    return {"batches": batches}
+
+
+def _batch_detail(db, batch_id):
+    if not batch_id or len(batch_id) > 128 or not _columns(db, "collection_batches"):
+        return None
+    batch = db.execute(_BATCH_SUMMARY + " WHERE b.batch_id=?", (batch_id,)).fetchone()
+    if batch is None:
+        return None
+    chat_id = batch["chat_id"]
+    rows = db.execute("""SELECT bm.message_id,m.received_at,m.sender_name,m.text,m.decision
+        FROM collection_batch_messages bm
+        LEFT JOIN messages m ON m.chat_id=? AND m.message_id=bm.message_id
+        WHERE bm.batch_id=? ORDER BY bm.ordinal""", (chat_id, batch_id))
+    messages = {}
+    for row in rows:
+        message = dict(row, run_ids=[])
+        message["received_at"] = _timestamp(message["received_at"])
+        messages[row["message_id"]] = message
+    if _columns(db, "classification_run_sources"):
+        # Drive the lookup from batch members so polling never scans a chat's history.
+        links = db.execute("""SELECT DISTINCT bm.message_id,s.run_id
+            FROM collection_batch_messages bm
+            CROSS JOIN classification_run_sources s ON s.chat_id=? AND s.message_id=bm.message_id
+            JOIN classification_runs r ON r.run_id=s.run_id
+            WHERE bm.batch_id=? ORDER BY s.run_id""", (chat_id, batch_id))
+        for row in links:
+            messages[row["message_id"]]["run_ids"].append(row["run_id"])
+    return {"batch": dict(batch), "messages": list(messages.values())}
+
+
+def _exact_round(db, run_id, now):
+    columns = _columns(db, "classification_runs")
+    if not columns:
+        return None
+    row = db.execute("SELECT * FROM classification_runs WHERE run_id=?", (run_id,)).fetchone()
+    if row is None:
+        return None
+    thread = row["log_thread_id"] if "log_thread_id" in columns else None
+    key = _thread_key(columns)
+    round_index = db.execute(
+        f"SELECT COUNT(*) FROM classification_runs WHERE {key}=? AND run_id<=?",
+        (thread if thread is not None else run_id, run_id),
+    ).fetchone()[0]
+    inputs = None
+    message_columns = _columns(db, "messages")
+    if message_columns and _columns(db, "classification_run_sources"):
+        label = "m.chat_username" if "chat_username" in message_columns else "NULL AS chat_username"
+        source_ref = "s.input_id AS input_ref," if row["id_space"] == "topic_ref" else ""
+        inputs = [dict(source) for source in db.execute(f"""
+            SELECT {source_ref}s.chat_id,s.message_id,m.received_at,m.sender_name,m.text,m.decision,
+                   m.issue_url,{label}
+            FROM classification_run_sources s
+            JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+            WHERE s.run_id=? ORDER BY s.ordinal LIMIT ?""", (run_id, MAX_INPUTS))]
+    return {**_format_round(_round_detail(db, row, now, messages=inputs or None)), "round_index": round_index}
 
 
 def _format_round(detail):
@@ -651,7 +723,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/stream":
             self._stream()
             return
-        if path != "/api/runs" and not path.startswith("/api/runs/"):
+        route, _, identifier = path.removeprefix("/api/").partition("/")
+        if not path.startswith("/api/") or route not in ("runs", "batches", "rounds"):
             self._json(404, {"error": "not_found"})
             return
         try:
@@ -659,9 +732,19 @@ class _Handler(BaseHTTPRequestHandler):
                 now = self.server.clock()
                 if path == "/api/runs":
                     value = _runs(db, self.path.partition("?")[2], now)
+                elif path == "/api/batches":
+                    value = _batches(db)
+                elif route == "batches":
+                    value = _batch_detail(db, unquote(identifier))
+                elif identifier.isascii() and identifier.isdecimal():
+                    run_id = _bounded_int(identifier)
+                    if route == "rounds":
+                        value = _exact_round(db, run_id, now)
+                    else:
+                        detail = _detail(db, run_id, now)
+                        value = _format_detail(detail) if detail is not None else None
                 else:
-                    identifier = path.removeprefix("/api/runs/")
-                    value = _detail(db, _bounded_int(identifier), now) if identifier.isascii() and identifier.isdecimal() else None
+                    value = None
         except ValueError:
             self._json(400 if path == "/api/runs" else 404,
                        {"error": "bad_request" if path == "/api/runs" else "not_found"})
@@ -672,7 +755,7 @@ class _Handler(BaseHTTPRequestHandler):
         if value is None:
             self._json(404, {"error": "not_found"})
         else:
-            self._json(200, value if path == "/api/runs" else _format_detail(value))
+            self._json(200, value)
 
     def _event(self, name, value, cursor):
         self.wfile.write(f"id: {cursor}\nevent: {name}\ndata: ".encode("ascii") + _json_bytes(value) + b"\n\n")

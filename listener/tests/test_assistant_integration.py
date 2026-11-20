@@ -112,10 +112,12 @@ class AssistantIntegrationTests(unittest.TestCase):
         result = pipeline.process(message(42, text='POS kẹt giấy'))
         self.assertEqual((result.decision, pipeline.classifier.calls, chat.call_count), ('dry_run_issue', 1, 0))
         for writer in writers: writer.reset_mock()
+        source_query = "SELECT run_id,input_id,chat_id,message_id FROM classification_run_sources ORDER BY run_id,ordinal"
+        before_sources = [tuple(row) for row in self.store.connection.execute(source_query)]
         before = {r[0]: list(self.store.connection.execute('SELECT * FROM "' + r[0] + '"'))
                   for r in self.store.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
                   if r[0] not in ('classification_runs', 'classification_tool_calls',
-                                  'classification_model_calls', 'sqlite_sequence')}
+                                  'classification_model_calls', 'classification_run_sources', 'sqlite_sequence')}
         runtime.drain()
         runtime._worker.join(timeout=5)
         self.assertFalse(runtime._worker.is_alive())
@@ -124,6 +126,8 @@ class AssistantIntegrationTests(unittest.TestCase):
             self.assertEqual(list(self.store.connection.execute('SELECT * FROM "' + table + '"')), rows, table)
         row = self.store.connection.execute("SELECT * FROM classification_runs WHERE phase='assistant_shadow'").fetchone()
         self.assertEqual((row['final_state'], row['template'], row['model_calls']), ('READY', 'bug.md', 2))
+        self.assertEqual(before_sources + [(row['run_id'], 42, message().chat_id, 42)],
+                         [tuple(source) for source in self.store.connection.execute(source_query)])
         self.assertEqual(chat.call_count, 2)
         self.assertEqual(self.store.connection.execute('SELECT count(*) FROM classification_tool_calls').fetchone()[0], 1)
 

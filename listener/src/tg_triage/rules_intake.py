@@ -278,11 +278,14 @@ def _batch_thread(pipeline, sources, topic):
         reply_to_ids=tuple(dict.fromkeys(m.reply_to_id for m in sources if m.reply_to_id is not None)))
 
 
-def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, topic_id=None):
+def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, topic_id=None, ref_sources=None):
     """Record one rules attempt without changing the evaluation result."""
     sources = list(sources)
     phase = 'followup_confirm' if confirm_followup else 'pending_merge' if allow_mixed else 'extract'
-    with classification_log.run(snapshot, sources, images, phase, topic_id=topic_id) as attempt:
+    run_options = {}
+    if ref_sources is not None:
+        run_options['ref_sources'] = ref_sources
+    with classification_log.run(snapshot, sources, images, phase, topic_id=topic_id, **run_options) as attempt:
         from .thinking import CURRENT
         turn = CURRENT.get()
         runtime = getattr(turn.store, 'assistant_runtime', None) if turn is not None else None
@@ -1682,7 +1685,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                         pipeline._prepared_images=pipeline.attachments.prepare_images(batch_id,list(actual.values()))
                         scoped_images={lookup[(m.chat_id,m.message_id)]:path for m,path in pipeline._prepared_images.accepted
                                        if (m.chat_id,m.message_id) in lookup}
-                    merged=evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,scoped,images=scoped_images,asked_counts=asked,allow_mixed=True,topic_id=topic)
+                    merged=evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,scoped,images=scoped_images,asked_counts=asked,allow_mixed=True,topic_id=topic,ref_sources=originals)
                     if merged is None or len(merged)!=1:
                         too_large=too_large or (merged is None and _too_large(turn))
                         groups=None; break
@@ -2392,7 +2395,7 @@ def _process_source_followup(pipeline, message):
                 with decision_turn(pipeline, 'rules:followup:' + own, topic, message.message_id):
                     outcome = evaluate_batch(pipeline.rules_snapshot, _FollowupConfirmationProvider(pipeline.classifier, bare),
                                              model_sources, images=images, asked_counts=json.loads(snapshot['asked']),
-                                             allow_mixed=True, confirm_followup=True, topic_id=topic)
+                                             allow_mixed=True, confirm_followup=True, topic_id=topic, ref_sources=originals)
         except Exception:
             outcome = None
         if (outcome is None or len(outcome) != 1
@@ -2565,7 +2568,8 @@ def _process_ops_evaluate(pipeline,message,topic,asked,originals,snapshot,*,is_o
         images={pair_to_ref[(m.chat_id,m.message_id)]:path for m,path in pipeline._prepared_images.accepted} if pipeline._prepared_images is not None else {}
         reply_target='bot_question' if is_ops else 'none'
         outcome=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,model_sources,images=images,documents=documents,
-                                                    reply_target_for=lambda _: reply_target,asked_counts=asked,allow_mixed=True,topic_id=topic)
+                                                    reply_target_for=lambda _: reply_target,asked_counts=asked,allow_mixed=True,
+                                                    topic_id=topic,ref_sources=originals)
         too_large = outcome is None and _too_large(turn)
     if outcome is None and too_large:
         result = _request_too_large(pipeline,source,topic,attempt)

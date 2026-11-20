@@ -11,6 +11,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from . import group_notices, reactions, rules
 from .models import IncomingMessage
@@ -20,6 +21,7 @@ LOG = logging.getLogger(__name__)
 
 SWEEP_SECONDS = 15  # how often the worker closes cases whose window expired
 DOWNLOAD_TIMEOUT_SECONDS = 60
+COLLECTION_OBSERVER_BACKLOG = 4096
 
 
 class SafeTransportHandler(logging.Handler):
@@ -506,17 +508,75 @@ def _release_messages(queue,messages):
 
 async def _paced_work(queue,pipeline,stop,react,interval,*,clock=time.monotonic,receive=None):
     """Collect independently of the single processing thread; never wait on Telegram's loop."""
+    from . import collection_log
     from .pacing import ChatCollector,RELEASED_SOURCES,BUSY_CHATS
+    from .store import Store
+
     collector=ChatCollector(pipeline.config.context_quiet_seconds,pipeline.config.context_max_wait_seconds)
     ready=asyncio.Queue()
     receive=receive or _next_message
     sweep_pending=False
     ready_chats={}
+    store = getattr(pipeline, 'store', None)
+    observe = getattr(pipeline.config, 'mode', None) == 'live' and isinstance(store, Store)
+    events = asyncio.Queue() if observe else None
+    collecting_ids = {}
+    observer_stopping = False
+
+    def record_status(batch_id, status):
+        if batch_id is not None:
+            events.put_nowait((batch_id, status, None))
+
+    def admit(message, now):
+        if events is not None:
+            chat_id = message.chat_id
+            if events.qsize() >= COLLECTION_OBSERVER_BACKLOG:
+                previous = collecting_ids.get(chat_id, (None, None))
+                if chat_id not in collecting_ids or previous[0] is not None:
+                    LOG.debug("Collection accounting dropped a batch because its backlog was full")
+                record_status(previous[0], 'discard')
+                collecting_ids[chat_id] = (None, None)
+            elif chat_id not in collecting_ids:
+                collecting_ids[chat_id] = (uuid4().hex, store.clock().timestamp())
+            batch_id, started_at = collecting_ids[chat_id]
+            if batch_id is not None:
+                label = message.chat_title or message.chat_username or None
+                pending = collector.pending.get(chat_id)
+                ordinal = len(pending.messages) if pending is not None else 0
+                events.put_nowait((batch_id, 'collecting', (chat_id, label, started_at, message.message_id, ordinal)))
+        collector.add(message, now)
+
+    async def record_events():
+        # The collector and processor keep their timing even while SQLite is busy.
+        while True:
+            event = await events.get()
+            if event is None:
+                return
+            chunk = [event]
+            while len(chunk) < 256 and not events.empty():
+                event = events.get_nowait()
+                if event is None:
+                    break
+                chunk.append(event)
+            shutdown_retries = 2
+            delay = 0.05
+            while not await _in_thread(collection_log.persist, store, chunk):
+                if observer_stopping:
+                    if not shutdown_retries:
+                        LOG.warning("Collection accounting unavailable during shutdown")
+                        return
+                    shutdown_retries -= 1
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 0.5)
+            if event is None:
+                return
 
     def release_batch(batch):
         chat_id=batch[0].chat_id
         ready_chats[chat_id]=ready_chats.get(chat_id,0)+1
-        ready.put_nowait(batch)
+        batch_id, _ = collecting_ids.pop(chat_id, (None, None))
+        record_status(batch_id, 'queued')
+        ready.put_nowait((batch_id, batch))
 
     async def collect():
         nonlocal sweep_pending
@@ -543,17 +603,19 @@ async def _paced_work(queue,pipeline,stop,react,interval,*,clock=time.monotonic,
                 # An arrival at the hard boundary starts the next batch; it cannot extend the cap.
                 for batch in collector.release_due(now):
                     release_batch(batch)
-                collector.add(incoming,now)
+                admit(incoming, now)
         finally:
             for batch in collector.release_all():
+                batch_id, _ = collecting_ids.pop(batch[0].chat_id, (None, None))
+                record_status(batch_id, 'interrupted')
                 _release_messages(queue,batch)
 
     async def process():
         nonlocal sweep_pending
         while stop is None or not stop.is_set():
-            batch=await ready.get()
+            item=await ready.get()
             try:
-                if batch is _TICK:
+                if item is _TICK:
                     token=RELEASED_SOURCES.set(frozenset())
                     try:
                         excluded=frozenset(collector.pending)|frozenset(ready_chats)
@@ -566,26 +628,33 @@ async def _paced_work(queue,pipeline,stop,react,interval,*,clock=time.monotonic,
                         RELEASED_SOURCES.reset(token)
                         sweep_pending=False
                     continue
+                batch_id, batch = item
                 chat_id=batch[0].chat_id
                 ready_chats[chat_id]-=1
                 if not ready_chats[chat_id]:
                     del ready_chats[chat_id]
                 token=RELEASED_SOURCES.set(frozenset((m.chat_id,m.message_id) for m in batch))
                 busy_token=BUSY_CHATS.set((frozenset(collector.pending)|frozenset(ready_chats))-{chat_id})
+                status = 'interrupted'
+                record_status(batch_id, 'processing')
                 try:
                     for incoming in batch:
                         if stop is not None and stop.is_set():
                             break
                         decision=await _in_thread(_process_message,pipeline,incoming)
                         await _react_issue_created(pipeline,react,decision,incoming.chat_id,incoming.message_id)
+                    else:
+                        status = 'finished'
                 finally:
+                    record_status(batch_id, status)
                     RELEASED_SOURCES.reset(token)
                     BUSY_CHATS.reset(busy_token)
             finally:
-                if batch is not _TICK:
-                    _release_messages(queue,batch)
+                if item is not _TICK:
+                    _release_messages(queue,item[1])
                 ready.task_done()
 
+    observer = asyncio.create_task(record_events()) if events is not None else None
     tasks=[asyncio.create_task(collect()),asyncio.create_task(process())]
     try:
         done,_=await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
@@ -597,10 +666,16 @@ async def _paced_work(queue,pipeline,stop,react,interval,*,clock=time.monotonic,
                 task.cancel()
         await asyncio.gather(*tasks,return_exceptions=True)
         while not ready.empty():
-            batch=ready.get_nowait()
-            if batch is not _TICK:
+            item=ready.get_nowait()
+            if item is not _TICK:
+                batch_id, batch = item
+                record_status(batch_id, 'interrupted')
                 _release_messages(queue,batch)
             ready.task_done()
+        if observer is not None:
+            observer_stopping = True
+            events.put_nowait(None)
+            await observer
         while not queue.empty():
             queue.get_nowait()
             queue.task_done()  # Shutdown release only; every row is still durable in SQLite.

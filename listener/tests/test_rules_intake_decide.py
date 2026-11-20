@@ -65,10 +65,11 @@ class Audit:
 
     @contextmanager
     def run(self, snapshot, sources, images=None, phase='extract', *, topic_id=None,
-            code_precheck=None, log_thread_id=None):
+            code_precheck=None, log_thread_id=None, ref_sources=None):
         self.legacy_calls.append((phase, code_precheck))
         if code_precheck is None:
-            with self.legacy_run(snapshot, sources, images, phase, topic_id=topic_id) as attempt:
+            with self.legacy_run(snapshot, sources, images, phase, topic_id=topic_id,
+                                 ref_sources=ref_sources) as attempt:
                 yield attempt
         else:
             attempt = SimpleNamespace(result=None)

@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
-from tg_triage import admin
+from tg_triage import admin, classification_log, collection_log
 from tg_triage.__main__ import main
 from tg_triage.config import ConfigError, load_admin_config, load_config
 from tg_triage.store import Store
@@ -164,6 +164,74 @@ class AdminServiceTests(unittest.TestCase):
         cookie = self.cookie()
         self.now += 3600
         self.assertEqual(self.request("/api/me", cookie=cookie)[0], 401)
+
+    def test_batch_endpoints_are_authenticated_and_resolve_exact_sources(self):
+        for path in ("/api/batches", "/api/batches/old", "/api/rounds/1"):
+            self.assertEqual(401, self.request(path)[0])
+        cookie = self.cookie()
+        self.assertEqual({"batches": []}, json.loads(self.request("/api/batches", cookie=cookie)[2]))
+        self.assertEqual(404, self.request("/api/batches/old", cookie=cookie)[0])
+
+        collection_log.init_store(self.db, recover_pending=False)
+        classification_log.init_store(self.db)
+        self.db.executemany("INSERT INTO collection_batches VALUES (?, ?, ?, ?, ?)", [
+            ("a/b", CHAT, "Triage", NOW - 1, "collecting"),
+            ("newer", CHAT, None, NOW, "finished"),
+        ])
+        self.db.execute("INSERT INTO collection_batch_messages VALUES ('a/b', 1, 0)")
+        self.db.execute("""INSERT INTO messages VALUES
+            (?, 2, '2025-01-01T00:00:00+00:00', 'Other', 'No run', 'queued', NULL, NULL)""", (CHAT,))
+        self.db.execute("INSERT INTO collection_batch_messages VALUES ('a/b', 2, 1)")
+        before = self.db.total_changes
+        listing = json.loads(self.request("/api/batches", cookie=cookie)[2])
+        self.assertEqual(["a/b", "newer"], [row["batch_id"] for row in listing["batches"]])
+        self.assertEqual(2, listing["batches"][0]["message_count"])
+        detail = json.loads(self.request("/api/batches/a%2Fb", cookie=cookie)[2])
+        self.assertEqual([[], []], [row["run_ids"] for row in detail["messages"]])
+        self.assertEqual(before, self.db.total_changes)
+
+        def insert(chat, message_ids, keys, **extra):
+            row = dict(created_at=NOW, turn_key="turn", phase="extract", batch_fingerprint="batch",
+                       chat_id=chat, message_ids=json.dumps(message_ids), id_space="message",
+                       rules_fingerprint="rules", _source_keys=keys)
+            row.update(extra)
+            return classification_log._insert_run(self.db, row)
+
+        first = insert(CHAT, [1], [(1, CHAT, 1)])
+        same_id_other_chat = insert(-100, [1], [(1, -100, 1)])
+        second = insert(CHAT, [9], [(9, CHAT, 1)], id_space="topic_ref", log_thread_id=first)
+        insert(CHAT, [2], [], id_space="topic_ref", log_thread_id=first)
+        for _ in range(admin.THREAD_ROUND_LIMIT):
+            insert(CHAT, [100], [(100, CHAT, 100)], log_thread_id=first)
+
+        after_writes = self.db_path.stat().st_mtime_ns
+        detail = json.loads(self.request("/api/batches/a%2Fb", cookie=cookie)[2])
+        self.assertEqual([1, 2], [row["message_id"] for row in detail["messages"]])
+        self.assertEqual([first, second], detail["messages"][0]["run_ids"])
+        self.assertNotIn(same_id_other_chat, detail["messages"][0]["run_ids"])
+        self.assertEqual([], detail["messages"][1]["run_ids"])
+        self.assertEqual("queued", detail["messages"][1]["decision"])
+        self.assertEqual(1735689600, detail["messages"][0]["received_at"])
+        exact = json.loads(self.request(f"/api/rounds/{second}", cookie=cookie)[2])
+        self.assertEqual(2, exact["round_index"])
+        self.assertEqual(second, exact["run"]["run_id"])
+        self.assertEqual([9], exact["run"]["message_refs"])
+        self.assertEqual((CHAT, 1, 9, URL), tuple(exact["inputs"][0][k]
+                         for k in ("chat_id", "message_id", "input_ref", "issue_url")))
+        self.assertEqual(after_writes, self.db_path.stat().st_mtime_ns)
+
+    def test_batch_listing_keeps_all_active_and_caps_recent_history(self):
+        cookie = self.cookie()
+        collection_log.init_store(self.db, recover_pending=False)
+        self.db.executemany("INSERT INTO collection_batches VALUES (?, ?, NULL, ?, ?)", [
+            (f"{status}-{index}", CHAT, NOW + index, status)
+            for status in ("collecting", "finished") for index in range(admin.PAGE_SIZE + 2)
+        ])
+        rows = json.loads(self.request("/api/batches", cookie=cookie)[2])["batches"]
+        self.assertEqual([
+            *(f"collecting-{i}" for i in range(admin.PAGE_SIZE + 1, -1, -1)),
+            *(f"finished-{i}" for i in range(admin.PAGE_SIZE + 1, 1, -1)),
+        ], [row["batch_id"] for row in rows])
 
     def test_lockout_is_per_ip_and_expires_after_ten_minutes(self):
         for _ in range(4):

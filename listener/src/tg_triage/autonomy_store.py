@@ -33,7 +33,8 @@ class AutonomyStoreMixin:
                     case_key TEXT NOT NULL,plan TEXT NOT NULL,recorded_at TEXT NOT NULL,
                     PRIMARY KEY(chat_id,anchor_id));
             ''')
-            self.connection.execute("UPDATE autonomous_confirmations SET status='ambiguous' WHERE status='reserved'")
+            with self.connection:
+                self.connection.execute("UPDATE autonomous_confirmations SET status='ambiguous' WHERE status='reserved'")
             self._autonomy_enabled=True
 
     def autonomous_read_context(self,sources):

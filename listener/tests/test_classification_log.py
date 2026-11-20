@@ -229,6 +229,12 @@ class ClassificationLogTests(fallback.ProviderBase):
         self.assertEqual(row['topic_id'], topic)
         self.assertEqual(row['id_space'], 'topic_ref')
         self.assertEqual(json.loads(row['message_ids']), [1, 2])
+        mapped = self.store.connection.execute(
+            "SELECT input_id,chat_id,message_id FROM classification_run_sources WHERE run_id=? ORDER BY ordinal",
+            (row["run_id"],),
+        )
+        self.assertEqual([(1, original.chat_id, 10), (2, incoming.chat_id, 11)],
+                         [tuple(link) for link in mapped])
         refs = [replace(original, message_id=1), replace(incoming, message_id=2, reply_to_id=1)]
         with self.turn(topic=topic), log.run(snapshot, refs, phase='pending_merge'):
             pass
@@ -282,10 +288,10 @@ class ClassificationLogTests(fallback.ProviderBase):
                 self.addCleanup(store.close)
                 settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
                 pipeline = Pipeline(settings, store, object(), rules_snapshot=self.snapshot)
-                self.assertTrue(store.connection.in_transaction)
+                self.assertFalse(store.connection.in_transaction)
                 with self.assertNoLogs('tg_triage.classification_log', level='WARNING'):
                     log.maintain(store)
-                    self.assertTrue(store.connection.in_transaction)
+                    self.assertFalse(store.connection.in_transaction)
                     source = message(42, text, mentions_listener=False)
                     store.enqueue(source)
                     self.assertFalse(store.connection.in_transaction)
@@ -422,12 +428,16 @@ class ClassificationLogTests(fallback.ProviderBase):
         self.assertTrue(log.flush(self.store))
         self.assertEqual(len(self.runs()), 2)
 
-    def test_uncommitted_pipeline_initializer_is_untouched_by_maintenance(self):
+    def test_uncommitted_caller_transaction_is_untouched_by_maintenance(self):
         settings = replace(config(), autonomous_enabled=True, decision_rules_enabled=True)
         statements = []
         self.store.connection.set_trace_callback(statements.append)
         Pipeline(settings, self.store, object(), rules_snapshot=self.snapshot)
         self.assertTrue(any(sql.startswith('UPDATE autonomous_confirmations') for sql in statements))
+        self.assertFalse(self.store.connection.in_transaction)
+        source = message(42)
+        self.store.enqueue(source)
+        self.store.connection.execute("UPDATE messages SET sender_name='uncommitted'")
         self.assertTrue(self.store.connection.in_transaction)
         statements.clear()
         with self.assertNoLogs('tg_triage.classification_log', level='WARNING'):
@@ -435,6 +445,7 @@ class ClassificationLogTests(fallback.ProviderBase):
         self.assertTrue(self.store.connection.in_transaction)
         self.assertFalse(any(sql.strip().upper().startswith(('COMMIT', 'ROLLBACK')) for sql in statements))
         self.store.connection.rollback()
+        self.assertEqual(source.sender_name, self.store.get(source.chat_id, source.message_id)['sender_name'])
         log.maintain(self.store)
         self.assertFalse(self.store.connection.in_transaction)
 
@@ -737,6 +748,9 @@ class ClassificationLogTests(fallback.ProviderBase):
             log.record_tool_call(self.store, row['run_id'], 1, 'lookup')
         log.maintain(self.store)
         self.assertEqual([row['run_id'] for row in self.runs()], [keep])
+        self.assertEqual([keep], [row[0] for row in self.store.connection.execute(
+            "SELECT run_id FROM classification_run_sources"
+        )])
         calls = self.store.connection.execute('SELECT run_id FROM classification_tool_calls').fetchall()
         self.assertEqual([row[0] for row in calls], [keep])
         orphans = self.store.connection.execute('''SELECT count(*) FROM classification_tool_calls c
