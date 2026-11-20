@@ -96,6 +96,34 @@ class ToolBoxTests(unittest.TestCase):
         self.assertTrue(all(r[4] == 250 and r[3] > 0 for r in rows))
         self.assertEqual(rows[-1][3], len(json.dumps(result, separators=(',', ':')).encode()))
 
+    def test_core_batch_lookup_orders_ids_and_caps_whole_envelope(self):
+        pack = _load_assistant_pack(pack_mode='core')
+        self.local.get_rule.side_effect = pack.core.get_rule
+        box = self.box(max_rule_lookups=2)
+        reply = box.call('get_rule', {'ids': [' r9 ', ' examples:source_followup_cases ',
+                                              'no-such-rule', 'Readiness:Intent_Resolve']})
+        entries = reply['untrusted_data']['rules']
+        self.assertEqual([entry['rule_id'] for entry in entries],
+                         ['R9', 'examples:source_followup_cases', 'no-such-rule', 'readiness:intent_resolve'])
+        self.assertIn('| R9 |', entries[0]['text'])
+        self.assertTrue(entries[1]['truncated'])
+        self.assertEqual(entries[2]['error'], 'unknown_rule_id')
+        self.assertTrue(entries[3]['ok'])
+        self.assertLessEqual(len(json.dumps(reply, ensure_ascii=False).encode('utf-8')), 8192)
+        self.assertEqual(box.call('get_rule', {'rule_id': ' R9 '})['untrusted_data'], pack.core.get_rule('r9'))
+        self.assertEqual(box.call('get_rule', {'ids': ['R9']})['error'], 'lookup_budget_exhausted')
+        self.assertEqual([row[0] for row in self.rows()], [1, 2, 3])
+
+    def test_core_lookup_validates_arguments_and_zero_cap(self):
+        for invalid in ({'ids': []}, {'ids': ['R9'] * 5}, {'ids': ['R9', 10]},
+                        {'ids': ['R9'], 'rule_id': 'R9'}, {}):
+            with self.subTest(invalid=invalid):
+                self.assertFalse(self.box(max_rule_lookups=1).call('get_rule', invalid)['ok'])
+        zero = self.box(max_rule_lookups=0, max_calls=1)
+        self.assertEqual(zero.call('get_rule', {'ids': ['R9']})['error'], 'lookup_budget_exhausted')
+        self.assertTrue(zero.call('list_open_topics', {})['ok'])
+        self.local.get_rule.assert_not_called()
+
     def test_unknown_and_bad_arguments_never_execute(self):
         cases = [('unknown', {}), ('get_ticket', {'repo': 'a/b', 'number': True}),
                  ('get_ticket', {'repo': 'a/b'}), ('get_messages', {'ids': ['1']}),

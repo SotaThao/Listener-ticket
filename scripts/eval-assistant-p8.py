@@ -296,8 +296,9 @@ def decide_result(runtime: DecideRuntime, store, job):
             except (TypeError, ValueError):
                 continue
             if isinstance(result, dict) and result.get('ok') and isinstance(result.get('untrusted_data'), dict):
-                if rule_id := result['untrusted_data'].get('rule_id'):
-                    rules.append(rule_id)
+                data = result['untrusted_data']
+                rules.extend(entry['rule_id'] for entry in data.get('rules', [data])
+                             if entry.get('ok', True) and entry.get('rule_id'))
     outcomes = json.loads(audit.get('outcomes_json') or '[]')
     terminal_guards = Counter(item['guard'] for group in outcomes or [] for item in group.get('violations', [])
                               if item.get('guard') in GUARDS)
