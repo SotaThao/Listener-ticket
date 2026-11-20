@@ -541,7 +541,7 @@
       const isModel = step.kind === "model";
       const item = element("li", isModel ? "step think" : "step tool");
       const metadata = isModel
-        ? join(step.link, step.model !== step.link ? step.model : "", duration(step.latency_ms),
+        ? join(step.model || "Chưa ghi tên model", duration(step.latency_ms),
           step.reasoning_tokens == null ? "" : "suy luận " + number(step.reasoning_tokens) + " token",
           step.prompt_tokens == null ? "" : number(step.prompt_tokens) + " → " + number(step.completion_tokens) + " token",
           step.timeout_s == null ? "" : "giới hạn " + number(step.timeout_s) + " s",
