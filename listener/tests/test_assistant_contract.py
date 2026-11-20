@@ -314,6 +314,18 @@ class ConfigTests(unittest.TestCase):
             settings = self.load('enabled = true\nmode = "live"\nauthority = "decide"\npack_mode = "core"')
         self.assertEqual(settings.redacted()["assistant"]["pack_mode"], "core")
 
+    def test_core_lookup_budget_defaults_and_validates_range(self):
+        base = 'enabled = true\nmode = "live"\nauthority = "decide"\npack_mode = "core"\n'
+        self.assertNotIn('max_rule_lookups', self.load('').redacted()['assistant'])
+        with patch('tg_triage.config._assistant_token', return_value='test'):
+            self.assertEqual(self.load(base).assistant.max_rule_lookups, 6)
+            for value in (0, 12):
+                public = self.load(base + f'max_rule_lookups = {value}').redacted()['assistant']
+                self.assertEqual(public['max_rule_lookups'], value)
+            for value in ('-1', '13', 'true', '1.5', '"6"'):
+                with self.subTest(value=value), self.assertRaisesRegex(ConfigError, 'assistant.max_rule_lookups'):
+                    self.load(base + f'max_rule_lookups = {value}')
+
 
 class ProposeCompatibilityTests(unittest.TestCase):
     def test_propose_ab_byte_identity_decisions_runs_and_calls(self):

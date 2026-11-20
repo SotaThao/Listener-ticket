@@ -32,19 +32,20 @@ def main() -> int:
         core_out = args.core_out or args.out.with_name(CORE_FILE)
         if core_out.resolve() == args.out.resolve():
             raise AssistantPackError("the core and full pack paths must be distinct")
-        core = (render_core(parse(text), {name: path.read_text(encoding="utf-8") for name, path in extras.items()})
-                if args.core_out is not None or any(path.exists() for path in extras.values()) else None)
+        missing = [str(path) for path in extras.values() if not path.is_file()]
+        if missing:
+            raise AssistantPackError("missing core source(s): " + ", ".join(missing))
+        core = render_core(parse(text), {name: path.read_text(encoding="utf-8") for name, path in extras.items()})
         if args.check:
             if parse(args.out.read_bytes().decode("utf-8")).text != text:
                 raise AssistantPackError(f"{args.out}: assistant pack differs from rebuild")
-            if core is not None and core_out.read_text(encoding="utf-8") != core:
+            if core_out.read_text(encoding="utf-8") != core:
                 raise AssistantPackError(f"{core_out}: assistant core differs from rebuild")
         else:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_bytes(text.encode("utf-8"))
-            if core is not None:
-                core_out.parent.mkdir(parents=True, exist_ok=True)
-                core_out.write_bytes(core.encode("utf-8"))
+            core_out.parent.mkdir(parents=True, exist_ok=True)
+            core_out.write_bytes(core.encode("utf-8"))
     except (OSError, UnicodeError, AssistantPackError) as exc:
         print(f"assistant pack: {exc}", file=sys.stderr)
         return 1

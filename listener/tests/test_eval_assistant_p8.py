@@ -258,7 +258,12 @@ class EvalAssistantP8Tests(unittest.TestCase):
                         store.connection.execute(
                             """INSERT INTO classification_tool_calls (run_id,seq,tool,result_json)
                                VALUES (?,1,'get_rule',?)""",
-                            (run_id, json.dumps(dict(ok=True, untrusted_data=dict(rule_id='facts:object')))))
+                            (run_id, json.dumps(dict(ok=True, untrusted_data=(
+                                dict(rule_id='facts:object') if len(jobs) == 1 else dict(rules=[
+                                    dict(ok=True, rule_id='R9'),
+                                    dict(ok=False, rule_id='unknown'),
+                                    dict(ok=True, rule_id='R10'),
+                                ]))))))
                     if len(jobs) == 2:
                         return None, run_id, 'guard'
                     decision = GroupDecision((1,), 'READY', 'R9', 'bug', None, None, None,
@@ -292,6 +297,7 @@ class EvalAssistantP8Tests(unittest.TestCase):
         self.assertEqual((first['tokens_in'], first['tokens_out'], first['cached_tokens']), (20, 4, 10))
         self.assertEqual((first['pack_mode'], first['get_rule_calls'], first['get_rule_ids']),
                          ('core', 1, ['facts:object']))
+        self.assertEqual((second['get_rule_calls'], second['get_rule_ids']), (1, ['R9', 'R10']))
         self.assertTrue(first['creation_agrees'])
         self.assertEqual(jobs[0]['guard_ctx'].message_ids, frozenset({1}))
         self.assertIn('Ticket agreement (READY/APPEND) 1/2', recorded.getvalue())

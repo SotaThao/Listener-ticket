@@ -1,5 +1,6 @@
 """Canonical pack format and builder tests; all writes stay in temp dirs."""
 import hashlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -198,6 +199,11 @@ class AssistantPackFormatTests(unittest.TestCase):
         builder = ROOT / "scripts/build-assistant-pack.py"
         if not builder.is_file():
             self.skipTest('scripts/build-assistant-pack.py absent outside a repository checkout')
+        source = ROOT / "listener"
+        for name in (*SOURCES, *REFERENCE_FILES):
+            shutil.copyfile(source / "rules" / name, self.rules / name)
+        shutil.copyfile(source / "assistant" / PRINCIPLES_FILE, self.directory / PRINCIPLES_FILE)
+        expected = load(source / "assistant", source / "rules").text
         out = self.directory / "generated" / PACK_FILE
         command = [sys.executable, str(builder),
                    "--rules-dir", str(self.rules), "--principles",
@@ -207,28 +213,53 @@ class AssistantPackFormatTests(unittest.TestCase):
                                   encoding="utf-8", cwd=self.directory)
         built = run()
         self.assertEqual(built.returncode, 0, built.stderr)
-        self.assertEqual(out.read_bytes(), self.text.encode("utf-8"))
+        self.assertEqual(out.read_bytes(), expected.encode("utf-8"))
         checked = run("--check")
         self.assertEqual(checked.returncode, 0, checked.stderr)
         for ending in ("\r\n", "\r"):
             for bom in ("", "\ufeff"):
                 with self.subTest(ending=repr(ending), bom=bool(bom)):
-                    on_disk = (bom + self.text.replace("\n", ending)).encode('utf-8')
+                    on_disk = (bom + expected.replace("\n", ending)).encode('utf-8')
                     out.write_bytes(on_disk)
                     checked = run("--check")
                     self.assertEqual(checked.returncode, 0, checked.stderr)
                     self.assertEqual(out.read_bytes(), on_disk)
-        out.write_bytes(self.text.encode('utf-8'))
+        out.write_bytes(expected.encode('utf-8'))
         (self.rules / SOURCES[0]).write_bytes(b"changed rule\n")
         stale = run("--check")
         self.assertEqual(stale.returncode, 1)
         self.assertIn("differs from rebuild", stale.stderr)
-        self.assertEqual(out.read_bytes(), self.text.encode("utf-8"))
+        self.assertEqual(out.read_bytes(), expected.encode("utf-8"))
         out.unlink()
         missing = run("--check")
         self.assertEqual(missing.returncode, 1)
         self.assertTrue(missing.stderr)
         self.assertFalse(out.exists())
+
+    def test_build_check_fails_when_one_or_both_core_references_are_missing(self):
+        source = ROOT / "listener"
+        builder = ROOT / "scripts/build-assistant-pack.py"
+        if not builder.is_file():
+            self.skipTest('scripts/build-assistant-pack.py absent outside a repository checkout')
+        for name in SOURCES:
+            shutil.copyfile(source / "rules" / name, self.rules / name)
+        for name in (PRINCIPLES_FILE, PACK_FILE, "assistant-core.json"):
+            shutil.copyfile(source / "assistant" / name, self.directory / name)
+        command = [sys.executable, str(builder), "--check", "--rules-dir", str(self.rules),
+                   "--principles", str(self.directory / PRINCIPLES_FILE),
+                   "--out", str(self.directory / PACK_FILE)]
+        for missing in ((REFERENCE_FILES[0],), (REFERENCE_FILES[1],), REFERENCE_FILES):
+            with self.subTest(missing=missing):
+                for name in REFERENCE_FILES:
+                    path = self.rules / name
+                    path.unlink(missing_ok=True)
+                    if name not in missing:
+                        shutil.copyfile(source / "rules" / name, path)
+                result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("missing core source(s)", result.stderr)
+                for name in missing:
+                    self.assertIn(name, result.stderr)
 
 
 if __name__ == "__main__":

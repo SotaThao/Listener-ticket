@@ -571,6 +571,7 @@ class AssistantExtractor:
                 packet['images_order'] = list(pixels)
             toolbox = ToolBox(GitHubReader(self.settings.github_token, self.settings.github_repos),
                 local, store=self.store, run_id=run_id, max_calls=self.settings.max_tool_calls,
+                max_rule_lookups=self.settings.max_rule_lookups if deciding and self.core_pack is not None else None,
                 clock=self.clock, wall_clock=self.wall_clock)
             usage = {'calls': 0}
             call_timing = None

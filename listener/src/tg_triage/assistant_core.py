@@ -14,7 +14,15 @@ from .assistant_pack import AssistantPackError, _hash, _normalize, _read
 
 REFERENCE_FILES = ("README.md", "preflight.md")
 RULE_SECTION_MAX_BYTES = 8192
+RULE_LOOKUP_MAX_IDS = 4
 _CORE_FILES = ("principles.md", "states.md", "channels.md", "questions.md")
+_CORE_SECTIONS = (
+    "facts:fields", "facts:generic_values", "facts:object", "facts:field_valid",
+    "facts:code_facts", "facts:command_intent", "readiness:intent_resolve",
+    "readiness:team_request", "readiness:image_split", "readiness:chat_only",
+    "readiness:confidence",
+)
+_CORE_EXAMPLES = ("X11", "X18", "X5", "X9")
 _FILTERS = dict(F1="prefilter", F2="team_request", F3="link_only",
                 F4="chat_words", F5="banter_only", F6="reply_chat")
 _TABLES = {
@@ -86,6 +94,10 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def normalize_rule_id(rule_id):
+    return rule_id.strip().casefold()
+
+
 @dataclass(frozen=True)
 class CorePack:
     fingerprint: str
@@ -93,7 +105,11 @@ class CorePack:
     sections: Mapping[str, str]
 
     def get_rule(self, rule_id):
-        lookup = rule_id.strip() if isinstance(rule_id, str) and len(rule_id) <= 120 else ""
+        lookup = normalize_rule_id(rule_id) if isinstance(rule_id, str) else ""
+        if len(lookup) > 120:
+            lookup = ""
+        elif lookup not in self.sections and lookup.upper() in self.sections:
+            lookup = lookup.upper()
         text = self.sections.get(lookup)
         if text is None:
             candidates = get_close_matches(lookup, self.sections, n=4, cutoff=.35)
@@ -150,7 +166,12 @@ def build_core(pack, extras):
         raise AssistantPackError("missing or malformed assistant core section") from error
 
     core = "\n\n".join([
-        *(bodies[name].rstrip() for name in _CORE_FILES), decision,
+        *(bodies[name].rstrip() for name in _CORE_FILES),
+        *(("## facts:object\n" if key == "facts:object" else "") + sections[key]
+          for key in _CORE_SECTIONS),
+        "Đọc bảng decision từ trên xuống. Dòng đầu tiên khớp mọi cột là kết quả.\n\n" + decision,
+        "\n".join(["## Ví dụ ngắn", *header, *(_row(sections["examples:examples"], key)
+                                               for key in _CORE_EXAMPLES)]),
         "Bảng lọc trước (code): " + ", ".join(_FILTERS.values()),
         "## Chỉ mục tra quy tắc (RULE INDEX)\n" + "\n".join(index),
     ])
