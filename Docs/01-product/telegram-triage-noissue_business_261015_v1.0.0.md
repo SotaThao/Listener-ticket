@@ -1,6 +1,6 @@
 # Telegram triage — nguồn quy tắc nghiệp vụ duy nhất
 
-**Version**: v1.16.49 · **Updated**: 2026-11-20 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
+**Version**: v1.16.50 · **Updated**: 2026-11-20 (Asia/Saigon) · **Owner/state lineage**: AlexChu · **Executor**: Codex / owner AlexChu
 
 **Status**: Nguồn nghiệp vụ của code THINKING trong PR #43 theo yêu cầu user. Bản chuẩn hóa trước đó đối chiếu THINKPAD với baseline `9746ef2`; implementation mới thêm controller, journal SQLite và prompt gọn. Kết quả review/test/installed/deploy do controller báo bằng evidence riêng, không suy từ hash tài liệu. Không replay các tin cũ. Chỉ tạo ticket thật trong kiểm thử khi user đã yêu cầu rõ, như luồng đọc hai file và tạo ticket; không tự tạo việc giả.
 
@@ -2803,9 +2803,9 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "listener/src/tg_triage/__init__.py": "a0d704101dd43989f394a4c0ca7d54624c9e13eec981f932e47b3b0106cff595",
     "listener/src/tg_triage/__main__.py": "62decae7f45233c889af0e3f281901c341cb9642d92c45b5b6af679f7c0ce562",
     "listener/src/tg_triage/admin.py": "aed1ef3eec7e3c945575b8c93f179d5f7ec892f11f1a7c7d35f2af4e2a4dec63",
-    "listener/src/tg_triage/admin_static/app.css": "243dba4faf0cb744e7840b6989affd24e63e28b3875131aa63c169022e3888ee",
+    "listener/src/tg_triage/admin_static/app.css": "624c78a8f5af6c41209bd01d2aba4d0289c9af1da0b7b33fb28821e7f225b635",
     "listener/src/tg_triage/admin_static/app.js": "173530df6e0a68292e63f44a5acad324107783ed46490970f6bda1a6fe53e160",
-    "listener/src/tg_triage/admin_static/index.html": "2d21cfcfc6ff04a03cdd817a386e46c56171847059b0a43560e145ecab5973b8",
+    "listener/src/tg_triage/admin_static/index.html": "b539525b5d39580ccf37cf778fa01e54f3ca8d2ed291c41b0cb78dcfc4ac8f0b",
     "listener/src/tg_triage/analysis_choices.py": "596f09a18aef815a1ec8e8a8af79535d55a32ddbe9bd6bffea3b0cbde0aadda1",
     "listener/src/tg_triage/analysis_task.py": "f91cf1e28732c6a585eca133000065bb9c21fecb50354046ea02c791ed3def3c",
     "listener/src/tg_triage/assistant.py": "876061010645021a602a5af1729d3d2c47ba0b56a8c9390a6449cf1f3aa5298e",
@@ -2906,7 +2906,7 @@ Một block JSON duy nhất bên dưới là chỉ mục truy vết của chính
     "Docs/04-tasks/telegram-triage-noissue_rules-spec_261029_v1.0.0.md"
   ],
   "source_kind": "reviewed_worktree_projection_after_baseline",
-  "runtime_fingerprint": "9bda107174745eaa89da747ff3cb28fe0f743bac58485f33c37475845d15394c",
+  "runtime_fingerprint": "abcb1e4a4b247addbf6f7c0c05eb7b9ccc3edb139f6a7dc080ac111e10097360",
   "runtime_fingerprint_algorithm": "sha256 of UTF-8 lines: path, single space, normalized SHA-256, newline; paths sorted",
   "review_scope": "PM01 #2178 High R5, PM02 High R2 and PM03 High R3 APPROVED tested-source semantics only; PM03 approved checkpoint preserves all24 files including4 untracked files. Reviewed PM03 cumulative normalized patch SHA256 49958fd5971dc62b8e4d6cf85d305f69bd6a84280b918da93faa91a49bcc20c3. Controller frozen source unittest:1650 run,1648 passed,2 skipped,537.600s,exit0; all130 source hashes unchanged before this trace-only refresh. Owner approved lifecycle.md and analysis-status.md ACTIVE v2 on 2026-11-03; roles/preflight remain DRAFT; no real-model quality, installed, complete migration parity, release or live GO claim. P8 follow-up 2026-11-03: independent High approved extractor v2 and three red/green regressions; raw runtime SHA256 e5c24f790dfc04f873942b3c4b12e27d1861c9c266544b8be7b69967ea40c49d. Optional field-example cells are compacted; fixed extraction teaching balances intents and contrasts informational questions with requested work, without changing decision tables, source evidence or 8000-byte/2-call/40-second limits. Configured DeepSeek synthetic canonical routing 24/24 exact outcomes and supplemental early-route outcomes 3/3; strict supplemental raw-fact diagnostic remains failed and disclosed. P8 specified state criterion reviewed separately from full-source, installed, delivery and GO gates. 2026-11-04: ops-only change is incomplete; extension receipt and reply routing remain pending review and implementation.",
   "changed_rule_hashes": {
@@ -2955,6 +2955,7 @@ flowchart TD
 
 | Version | Ngày giờ (Asia/Saigon) | Tác giả | Thay đổi |
 |---|---|---|---|
+| v1.16.50 | 2026-11-20 11:58 | Codex / owner AlexChu | Giữ menu điều hướng ở mép phải khi chuyển màn hình và làm rõ ô chọn phạm vi xử lý. |
 | v1.16.49 | 2026-11-20 09:32 | Codex / owner AlexChu | Listener Admin hiển thị các batch đang gom và liên kết từng tin với các lượt xử lý thực tế. |
 | v1.16.48 | 2026-11-19 22:23 | Codex / owner AlexChu | #3022: Các script đo cache và chi phí theo cơ sở dữ liệu sử dụng của 9router vì phản hồi HTTP thiếu chi tiết cache và chi phí tính cước. Bot và trang quản trị chạy dưới tài khoản `tglistener`, không đọc được cơ sở dữ liệu này nên `cached_tokens` trên trang quản trị vẫn là 0 cho đến khi 9router trả `prompt_tokens_details`. |
 | v1.16.47 | 2026-11-19 | Codex / owner AlexChu | #3018 (#3019–#3022). Quyền quyết định của trợ lý (`authority = "decide"`) mặc định tắt và chỉ bật trong chế độ live. Bộ lọc đầu vào vẫn do code quyết định và lưu vết từng phép kiểm. Mỗi gói tin có một dòng nhật ký phân loại, các lượt liên quan nối thành một mục nhật ký. Trang quản trị hiện tối đa 50 lượt gần nhất trong mỗi mục. Code kiểm dữ kiện, nguồn và quyền trước khi thực thi. Lỗi kiểm tra không sửa được giữ ở HOLD kèm mã lý do. Gemini, GPT và DeepSeek dùng cùng gói luật và công cụ chỉ đọc. Gói có ảnh đi qua Gemini hoặc GPT. Ticket tìm thấy qua tra cứu chỉ được bổ sung (APPEND) khi đúng kho, đúng trạng thái, có bằng chứng trong lượt và đủ chắc chắn là trùng. Khi chưa đủ chắc, hệ thống xử lý theo dữ kiện và ghi `Related to #N` trong nội dung ticket mới hoặc phần bổ sung vào ticket đã xác minh qua Reply. Ở giai đoạn 1, yêu cầu ANALYZE, RELATED, LIFECYCLE_QUESTION hoặc APPEND_CLOSED từ trợ lý giữ toàn bộ gói ở HOLD với mã `guard_provenance` trước khi thực thi bất kỳ nhóm nào. STATUS vẫn gửi một thông báo chỉ đọc vào nhóm ops. Quyết định của Owner ngày 2026-11-19 cho phép dùng ticket đã đọc bằng `get_ticket` hoặc tìm qua tra cứu trong cùng lượt làm bằng chứng cho APPEND. Code bỏ tham chiếu thiếu bằng chứng cùng kho và ghi lý do. Số xuất hiện ở nhiều kho hoặc chỉ xuất hiện ngoài kho cấu hình không chứng minh được APPEND hay tham chiếu. #3028 bổ sung `pack_mode = "core"` cho chế độ decide, mặc định dùng `"full"`. Trợ lý nhận phần cốt lõi và chỉ mục mỗi lượt, dùng công cụ chỉ đọc `get_rule` để tra chi tiết và ví dụ khi cần. Mỗi mục tra tối đa 8 KiB UTF-8 và được ghi nhật ký công cụ. Phần cốt lõi và tài liệu tra cứu dùng chung một fingerprint. Owner chỉ bật core khi replay cho thấy giảm ít nhất 50% token đầu vào và mức khớp trạng thái, quyết định tạo ticket và mẫu không giảm. Các bản thảo luật và gói lời nhắc chờ Owner duyệt. |

@@ -14,7 +14,7 @@
     <span id="live-status" class="live" data-status="offline" hidden>
       <span class="dot" aria-hidden="true"></span>
       <span id="connection-label" role="status">Đang kết nối</span>
-      <small id="last-update" hidden>· cập nhật lúc <time id="update-time"></time></small>
+      <small id="last-update" hidden><span class="update-prefix">· cập nhật lúc </span><time id="update-time"></time></small>
     </span>
     <button id="pause-button" type="button" class="icon-btn" aria-label="Tạm dừng cập nhật realtime" title="Tạm dừng" aria-pressed="false" hidden>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -83,7 +83,9 @@
           <h3 id="batch-trace-title" class="batch-section-title" tabindex="-1"></h3>
           <div class="batch-scope">
             <label for="batch-scope">Phạm vi</label>
-            <select id="batch-scope" class="field"></select>
+            <span class="batch-scope-control">
+              <select id="batch-scope" class="field"></select>
+            </span>
           </div>
           <p id="batch-trace-status" class="batch-note" role="status"></p>
           <p id="batch-trace-shared" class="batch-note" hidden></p>

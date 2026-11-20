@@ -183,13 +183,14 @@ main { flex: 1; min-height: 0; height: auto; grid-template-columns: minmax(300px
 }
 
 /* Batch monitoring */
-.view-nav { display: flex; gap: var(--sp-2); margin-left: auto; }
+.view-nav { display: flex; flex: none; order: 3; gap: var(--sp-2); margin-left: auto; }
 .view-nav a, .batch-history-link {
   display: inline-flex; align-items: center; min-height: 44px; padding-inline: var(--sp-3);
   border-radius: 6px; color: var(--fg-muted); text-decoration: none;
 }
 .view-nav a:hover, .view-nav a[aria-current="true"] { background: var(--muted); color: var(--fg); }
 .view-nav a[aria-current="true"] { box-shadow: inset 0 -2px var(--link); }
+header .filters { order: 2; flex: 1 1 0; min-width: 0; margin-inline: 0; }
 #batch-dashboard { grid-template-columns: minmax(236px, 26%) minmax(0, 1fr); }
 .batch-sidebar, .batch-detail { min-width: 0; overflow: auto; overflow-wrap: anywhere; }
 .batch-sidebar { padding: var(--sp-5); background: #121d30; border-right: 1px solid var(--border); }
@@ -224,7 +225,22 @@ main { flex: 1; min-height: 0; height: auto; grid-template-columns: minmax(300px
 #batch-trace { border-top: 1px solid var(--border); margin-top: var(--sp-5); }
 .batch-scope { display: flex; align-items: center; gap: var(--sp-3); margin-block-end: var(--sp-3); }
 .batch-scope label { flex: none; }
-.batch-scope .field { min-width: 0; width: min(100%, 22rem); }
+.batch-scope-control { position: relative; min-width: 0; width: min(100%, 22rem); color: var(--fg-muted); }
+.batch-scope-control::after {
+  content: ""; position: absolute; inset-inline-end: var(--sp-4); top: 50%; width: 8px; height: 8px;
+  border: solid currentColor; border-width: 0 2px 2px 0; transform: translateY(-70%) rotate(45deg); pointer-events: none;
+}
+.batch-scope select {
+  appearance: none; color-scheme: dark; background: var(--card); cursor: pointer;
+  padding-inline-end: 2.75rem; text-overflow: ellipsis;
+}
+.batch-scope select:hover, .batch-scope select:focus-visible { border-color: var(--link); }
+.batch-scope-control:hover, .batch-scope-control:focus-within { color: var(--link); }
+.batch-scope option { background: var(--card); color: var(--fg); }
+@media (forced-colors: active) {
+  .batch-scope-control::after { display: none; }
+  .batch-scope select { appearance: auto; }
+}
 .batch-receipts { padding-inline-start: var(--sp-5); color: var(--fg-muted); }
 .batch-receipts:empty { display: none; }
 #batch-trace-shared { margin-top: var(--sp-2); }
@@ -233,8 +249,19 @@ main { flex: 1; min-height: 0; height: auto; grid-template-columns: minmax(300px
 .batch-run-title a { display: inline-flex; align-items: center; min-height: 44px; }
 .selected-input { border-inline-start: 3px solid var(--link); background: var(--muted); padding-inline: var(--sp-2); }
 
+@media (max-width: 1150px) {
+  header .filters { order: 4; flex: 0 0 100%; }
+}
 @media (max-width: 767px) {
-  .view-nav { order: 3; margin-inline: 0; width: 100%; }
+  header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  header .live {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: center;
+    justify-self: end; min-height: 60px;
+  }
+  header .live small { grid-column: 2; }
+  .update-prefix { display: none; }
+  header .view-nav, header .filters { grid-column: 1 / -1; }
+  .view-nav { order: 3; margin-inline: 0; width: 100%; justify-content: flex-end; }
   .view-nav a { padding-inline: var(--sp-2); }
   #batch-dashboard .batch-sidebar { display: none; }
   body.show-batch-list #batch-dashboard .batch-sidebar { display: block; border: 0; }
