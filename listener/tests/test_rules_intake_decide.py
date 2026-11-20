@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tg_triage import classification_log, rules_intake
+from tg_triage import admin, classification_log, rules_intake
 from tg_triage.__main__ import _load_assistant_pack, _load_decision_rules
 from tg_triage.assistant_contract import GroupDecision, PHASE_DECIDE
 from tg_triage.assistant_extractor import batch_fingerprint
@@ -25,7 +25,7 @@ from tests.test_assistant_decide_turn import reply
 ROOT = Path(__file__).resolve().parents[1]
 OPS = -1009876543210
 CHAT = message().chat_id
-CHECKS = ('F1', 'F3', 'F4', 'F6', 'F5', 'R1', 'R2', 'R3')
+CHECKS = ('F7', 'F1', 'F3', 'F4', 'F6', 'F5', 'R1', 'R2', 'R3')
 
 
 class Audit:
@@ -216,6 +216,58 @@ class DecideIntakeTests(unittest.TestCase):
                          next(line for line in readiness if line.startswith('| R7 |')))
         _, multi = rules_intake.early_decision_trace(self.snapshot, [message(2), message(3)])
         self.assertEqual([row['why'] for row in multi['checks'][-3:]], ['batch nhiều tin'] * 3)
+
+    def test_merge_single_and_mixed_prefilter_batch_skip_decide_and_render_f7(self):
+        pipeline, audit, jobs, sent = self.pipeline()
+        merge = message(1, '3 PR của e merge rồi nha @vomaingoc', mentions_listener=False)
+        review = message(3, 'https://github.com/vlink-group/vlink-nexora/pull/3048\nreview giúp em pr nha anh @PmqQuan',
+                         mentions_listener=False)
+        self.assertEqual('F1', rules_intake.early_decision(self.snapshot, [review]).rule)
+        self.assertEqual('F7', pipeline.process(merge).reason)
+        batch = [review, replace(merge, message_id=4)]
+        for source in batch:
+            pipeline.store.enqueue(source)
+        self.assertEqual('F7', rules_intake._process_batch(pipeline, batch).reason)
+        self.assertEqual(([], [], [], []), (jobs, pipeline.classifier.calls, pipeline.github.calls, sent))
+        single, mixed = (json.loads(row['code_precheck_json']) for row in audit.rows())
+        self.assertEqual(['F7'], [row['rule'] for row in single['checks']])
+        self.assertEqual([('F7', [4]), ('F1', [3])],
+                         [(row['rule'], row['message_ids']) for row in mixed['checks']])
+        for trace in (single, mixed):
+            self.assertEqual('F7', trace['decided_rule'])
+            self.assertTrue(trace['rule_text'].startswith('| M3 |'))
+            run = dict(code_precheck=trace, decision_rule='F7', outcomes=[])
+            admin._present_rules(run)
+            self.assertIn('F7 · chứa từ merge', run['precheck_summary'])
+
+    def test_merge_batch_with_unmatched_pr_chat_reaches_decide(self):
+        pipeline, _, jobs, _ = self.pipeline()
+        batch = [
+            message(1, '3 PR của e merge rồi nha @vomaingoc', mentions_listener=False),
+            message(2, '@NguyenLe171120 PR BE check comment của con copilot nha', mentions_listener=False),
+            message(3, 'https://github.com/vlink-group/vlink-nexora/pull/3048\nreview giúp em pr nha anh @PmqQuan',
+                    mentions_listener=False),
+        ]
+        self.assertIsNone(rules_intake.early_decision(self.snapshot, [batch[1]]))
+        for source in batch:
+            pipeline.store.enqueue(source)
+        rules_intake._process_batch(pipeline, batch)
+        self.assertEqual(1, len(jobs))
+        self.assertEqual(batch, list(jobs[0]['sources']))
+        trace = jobs[0]['code_precheck']
+        self.assertFalse(trace['handled_by_code'])
+        self.assertEqual('assistant', trace['handoff'])
+        self.assertEqual([('F7', [1]), ('F1', [3])],
+                         [(row['rule'], row['message_ids']) for row in trace['checks'] if row['match']])
+
+    def test_content_only_batch_without_merge_uses_first_messages_rule(self):
+        small_talk = message(1, 'cảm ơn')
+        link = message(2, 'https://example.com')
+        for first, second, expected in ((small_talk, link, 'F4'), (link, small_talk, 'F3')):
+            decision, trace = rules_intake.early_decision_trace(self.snapshot, [first, second])
+            self.assertEqual(('CHAT', expected), (decision.state, decision.rule))
+            self.assertEqual([('F3', [2]), ('F4', [1])],
+                             [(row['rule'], row['message_ids']) for row in trace['checks'] if row['match']])
 
     def test_guard_holds_without_github_or_telegram(self):
         pipeline, audit, jobs, sent = self.pipeline(outcome='guard')

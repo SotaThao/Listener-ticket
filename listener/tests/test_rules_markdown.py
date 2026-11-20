@@ -50,6 +50,7 @@ REQUIRED = {
     "readiness": {
         "prefilter": ["#", "Bước"],
         "prefilter_words": ["Loại", "Từ"],
+        "merge_word": ["#", "Bước"],
         "team_request": ["#", "Bước"],
         "link_only": ["#", "Bước"],
         "chat_only": ["#", "Bước"],
@@ -86,6 +87,7 @@ REQUIRED = {
             "extraction_ok", "reply_target", "intent (model)", "Dữ kiện", "Kết quả", "Luật", "Hỏi",
         ],
         "prefilter_cases": ["#", "Tin", "Kết quả"],
+        "merge_cases": ["#", "Tin", "Kết quả"],
         "team_cases": ["#", "Tin", "tag bot", "intent (model)", "Luật"],
         "link_cases": ["#", "Tin", "Kết quả"],
         "chat_cases": ["#", "Tin", "Kết quả"],

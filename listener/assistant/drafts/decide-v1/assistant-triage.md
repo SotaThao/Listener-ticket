@@ -1,12 +1,12 @@
 <!-- assistant-triage pack v1
-pack_fingerprint: 1d6c5bb36959a92dcec4c8fce7b345b7c9b0389df6f68e76ccc96ae98db0c946
+pack_fingerprint: f6619add3b077cfb4965b68106cfe7a2c38d086b6e3d26e148373391da040b90
 source principles.md sha256 0a35acb71ce898d30863de6176ce59e2e330786bddccc9bc2634533c72df7595
 source states.md sha256 9ca16a2562c1d08cbe95653124c191f7504cfd30a85ec438e5c0a491da5ce458
 source facts.md sha256 6aaf256a86f6050664bd855c45970832fbbc6a94edbabca15070797afa796182
-source readiness.md sha256 216498c1b87df11839f7712d3c45172d667571da8ea35058b6834fae265d35d1
+source readiness.md sha256 855715feeec9f5d386d93b2f6a45d0474f11171ff480014677eb33e74d7d5f7b
 source questions.md sha256 7b1e1bd94b12184fa1c210d0033c1eb744dcf34114a759c5873b82fd0738e38a
 source channels.md sha256 bc21ed66d7b57f515c16b15590aadc8b9cbddb1c2d5d90c7c48f5b726846f6ff
-source examples.md sha256 0c1478916efe398c75cc76818bc6cbcf5ba7d7c5f9cc742b895410cc78843018
+source examples.md sha256 4008d3c650a295416ff606ba50146256885c7d797e6401baf3a578eda43e3687
 source lifecycle.md sha256 6a20e1a60247ed43909cb1374825f50f094b5db7be0f65d57ce428ae7706a154
 source analysis-status.md sha256 7ed57f1a5cbba92ada10934a857b20874209b3a7cf453cfe824acb47cad75485
 -->
@@ -234,8 +234,12 @@ Chỉ gửi model khi code đếm được nhóm đang đùa (`readiness.md` · 
 
 <!-- end-source: facts.md -->
 <!-- source: readiness.md -->
-<!-- rule-file: readiness · version 15 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 16 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
+
+Owner 2026-11-20: "có 'merge' là đã liệt vào Chat cần bỏ qua"
+
+<!-- #3018: Quyết định nghiệp vụ F7 đã chốt; Owner duyệt PR theo README §8. -->
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
 
@@ -261,9 +265,13 @@ Cách đọc mọi bảng ở đây:
 - Ô `*` = bất kỳ. Ô có một hoặc nhiều giá trị trong backtick = giá trị phải là **một trong** các giá trị đó.
 - `cần CÓ tất cả`: mọi trường liệt kê phải CÓ. `cần CÓ ít nhất một`: ít nhất một trường CÓ. Ô `—` = không yêu cầu.
 
+## Lọc lô nhiều tin
+
+Code xét từng tin theo thứ tự `F7` → `F1` → `F3` → `F4`. Trace ghi mã đầu tiên khớp cho từng tin qua danh sách ID ở từng dòng kiểm tra. Khi mọi tin đều khớp một trong bốn luật, cả lô là `CHAT`; mã của lô là `F7` nếu có tin khớp `F7`, nếu không dùng mã của tin đầu tiên. Nếu còn tin chưa khớp, tiếp tục luồng thường, gồm kiểm tra `F6` rồi `F5` theo điều kiện riêng trên cả lô.
+
 ## Bảng: prefilter
 
-Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ xét tin mới: không phải Reply, không command, không ảnh, không tài liệu. Khớp ⇒ `CHAT` ngay với luật `F1`, không gọi model. Không khớp ⇒ đi tiếp như cũ. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp.
+Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ xét tin mới: không phải Reply, không command, không ảnh, không tài liệu. Khớp ⇒ `CHAT` ngay với luật `F1`, không gọi model. Với lô nhiều tin, áp dụng mục “Lọc lô nhiều tin”.
 
 | # | Bước |
 |---|---|
@@ -317,9 +325,19 @@ Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ x
 | `đệm` | `please` |
 | `đệm` | `pls` |
 
+## Bảng: merge_word
+
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Áp dụng cả khi tin có từ báo lỗi.
+
+| # | Bước |
+|---|---|
+| M1 | Tin mới: không phải Reply, không command, không ảnh, không tài liệu |
+| M2 | Chuẩn hóa như P2: bỏ ký tự vô hình, mọi link và `@tên`, đổi dấu câu và emoji thành khoảng trắng, chuyển chữ thường và tách từ. Tìm ít nhất một từ `merge`, `merged`, `merging` hoặc `mergeable` |
+| M3 | Khớp M1–M2 ⇒ `CHAT` (luật `F7`), không gọi model, không ticket, không hỏi |
+
 ## Bảng: link_only
 
-Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Khớp ⇒ `CHAT` ngay với luật `F3`, không gọi model, không ticket, không hỏi. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp.
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Khớp ⇒ `CHAT` ngay với luật `F3`, không gọi model, không ticket, không hỏi. Với lô nhiều tin, áp dụng mục “Lọc lô nhiều tin”.
 
 | # | Bước |
 |---|---|
@@ -330,7 +348,7 @@ Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilte
 
 ## Bảng: chat_only
 
-Lọc local **trước khi gọi model**, cùng phạm vi với bảng `link_only`. Khớp ⇒ `CHAT` ngay với luật `F4`, không gọi model, không ticket, không hỏi. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp. Xét sau `prefilter` (F1) và `link_only` (F3).
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `link_only`. Khớp ⇒ `CHAT` ngay với luật `F4`, không gọi model, không ticket, không hỏi. Với lô nhiều tin, áp dụng mục “Lọc lô nhiều tin”.
 
 | # | Bước |
 |---|---|
@@ -400,7 +418,7 @@ Từ xã giao (Owner duyệt 2026-11-06). Thêm từ: một dòng mới, đúng 
 
 ## Bảng: banter_only
 
-Lọc local **trước khi gọi model**, cùng phạm vi với bảng `chat_only`. Khớp ⇒ `CHAT` ngay với luật `F5`. Xét sau `prefilter` (F1), `link_only` (F3) và `chat_only` (F4). Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp. Bối cảnh lấy từ các tin đã lưu của chính group đó; không có bối cảnh (tin đầu tiên, bot mới chạy) ⇒ không khớp.
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `chat_only`. Khớp ⇒ `CHAT` ngay với luật `F5`. Xét sau các luật lọc nội dung và `reply_chat` (F6). Với nhóm nhiều tin, F5 yêu cầu **mọi** tin đều khớp F5. Bối cảnh lấy từ các tin đã lưu của chính group đó; không có bối cảnh (tin đầu tiên, bot mới chạy) ⇒ không khớp.
 
 | # | Bước |
 |---|---|
@@ -719,7 +737,7 @@ Danh mục mọi khối template rules dùng. `có` = đã có trong file templa
 
 <!-- end-source: channels.md -->
 <!-- source: examples.md -->
-<!-- rule-file: examples · version 20 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 21 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 ## Bảng: source_followup_cases
@@ -841,6 +859,23 @@ Cách ghi cột "Dữ kiện": `trường=giá trị` cách nhau bằng `;`; `�
 | X25 | "Mấy anh ơi, link zoom daily 10h-11h các anh có dùng không? Báo giùm em nha" — hỏi ý cả team, người khác trả lời ngay trong group (#115) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `question` | object=link zoom daily 10h-11h; work=báo giùm em | `CHAT` | R8 | — |
 | X26 | Nhóm đang đùa (nhiều tin 😂 😆 ngay trước, `group_mood`): "Thiếu tính năng fake mắt xem rồi" (#118) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `chat` | ∅ | `CHAT` | R7 | — |
 | X27 | Nhóm không đùa: "Thiếu nút xuất Excel ở màn báo cáo" | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `feedback` | object=màn báo cáo; proposal=thêm nút xuất Excel | `READY` | R11 | — |
+
+## Bảng: merge_cases
+
+Ca chữ cho `readiness.md` · `merge_word` (F7), tự kiểm khi nạp luật. Bảng này không gửi cho model.
+
+| # | Tin | Kết quả |
+|---|---|---|
+| MC1 | 3 PR của e merge rồi nha @vomaingoc | `CHAT` |
+| MC2 | merge bị conflict lỗi build | `CHAT` |
+| MC3 | MERGED 🎉 | `CHAT` |
+| MC4 | đang merging | `CHAT` |
+| MC5 | PR mergeable | `CHAT` |
+| MC6 | xem https://example.com/merge giúp em | `không` |
+| MC7 | nhờ @merge xem giúp | `không` |
+| MC8 | resubmerge | `không` |
+
+Lô gồm MC1 và tin nhờ review kèm link PR (F1) ⇒ `CHAT`, mã lô F7. Thêm tin “@NguyenLe171120 PR BE check comment của con copilot nha” ⇒ chuyển lô tới luồng thường vì tin này chưa khớp.
 
 ## Bảng: prefilter_cases
 

@@ -366,6 +366,6 @@ class ProposeCompatibilityTests(unittest.TestCase):
                 }, sort_keys=True).encode("utf-8"))
         self.assertEqual(*results)
         self.assertEqual(hashlib.sha256(results[0]).hexdigest(),
-                         "37f60d71d13f0d2ed94f27124e5a434c19e1c725276ba14a1deab89b0c7f110d")
-        self.assertEqual(snapshot.fingerprint, "10681d80e99b0a3610ec4c380e8dba9b09b2414f0eed2d1f3c78dc6bc1400a21")
-        self.assertEqual(pack.fingerprint, "35c72d95ea7017cf56f31a799defdc4a9122d3944b88c4e99ba0e76928c83e67")
+                         "5a80bbca1402eb42b1935bb10ab90671987fc8fd0b7b4d4522255e7e3108c932")
+        self.assertEqual(snapshot.fingerprint, "b2f13f247d7bae1fd2c3553257ef6235792e78c7f042db743bb43f739e9d8585")
+        self.assertEqual(pack.fingerprint, "179f22f5e25e2dc290c919206a71e7442100fe94e0f696f87e334d48751c42a1")

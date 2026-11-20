@@ -13,10 +13,10 @@ FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"group_mood": "Khóa|Giá trị", "fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
-    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "reply_chat": "#|Bước", "image_split": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
+    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "merge_word": "#|Bước", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "reply_chat": "#|Bước", "image_split": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa", "source_followup": "#|Bước"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung", "source_followup_cases": "#|Tin|Bối cảnh|Kết quả|Luật"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "merge_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung", "source_followup_cases": "#|Tin|Bối cảnh|Kết quả|Luật"},
 }
 PREFILTER_RULE = "F1"
 PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
@@ -24,10 +24,15 @@ PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46
 # A link/mention tail is printable ASCII without `,` `;` so text glued after it ("…/80,lỗi") is kept.
 _TAIL = r"[\x21-\x2b\x2d-\x3a\x3c-\x7e]"
 _GITHUB_REF = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:pull|issues)/[0-9]+(?![A-Za-z0-9_])" + _TAIL + "*", re.I)
-_URL = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+|\b[A-Za-z0-9.-]+\.[A-Za-z]{2,}/", re.I)
+_BARE_URL_START = r"\b[A-Za-z0-9.-]+\.[A-Za-z]{2,}/"
+_URL = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+|" + _BARE_URL_START, re.I)
 _MENTION = re.compile(r"@\w+")
 _INVISIBLE = re.compile("[​-‍⁠﻿]")
 _NUMBER = re.compile(r"#?[0-9]+")
+MERGE_RULE = "F7"
+MERGE_SHA256 = "537acfb8e3de2e5e9010c377dd1777620a1950bd80d70749785fb0b37c70ce04"
+_MERGE_WORDS = frozenset({"merge", "merged", "merging", "mergeable"})
+_MERGE_LINK = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+|" + _BARE_URL_START + _TAIL + "*", re.I)
 TEAM_RULE = "F2"
 TEAM_SHA256 = "4ade031072ed8a9048677bbc3608efb221fbc522fb9b524039daaec2cdef8061"
 # readiness.md · team_request T3: a Telegram @username (letter first, 5–32 of letter/digit/_),
@@ -71,6 +76,13 @@ class RulesError(ValueError):
 
 # facts.md · normalize N6 (Owner 2026-11-06 "Duyệt cả ba"): trailing particles that never change what is asked.
 TRAILING_PARTICLES = frozenset({"nha", "nhé", "nhe", "nhá", "với", "ạ", "đi", "nè"})
+
+
+def _prefilter_tokens(value: str) -> list[str]:
+    value = _MENTION.sub(' ', value).casefold()
+    value = re.sub(r'#(?=[0-9])', ' #', value)
+    tokens = [w for w in re.sub(r'[^\w#]+|_', ' ', value).split() if not _NUMBER.fullmatch(w)]
+    return [w.strip('#') for w in tokens if w.strip('#')]
 
 
 def normalize(value: str) -> str:
@@ -419,7 +431,8 @@ class RulesSnapshot:
         if not all(signals.values()): t['readiness']['banter_signals'][0].fail('banter_signals needs emoji and vấn đề signs')
         self.banter_emoji = tuple(signals['emoji'])
         self.banter_problem = frozenset(signals['vấn đề'])
-        for table, codes, digest, label in (('reply_chat', ['K1', 'K2', 'K3', 'K4'], REPLY_CHAT_SHA256, 'reply_chat'),
+        for table, codes, digest, label in (('merge_word', ['M1', 'M2', 'M3'], MERGE_SHA256, 'merge_word'),
+                                            ('reply_chat', ['K1', 'K2', 'K3', 'K4'], REPLY_CHAT_SHA256, 'reply_chat'),
                                             ('image_split', ['S1', 'S2', 'S3', 'S4'], IMAGE_SPLIT_SHA256, 'image_split')):
             steps = t['readiness'][table]
             if [r.cells['#'] for r in steps] != codes: steps[0].fail('unsupported %s sequence' % label)
@@ -457,12 +470,17 @@ class RulesSnapshot:
         if not _GITHUB_REF.search(value): return False
         value = _GITHUB_REF.sub(' ', value)
         if _URL.search(value): return False  # any other link may carry a bug report: let the model judge
-        value = _MENTION.sub(' ', value).casefold()
-        value = re.sub(r'#(?=[0-9])', ' #', value)
-        tokens = [w for w in re.sub(r'[^\w#]+|_', ' ', value).split() if not _NUMBER.fullmatch(w)]
-        tokens = [w.strip('#') for w in tokens if w.strip('#')]
+        tokens = _prefilter_tokens(value)
         return (bool(tokens) and all(w in self.prefilter_work or w in self.prefilter_filler for w in tokens)
                 and any(w in self.prefilter_work for w in tokens))
+
+    def merge_word_text(self, text) -> bool:
+        """readiness.md · merge_word M2 on one in-scope message."""
+        if not isinstance(text, str):
+            return False
+        value = unicodedata.normalize('NFC', _INVISIBLE.sub('', text))
+        value = _MERGE_LINK.sub(' ', value).replace('#', ' ')
+        return not _MERGE_WORDS.isdisjoint(_prefilter_tokens(value))
 
     def chat_only_text(self, text) -> bool:
         """readiness.md · chat_only C2–C3 on one message text: only words from chat_words (or none left)."""
@@ -559,7 +577,7 @@ class RulesSnapshot:
         return len(joking), len({m.sender_id for m in joking})
 
     def prefilter_decision(self, rule=PREFILTER_RULE) -> Decision:
-        if rule not in (PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE): raise ValueError('unknown prefilter rule')
+        if rule not in (PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE, MERGE_RULE): raise ValueError('unknown prefilter rule')
         return Decision('CHAT', 'chat', 'prefilter', rule, MappingProxyType({}), (), (), self.fingerprint)
 
     def model_context(self):
@@ -703,6 +721,14 @@ class RulesSnapshot:
             if self.prefilter_text(row.cells['Tin']) != (expected == 'CHAT'): row.fail('prefilter self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['prefilter_cases'][0].fail('prefilter cases need both outcomes')
+        merge_cases = self.tables['examples']['merge_cases']
+        outcomes = set()
+        for row in merge_cases:
+            expected = row.one('Kết quả')
+            if expected not in {'CHAT', 'không'}: row.fail('invalid merge_word outcome')
+            if self.merge_word_text(row.cells['Tin']) != (expected == 'CHAT'): row.fail('merge_word self-check failed')
+            outcomes.add(expected)
+        if outcomes != {'CHAT', 'không'}: merge_cases[0].fail('merge_word cases need both outcomes')
         team = set()
         for row in self.tables['examples']['team_cases']:
             try:

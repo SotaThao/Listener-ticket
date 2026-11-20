@@ -1527,7 +1527,7 @@ class RulesPrefilterTests(RulesBootstrapTests):
         notices=[]
         pipeline=Pipeline(settings,store,Provider(),GitHub(),rules_snapshot=RulesSnapshot(root/'rules',root/'templates/github-ticket',extensions=True),
                           notice_sender=lambda *a:notices.append(a) or 77)
-        sources=[message(41,text=self.REVIEW),message(42,text='anh merge PR này giúp em https://github.com/org/repo/pull/12')]
+        sources=[message(41,text=self.REVIEW),message(42,text='anh duyệt PR này giúp em https://github.com/org/repo/pull/12')]
         for source in sources: store.enqueue(source)
         _process_batch(pipeline,sources)
         self.assertEqual((0,[],[]),(Provider.calls,GitHub.calls,notices))
@@ -1586,19 +1586,44 @@ class RulesPrefilterTests(RulesBootstrapTests):
     def test_bug_next_to_pr_link_still_reaches_model_and_ticket(self):
         bug=('{"groups":[{"message_ids":[42],"facts":{"intent":{"value":"bug","source_ids":[42]},'
              '"object":{"value":"màn Queue","source_ids":[42]},"observed":{"value":"bị trắng","source_ids":[42]}}}]}')
-        result,provider,github,_,row=self.run_live('merge PR này xong màn Queue bị trắng https://github.com/org/repo/pull/12',
+        result,provider,github,_,row=self.run_live('xem PR này giúp em, màn Queue bị trắng https://github.com/org/repo/pull/12',
                                                    extensions=True,facts=bug)
         self.assertEqual(1,provider.calls)
         self.assertEqual(1,len(github.calls))
         self.assertEqual(('READY','R9'),tuple(row)[:2])
 
     def test_reply_or_attachment_is_out_of_prefilter_scope(self):
-        from tg_triage.rules_intake import _prefilter_source
+        from tg_triage.rules_intake import _local_rule
         snapshot=self.snapshot()
-        self.assertTrue(_prefilter_source(snapshot,message(42,text=self.REVIEW)))
-        self.assertFalse(_prefilter_source(snapshot,message(42,text=self.REVIEW,reply_to_id=7)))
-        self.assertFalse(_prefilter_source(snapshot,message(42,text=self.REVIEW,has_image=True)))
-        self.assertFalse(_prefilter_source(snapshot,message(42,text='/task '+self.REVIEW)))
+        self.assertEqual('F1', _local_rule(snapshot, [message(42,text=self.REVIEW)]))
+        self.assertIsNone(_local_rule(snapshot, [message(42,text=self.REVIEW,reply_to_id=7)]))
+        self.assertIsNone(_local_rule(snapshot, [message(42,text=self.REVIEW,has_image=True)]))
+        self.assertIsNone(_local_rule(snapshot, [message(42,text='/task '+self.REVIEW)]))
+
+    def test_merge_word_is_chat_in_propose_without_model_ticket_or_question(self):
+        for text in ('3 PR của e merge rồi nha @vomaingoc', 'merge bị conflict lỗi build',
+                     'anh merge PR này giúp em https://github.com/org/repo/pull/12'):
+            with self.subTest(text=text):
+                result, provider, github, notices, row = self.run_live(text, extensions=True)
+                self.assertEqual(('chat', 'F7'), (result.decision, result.reason))
+                self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
+                self.assertEqual(('CHAT', 'F7', 'prefilter'), tuple(row))
+
+    def test_merge_prefilter_scope_and_tokens(self):
+        from tg_triage.rules_intake import _local_rule
+        snapshot = self.snapshot()
+        for text, extra in (
+            ('merge', {'reply_to_id': 7}), ('/task merge', {}),
+            ('merge', {'has_image': True}), ('merge', {'has_document': True}),
+            ('xem https://example.com/merge giúp', {}),
+            ('xem example.com/merged giúp', {}),
+            ('nhờ @merge xem giúp', {}), ('submerged', {}),
+        ):
+            with self.subTest(text=text, extra=extra):
+                self.assertIsNone(_local_rule(snapshot, [message(42, text, **extra)]))
+        for text in ('MERGED!', '\U0001f389MeR\u200bGiNg_', 'www.example.com/path,mergeable', 'https://example.com/ok merge'):
+            with self.subTest(text=text):
+                self.assertEqual('F7', _local_rule(snapshot, [message(42, text)]))
 
     def test_batch_all_reviews_skip_model_and_mixed_group_keeps_model(self):
         from tg_triage.rules_intake import evaluate_batch
