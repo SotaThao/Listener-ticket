@@ -85,6 +85,11 @@ def init_store(connection):
     connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_topic ON classification_runs(topic_id)')
     connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_chat_run ON classification_runs(chat_id,run_id)')
     connection.execute('CREATE INDEX IF NOT EXISTS idx_classification_thread ON classification_runs(COALESCE(log_thread_id,run_id))')
+    connection.execute('''CREATE TABLE IF NOT EXISTS classification_run_sources (
+        run_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, input_id INTEGER NOT NULL,
+        chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, PRIMARY KEY(run_id,ordinal))''')
+    connection.execute('''CREATE INDEX IF NOT EXISTS idx_classification_source_runs
+        ON classification_run_sources(chat_id,message_id,run_id)''')
     connection.execute('''CREATE TABLE IF NOT EXISTS classification_tool_calls (
         run_id INTEGER NOT NULL, seq INTEGER NOT NULL, tool TEXT NOT NULL, args_json TEXT,
         result_bytes INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
@@ -167,6 +172,8 @@ def _enqueue(store, values):
 
 
 def _insert_run(connection, values):
+    values = dict(values)
+    source_keys = values.pop('_source_keys', ())
     columns = ','.join(values)
     run_id = connection.execute(
         f'INSERT INTO classification_runs ({columns}) VALUES ({",".join("?" for _ in values)})',
@@ -174,7 +181,23 @@ def _insert_run(connection, values):
     if 'log_thread_id' in values and values['log_thread_id'] is None:
         connection.execute('UPDATE classification_runs SET log_thread_id=? WHERE run_id=?',
                            (run_id, run_id))
+    if source_keys:
+        # Preserve the existing run even when optional source indexing fails.
+        connection.execute('SAVEPOINT classification_source_index')
+        try:
+            connection.executemany('''INSERT INTO classification_run_sources
+                (run_id,ordinal,input_id,chat_id,message_id) VALUES (?,?,?,?,?)''',
+                ((run_id, ordinal, *key) for ordinal, key in enumerate(source_keys)))
+        except sqlite3.Error as error:
+            connection.execute('ROLLBACK TO classification_source_index')
+            _failed(error)
+        finally:
+            connection.execute('RELEASE classification_source_index')
     return run_id
+
+
+def source_keys(sources):
+    return tuple((m.message_id, m.chat_id, m.message_id) for m in sources)
 
 
 def find_thread(store, chat_id, *, reply_to_ids=(), topic_id=None, ticket_ref=None):
@@ -256,7 +279,7 @@ def flush(store):
 
 class _Attempt:
     def __init__(self, turn, snapshot, sources, images, phase, topic_id=None, *,
-                 code_precheck=None, log_thread_id=None):
+                 code_precheck=None, log_thread_id=None, ref_sources=None):
         if any(type(source.chat_id) is not int or source.chat_id == 0 for source in sources):
             raise ValueError('invalid chat ID')
         self.turn = turn
@@ -274,6 +297,14 @@ class _Attempt:
             id_space=id_space, rules_version=getattr(turn.store, 'assistant_pack_fingerprint', None),
             image_ids=_json(sorted(images or {})), rules_fingerprint=snapshot.fingerprint,
             model_calls=0, tokens_in=0, tokens_out=0, cache_hit_tokens=0, cost=0.0, fallback=0)
+        if id_space == 'message':
+            self.values['_source_keys'] = source_keys(sources)
+        elif ref_sources is not None:
+            originals = {(ref, m.chat_id): m.message_id for ref, m in ref_sources}
+            self.values['_source_keys'] = tuple(
+                (m.message_id, m.chat_id, originals[(m.message_id, m.chat_id)])
+                for m in sources if (m.message_id, m.chat_id) in originals
+            )
         self.code_precheck = code_precheck
         if code_precheck is not None:
             self.values['code_precheck_json'] = _json(code_precheck)
@@ -344,7 +375,7 @@ def record_decision(store, snapshot, topic_id, sources, decision, *, phase='earl
 
 @contextmanager
 def run(snapshot, sources, images=None, phase='extract', *, topic_id=None,
-        code_precheck=None, log_thread_id=None):
+        code_precheck=None, log_thread_id=None, ref_sources=None):
     """Isolate accounting failures; never suppress exceptions from evaluation.
 
     topic_id names the referenced topic when its refs differ from the Turn root's
@@ -357,7 +388,8 @@ def run(snapshot, sources, images=None, phase='extract', *, topic_id=None,
         turn = THINKING.get()
         if turn is not None and turn.key.startswith('rules:') and sources:
             attempt = _Attempt(turn, snapshot, sources, images, phase, topic_id,
-                               code_precheck=code_precheck, log_thread_id=log_thread_id)
+                               code_precheck=code_precheck, log_thread_id=log_thread_id,
+                               ref_sources=ref_sources)
             token = CURRENT.set(attempt)
     except Exception as error:
         _failed(error)
@@ -523,11 +555,15 @@ def maintain(store, retention_days=90, *, config=None):
                         (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,))
                     connection.execute('''DELETE FROM classification_model_calls WHERE run_id IN
                         (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,))
+                    connection.execute('''DELETE FROM classification_run_sources WHERE run_id IN
+                        (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,))
                     deleted = connection.execute('''DELETE FROM classification_runs WHERE run_id IN
                         (SELECT run_id FROM classification_runs WHERE created_at < ? ORDER BY run_id LIMIT 5000)''', (cutoff,)).rowcount
                 if deleted < 5000:
                     break
+            from . import collection_log
             with connection:
+                collection_log.prune(connection, cutoff)
                 rows = connection.execute('''SELECT run_id,chat_id,message_ids FROM classification_runs
                     WHERE ticket_ref IS NULL AND id_space='message' AND outcomes_json IS NULL
                     AND final_state IN ('READY','APPEND','APPEND_CLOSED','RELATED') AND created_at > ?''',

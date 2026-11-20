@@ -11,9 +11,9 @@
 <body>
   <header>
     <h1>Listener Admin</h1>
-    <span id="live-status" class="live" role="status" data-status="offline" hidden>
+    <span id="live-status" class="live" data-status="offline" hidden>
       <span class="dot" aria-hidden="true"></span>
-      <span id="connection-label">Đang kết nối</span>
+      <span id="connection-label" role="status">Đang kết nối</span>
       <small id="last-update" hidden>· cập nhật lúc <time id="update-time"></time></small>
     </span>
     <button id="pause-button" type="button" class="icon-btn" aria-label="Tạm dừng cập nhật realtime" title="Tạm dừng" aria-pressed="false" hidden>
@@ -22,6 +22,10 @@
         <path id="resume-icon" d="M8 5v14l12-7z" hidden/>
       </svg>
     </button>
+    <nav id="view-nav" class="view-nav" aria-label="Chế độ theo dõi" hidden>
+      <a id="batch-view-link" href="#batches">Theo dõi batch</a>
+      <a id="run-view-link" href="#runs">Nhật ký lượt</a>
+    </nav>
     <nav id="filters" class="filters" aria-label="Lọc lượt" hidden>
       <button type="button" class="chip" data-filter="" aria-pressed="true">Tất cả</button>
       <button type="button" class="chip" data-filter="READY" aria-pressed="false">READY</button>
@@ -45,6 +49,50 @@
       </form>
     </div>
   </section>
+
+  <main id="batch-dashboard" hidden>
+    <aside class="batch-sidebar" aria-labelledby="batches-title">
+      <h2 id="batches-title" tabindex="-1">Danh sách batch</h2>
+      <p id="batches-status" class="batch-note" role="status">Đang tải danh sách batch…</p>
+      <ol id="batches-list" class="batch-list"></ol>
+    </aside>
+    <section id="batch-detail" class="batch-detail" aria-labelledby="batch-title">
+      <button id="choose-batch" class="back" type="button">‹ Danh sách batch</button>
+      <p id="batch-detail-status" class="batch-note" role="status" tabindex="-1" hidden></p>
+      <div id="batch-empty" hidden>
+        <h2>Chưa có batch nào được ghi lại</h2>
+        <p class="batch-note">Batch xuất hiện khi trình gom tin trong chế độ live nhận tin nhắn. Các lượt đã ghi trước đó vẫn có trong nhật ký.</p>
+        <a href="#runs" class="batch-history-link">Mở nhật ký lượt →</a>
+      </div>
+      <div id="batch-content" hidden>
+        <p id="batch-crumb" class="batch-note"></p>
+        <div class="batch-heading">
+          <h2 id="batch-title" tabindex="-1"></h2>
+          <span id="batch-badge" class="batch-pill"></span>
+        </div>
+        <p id="batch-meta" class="batch-note"></p>
+        <button id="batch-trace-jump" class="text-button" type="button">Xem chi tiết xử lý batch ↓</button>
+        <section aria-labelledby="batch-messages-title">
+          <h3 id="batch-messages-title" class="batch-section-title"></h3>
+          <div class="batch-message-grid batch-columns" aria-hidden="true">
+            <span>Giờ nhận</span><span>Người gửi và nội dung</span><span>Xử lý</span>
+          </div>
+          <ol id="batch-messages" class="batch-list"></ol>
+        </section>
+        <section id="batch-trace" aria-labelledby="batch-trace-title">
+          <h3 id="batch-trace-title" class="batch-section-title" tabindex="-1"></h3>
+          <div class="batch-scope">
+            <label for="batch-scope">Phạm vi</label>
+            <select id="batch-scope" class="field"></select>
+          </div>
+          <p id="batch-trace-status" class="batch-note" role="status"></p>
+          <p id="batch-trace-shared" class="batch-note" hidden></p>
+          <ol id="batch-receipts" class="batch-receipts"></ol>
+          <div id="batch-rounds"></div>
+        </section>
+      </div>
+    </section>
+  </main>
 
   <main id="dashboard" hidden>
     <section id="list-pane" class="list" aria-label="Danh sách lượt">

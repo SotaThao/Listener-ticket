@@ -228,8 +228,9 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
             self.init_followups(recover_pending)
             from .thinking import init_store
             init_store(self)
-            from . import classification_log
+            from . import classification_log, collection_log
             classification_log.init_store(self.connection)
+            collection_log.init_store(self.connection, recover_pending=recover_pending)
             if recover_pending:
                 self._recover_cases()
                 if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rules_deferred_ops'").fetchone():

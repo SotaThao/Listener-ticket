@@ -77,16 +77,23 @@ class AdminStaticTests(unittest.TestCase):
     def test_required_controls_and_labels(self):
         markup = Markup(self.read("index.html"))
         ids = {attrs["id"]: (tag, attrs) for tag, attrs in markup.elements if "id" in attrs}
+        self.assertEqual(len(ids), sum("id" in attrs for _, attrs in markup.elements))
         for ident, expected in {
             "login-form": "form", "password": "input", "run-inputs": "div",
             "run-steps": "div", "run-proposal": "div", "run-decision": "div",
             "back-button": "button", "pause-button": "button", "follow-button": "button",
             "runs-list": "ol", "load-more": "button",
+            "batch-dashboard": "main", "batches-list": "ol", "batch-messages": "ol",
+            "batch-trace": "section", "batch-scope": "select", "batch-rounds": "div",
+            "batch-trace-jump": "button", "choose-batch": "button", "run-view-link": "a",
         }.items():
             with self.subTest(ident=ident):
                 self.assertEqual(ids[ident][0], expected)
         self.assertEqual(ids["password"][1]["type"], "password")
         self.assertIn(("label", {"for": "password"}), markup.elements)
+        self.assertIn(("label", {"for": "batch-scope"}), markup.elements)
+        self.assertEqual(ids["batch-trace"][1]["aria-labelledby"], "batch-trace-title")
+        self.assertEqual(ids["run-view-link"][1]["href"], "#runs")
         self.assertEqual(ids["pause-button"][1]["aria-label"], "Tạm dừng cập nhật realtime")
         for label in (
             "Mật khẩu", "Đầu vào", "Thinking & công cụ", "Đầu ra của trợ lý",
