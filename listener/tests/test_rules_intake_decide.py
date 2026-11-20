@@ -421,6 +421,15 @@ class RealDecideIntakeTests(unittest.TestCase):
         self.assertEqual((outcome['rule'], row['rules_fingerprint']), ('R9', pipeline.rules_snapshot.fingerprint))
         self.assertTrue(outcome['rule_text'].startswith('| R9 |'))
 
+    def test_core_x14_holds_when_router_actually_fails(self):
+        chat = Mock(side_effect=RouterError('transient'))
+        pipeline = self.pipeline(chat, pack_mode='core')
+        pipeline.process(message(1, 'Màn thanh toán bị treo'))
+        row, = self.rows(pipeline)
+        self.assertEqual(row['final_state'], 'HOLD')
+        self.assertEqual(pipeline.github.calls, [])
+        self.assertGreater(chat.call_count, 0)
+
     def test_reply_after_30_minutes_and_search_append_join_real_thread(self):
         chat = Mock(side_effect=[
             reply(1, state='READY', rule='R9', template='bug',

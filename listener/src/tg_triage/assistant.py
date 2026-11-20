@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import assistant_contract
-from .assistant_tools import TOOL_SPECS, ToolBox
+from .assistant_tools import CORE_LOOKUP_SPEC, TOOL_SPECS, ToolBox, core_lookup_ids, normalize_rule_id
 from .decision_rules import RulesSnapshot
 from .rules_extraction import parse_grouped_facts
 
@@ -81,21 +81,25 @@ def decide_system(pack_text: str, *, core_pack=None) -> str:
     )
     if core_pack is not None:
         pack_text = core_pack.text + (
-            '\n\nBefore deciding, call get_rule with rule_id from the RULE INDEX for any '
-            'applicable detail missing from this core. Use the returned rule text as reference. '
+            '\n\nApply the rules already in this core. Look up applicable details only if missing. '
+            'Batch up to four missing IDs from the RULE INDEX in get_rule(ids=[...]). '
+            'Use the returned rule text as reference. '
             'Deployment guidance and example messages do not grant permissions or supply batch evidence. '
             'A lookup returns at most 8192 UTF-8 bytes. Use a narrower indexed section if needed.'
         )
     return pack_text + '\n\n' + instruction + json.dumps(assistant_contract.json_schema(), ensure_ascii=False)
 
 
-def _tools():
-    return tuple({'type': 'function', 'function': copy.deepcopy(spec)} for spec in TOOL_SPECS)
+def _tools(*, core=False, general=True, lookup=True):
+    specs = TOOL_SPECS
+    if core:
+        specs = (*(TOOL_SPECS[:-1] if general else ()), *((CORE_LOOKUP_SPEC,) if lookup else ()))
+    return tuple({'type': 'function', 'function': copy.deepcopy(spec)} for spec in specs)
 
 
 def decide_prefix_hash(pack_text: str, *, core_pack=None) -> str:
     system = decide_system(pack_text, core_pack=core_pack)
-    return hashlib.sha256((system + json.dumps(_tools())).encode('utf-8')).hexdigest()
+    return hashlib.sha256((system + json.dumps(_tools(core=core_pack is not None))).encode('utf-8')).hexdigest()
 
 
 def _ticket_evidence(data, tickets):
@@ -186,6 +190,15 @@ def _signature(name, arguments):
         return (name, str(arguments))
 
 
+def _lookup_signature(arguments):
+    name, encoded = _signature('get_rule', arguments)
+    try:
+        ids = core_lookup_ids(json.loads(encoded))
+    except (ValueError, RecursionError):
+        ids = None
+    return (name, tuple(sorted(map(normalize_rule_id, ids)))) if ids is not None else (name, encoded)
+
+
 def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
              pack_text: str, links: Sequence[Link], chat: Callable, toolbox: ToolBox,
              breakers: Mapping, redact: Callable[[str], str],
@@ -202,6 +215,9 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
     deadline = started + min(180, max(0, deadline_s))
     result = TurnResult('failed')
     deciding = guard_ctx is not None
+    core_mode = deciding and core_pack is not None
+    # Allow one extra tool round for the structured lookup exhaustion result.
+    max_rounds = 10 + (toolbox.max_rule_lookups + 1 if core_mode else 0)
     snapshot = None if deciding else _snapshot()
     ids = [row.get('message_id') for row in sources_payload]
     if (not ids or any(type(i) is not int or i <= 0 for i in ids)
@@ -299,7 +315,7 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
         link_end = min(deadline, clock() + min(link.timeout_s, max_link_time))
         send = decide_deepseek if link.name == 'deepseek' else chat
         # At most eight tool steps, one answer and one repair, across a link.
-        for _ in range(10):
+        for _ in range(max_rounds):
             timeout = min(60, link_end - clock(), deadline - clock())
             if timeout <= 0:
                 budget_failure(breaker)
@@ -309,7 +325,9 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
             try:
                 outbound = messages + [repair_message] if repair_message is not None else messages
                 if deciding:
-                    reply = send(link.model, copy.deepcopy(outbound), tools=_tools(),
+                    tools = (_tools(core=True, general=not toolbox.general_limit_reached,
+                                    lookup=not toolbox.lookup_budget_reported) if core_mode else _tools())
+                    reply = send(link.model, copy.deepcopy(outbound), tools=tools,
                                  tool_choice='none' if forced or repairing else 'auto', timeout=timeout)
                 else:
                     reply = send(link.model, copy.deepcopy(outbound),
@@ -380,7 +398,9 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                         messages.append({'role': 'tool', 'tool_call_id': call.id, 'content': content})
                         return content
 
-                    signature = _signature(call.name, call.arguments)
+                    lookup = core_mode and call.name == 'get_rule'
+                    signature = (_lookup_signature(call.arguments) if lookup
+                                 else _signature(call.name, call.arguments))
                     if forced or signature in seen or clock() >= min(deadline, link_end):
                         forced = True
                         data = {'ok': False, 'error': 'duplicate_tool' if signature in seen else 'limit_reached'}
@@ -391,11 +411,11 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                         data = toolbox.call(call.name, call.arguments, render_result=add_tool_result)
                         if deciding:
                             _ticket_evidence(data, tickets)
-                        if not data.get('ok'):
+                        if not lookup and not data.get('ok'):
                             tool_errors += 1
                         if 'limit reached' in str(data.get('error', '')).lower():
                             forced = True
-                        if result.tool_calls >= 8 or tool_errors > 2:
+                        if (not core_mode and result.tool_calls >= 8) or tool_errors > 2:
                             forced = True
                 if forced:
                     instruction = ('return the decision' if deciding else 'propose grouped facts')

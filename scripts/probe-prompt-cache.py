@@ -67,7 +67,7 @@ def run_probe(*, router_url, key_file, config=None, chat=None, clock=time.monoto
         {'role': 'system', 'content': assistant.decide_system(pack.text, core_pack=pack.core)},
         {'role': 'user', 'content': '\nUNTRUSTED BATCH DATA:\n' + json.dumps(payload, ensure_ascii=False)},
     ]
-    tools = assistant._tools()
+    tools = assistant._tools(core=pack.core is not None)
     window = UsageWindow.from_db(router_usage_db)
     usage = window.usage
     failed = False

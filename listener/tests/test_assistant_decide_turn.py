@@ -158,6 +158,54 @@ class AssistantDecideTurnTests(unittest.TestCase):
         self.assertEqual([r['link'] for r in self.rows('classification_model_calls')], ['gemini', 'gpt'])
         self.assert_prefixes(chat.call_args_list)
 
+    def core_runtime(self, chat, **settings):
+        pack = _load_assistant_pack(pack_mode='core')
+        cfg = replace(self.settings, assistant=replace(self.settings.assistant, pack_mode='core', **settings))
+        return AssistantExtractor(cfg, self.store, pack.text, core_pack=pack.core,
+                                  chat=chat, clock=self.clock, wall_clock=self.clock)
+
+    def test_core_decides_after_eight_general_calls_and_four_rule_lookups(self):
+        general = [ToolCall(f'msg-{n}', 'get_messages', json.dumps({'ids': [n]})) for n in range(1, 9)]
+        # Distinct misses must not spend the three-error allowance.
+        lookups = [ToolCall(f'rule-{n}', 'get_rule', json.dumps({'rule_id': key}))
+                   for n, key in enumerate(('unknown-1', 'unknown-2', 'unknown-3', 'r9'))]
+        chat = Mock(side_effect=[*(reply(calls=[call]) for call in (*general, *lookups)), reply()])
+        self.assertEqual(self.core_runtime(chat).decide(self.job())[2], 'done')
+        self.assertEqual(chat.call_count, 13)
+        self.assertTrue(all(request.kwargs['tool_choice'] == 'auto' for request in chat.call_args_list))
+        self.assertEqual([spec['function']['name'] for spec in chat.call_args_list[8].kwargs['tools']],
+                         ['get_rule'])
+        rows = self.rows('classification_tool_calls')
+        self.assertEqual([row['tool'] for row in rows], ['get_messages'] * 8 + ['get_rule'] * 4)
+        results = [json.loads(row['result_json']) for row in rows[8:]]
+        self.assertEqual([entry['ok'] for entry in results], [False, False, False, True])
+        self.assertEqual(results[-1]['untrusted_data']['rule_id'], 'R9')
+
+    def test_core_lookup_cap_reports_exhaustion_and_keeps_general_tools(self):
+        lookup = ToolCall('rules', 'get_rule', '{"ids":["R9"]}')
+        denied = ToolCall('denied', 'get_rule', '{"ids":["R10"]}')
+        general = ToolCall('general', 'get_messages', '{"ids":[42]}')
+        chat = Mock(side_effect=[reply(calls=[lookup]), reply(calls=[denied]),
+                                 reply(calls=[general]), reply()])
+        self.assertEqual(self.core_runtime(chat, max_rule_lookups=1).decide(self.job())[2], 'done')
+        first, blocked, last = self.rows('classification_tool_calls')
+        self.assertTrue(json.loads(first['result_json'])['ok'])
+        self.assertTrue(json.loads(last['result_json'])['ok'])
+        after_denial = chat.call_args_list[2]
+        self.assertEqual(after_denial.kwargs['tool_choice'], 'auto')
+        self.assertNotIn('get_rule', [spec['function']['name'] for spec in after_denial.kwargs['tools']])
+        self.assertEqual(json.loads(after_denial.args[1][-1]['content']), json.loads(blocked['result_json']))
+        self.assertEqual(json.loads(blocked['result_json'])['error'], 'lookup_budget_exhausted')
+
+    def test_core_repeated_ids_force_a_decision(self):
+        lookup = ToolCall('rules', 'get_rule', '{"ids":["R9","R10"]}')
+        repeated = ToolCall('repeat', 'get_rule', '{"ids":["r10"," r9 "]}')
+        chat = Mock(side_effect=[reply(calls=[lookup]), reply(calls=[repeated]), reply()])
+        self.assertEqual(self.core_runtime(chat).decide(self.job())[2], 'done')
+        self.assertEqual(chat.call_args.kwargs['tool_choice'], 'none')
+        self.assertEqual(json.loads(chat.call_args.args[1][-2]['content'])['error'], 'duplicate_tool')
+        self.assertEqual(len(self.rows('classification_tool_calls')), 1)
+
     def test_both_router_links_fail_then_deepseek_uses_full_prefix_and_tools(self):
         chat = Mock(side_effect=RouterError('transient'))
         tool = ToolCall('ticket', 'get_ticket', '{"repo":"sandbox/triage","number":17}')
