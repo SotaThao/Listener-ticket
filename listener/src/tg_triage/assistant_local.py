@@ -32,12 +32,13 @@ class LocalReader:
 
     def __init__(self, db_path: Path, chat_id: int, *,
                  batch_message_ids: Iterable[int], images: Mapping[str, Path],
-                 pack_text: str | None, core_pack=None):
+                 pack_text: str | None, core_pack=None, topic_sources=None):
         self._chat_id = chat_id
         self._batch_message_ids = frozenset(batch_message_ids)
         self._images = dict(images)
         self._pack_text = pack_text
         self._core_pack = core_pack
+        self._topic_sources = None if topic_sources is None else dict(topic_sources)
         self._connection = None
         try:
             self._connection = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
@@ -86,6 +87,8 @@ class LocalReader:
         limit = max(0, min(limit, 40))
         select = """SELECT message_id,sender_name AS sender,received_at AS date,
             substr(text,1,2000) AS text,reply_to_id,has_image FROM messages WHERE chat_id=?"""
+        if self._topic_sources is not None:
+            return self._topic_messages(select, ids, around, limit)
         if ids is not None:
             if isinstance(ids, (str, bytes)) or not isinstance(ids, Sequence):
                 raise ToolDenied("Invalid message ids")
@@ -113,6 +116,29 @@ class LocalReader:
         for row in rows:
             row["has_image"] = bool(row["has_image"])
         return sorted(rows, key=lambda row: row["message_id"])
+
+    def _topic_messages(self, select, ids, around, limit):
+        sources = self._topic_sources
+        if ids is not None:
+            if not isinstance(ids, (list, tuple)) or any(type(ref) is not int for ref in ids):
+                raise ToolDenied("Invalid topic refs")
+            refs = sorted(set(ids) & sources.keys(), reverse=True)
+        elif around is not None:
+            if around not in sources:
+                return []
+            refs = sorted(sources, key=lambda ref: (abs(ref - around), ref))
+        else:
+            refs = sorted(sources, reverse=True)
+        by_key = {pair: ref for ref, pair in sources.items()}
+        messages = []
+        for ref in sorted(refs[:limit]):
+            chat_id, message_id = sources[ref]
+            rows = self._query(select + " AND message_id=?", (chat_id, message_id))
+            if rows:
+                row = rows[0]
+                messages.append(dict(row, message_id=ref, has_image=bool(row["has_image"]),
+                                     reply_to_id=by_key.get((chat_id, row["reply_to_id"]))))
+        return messages
 
     def get_image(self, image_id: str) -> dict:
         if not isinstance(image_id, str) or image_id not in self._images:

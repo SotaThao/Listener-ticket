@@ -152,7 +152,7 @@ class DecideIntakeTests(unittest.TestCase):
             return groups, run_id, outcome
 
         runtime = SimpleNamespace(decide=decide, publish=lambda: None, settings=settings.assistant,
-                                  waiting=lambda sources, *, admit: ('NEW', True))
+                                  waiting=lambda sources, *, admit, fingerprint=None: ('NEW', True))
         pipeline.assistant_runtime = runtime
         return pipeline, audit, jobs, sent
 

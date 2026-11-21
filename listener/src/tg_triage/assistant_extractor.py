@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -28,6 +29,7 @@ LOG = logging.getLogger(__name__)
 SHUTDOWN_JOIN_S = 5.0  # systemd/tg-triage.service TimeoutStopSec=150
 LIVE_DRAIN_S = 20
 LIVE_GRANT_LEASE_S = 2 * LIVE_DRAIN_S
+TOPIC_PROPOSAL_CACHE_SIZE = 256
 
 
 def _attempt_outcome(result):
@@ -46,6 +48,10 @@ def _batch_outcome(result, parts):
 def batch_fingerprint(sources):
     keys = sorted([m.chat_id, m.message_id] for m in sources)
     return hashlib.sha256(classification_log._json(keys).encode('utf-8')).hexdigest()
+
+
+def _topic_evidence(user):
+    return hashlib.sha256(classification_log._json(user).encode('utf-8')).digest()
 
 
 def redact_data(text):
@@ -165,6 +171,7 @@ class AssistantExtractor:
         self._live_ready_at = None
         self._live_grant_at = 0
         self._live_admitted = set()
+        self._topic_proposals = OrderedDict()
         if self.settings.enabled and not self.settings.router_key:
             LOG.warning('Assistant unavailable: router key is not configured')
 
@@ -236,17 +243,23 @@ class AssistantExtractor:
                 if fp not in self._live_waiting and self.queue.push(fp):
                     self._live_waiting.add(fp)
 
-    def evaluate(self, evaluate, snapshot, provider, sources, **kwargs):
+    def evaluate(self, evaluate, snapshot, provider, sources, *, topic_id=None, ref_sources=None,
+                 retry_fingerprint=None, **kwargs):
         """Keep the caller's pure decision code and freeze reply context for shadow."""
         current = classification_log.CURRENT.get()
-        if current is not None and current.values.get('id_space') == 'topic_ref':
-            # Ref IDs are not Telegram message IDs. Until a trusted mapping is
-            # carried here, retain the existing extractor and expose no tools.
+        topic_refs = ref_sources is not None or (current is not None and current.values.get('id_space') == 'topic_ref')
+        if topic_refs and self.settings.mode != 'live':
             return evaluate(snapshot, provider, sources, **kwargs)
         fp = current.values['batch_fingerprint'] if current is not None else batch_fingerprint(sources)
+        if topic_refs:
+            keys = (tuple((ref, m.chat_id, m.message_id) for ref, m in ref_sources)
+                    if ref_sources is not None else current.values.get('_source_keys', ()))
+            fp = classification_log.topic_fingerprint(topic_id or (current and current.values.get('topic_id')), keys)
+        proposal_fp = fp
+        fp = retry_fingerprint or fp
         if self.settings.mode == 'live':
             status = self.attempts.status(fp)
-            if status == 'DONE':
+            if status == 'DONE' and not topic_refs:
                 # A valid proposal need not have passed foreground reconciliation.
                 # Preserve dedupe; let the existing extractor spend later attempts.
                 return evaluate(snapshot, provider, sources, **kwargs)
@@ -264,10 +277,11 @@ class AssistantExtractor:
         jobs = []
         live_begun = False
         live_results = []
+        accepted_proposal = None
         deadline = self.clock() + self.settings.turn_deadline_s
 
         def extract(p, snap, members, body, parse, **data):
-            nonlocal live_begun
+            nonlocal live_begun, accepted_proposal
             job = dict(provider=p, snapshot=snap, sources=tuple(members),
                        body=copy.deepcopy(body), parse=parse, data=data)
             current = classification_log.CURRENT.get()
@@ -275,6 +289,19 @@ class AssistantExtractor:
                 job['fingerprint'] = current.values['batch_fingerprint']
                 job['id_space'] = current.values['id_space']
                 job['topic_id'] = current.values.get('topic_id')
+            if topic_refs:
+                if current is not None:
+                    current.replaced = True
+                job.update(id_space='topic_ref', topic_id=topic_id or job.get('topic_id'), source_keys=keys)
+                if (len(keys) != len(members) or
+                        {(ref, chat_id) for ref, chat_id, _ in keys} != {(m.message_id, m.chat_id) for m in members}):
+                    return None
+                if status == 'DONE':
+                    cached = self._topic_proposals.get(proposal_fp)
+                    if cached is None or cached[0] != _topic_evidence(body['messages'][1]):
+                        return None
+                    self._topic_proposals.move_to_end(proposal_fp)
+                    return copy.deepcopy(cached[1])
             if self.settings.mode == 'shadow':
                 if len(members) != len(sources):
                     job['fingerprint'] = hashlib.sha256((fp + batch_fingerprint(members)).encode()).hexdigest()
@@ -293,12 +320,23 @@ class AssistantExtractor:
                         self._refund()
                     return None
                 live_begun = True
-            job['fingerprint'], job['deadline'] = fp, deadline
+            job.update(fingerprint=proposal_fp, deadline=deadline)
+            if retry_fingerprint is not None:
+                job['retry_fingerprint'] = retry_fingerprint
             result = self.run(job, decision_kwargs=kwargs, track_attempt=False)
             live_results.append((job, result))
             if result is None:
                 return None
-            return parse(json.dumps(result.proposal)) if result.proposal else None
+            groups = parse(json.dumps(result.proposal)) if result.proposal else None
+            if topic_refs and groups is not None:
+                validate = getattr(type(p), 'accept_extraction', None)
+                if validate is not None:
+                    groups = validate(p, body, groups)
+                if groups is not None:
+                    # Keep only a digest of the evidence packet alongside the parsed facts.
+                    evidence = _topic_evidence(body['messages'][1])
+                    accepted_proposal = (evidence, copy.deepcopy(groups))
+            return groups
 
         try:
             result = evaluate(snapshot, provider, sources, extract=extract, **kwargs)
@@ -311,6 +349,10 @@ class AssistantExtractor:
             raise
         if live_begun:
             outcome = _batch_outcome(result, [r for _, r in live_results])
+            if topic_refs and outcome == 'ok' and accepted_proposal is not None:
+                self._topic_proposals[proposal_fp] = accepted_proposal
+                if len(self._topic_proposals) > TOPIC_PROPOSAL_CACHE_SIZE:
+                    self._topic_proposals.popitem(last=False)
             self.attempts.finish(fp, outcome)
             self._queue_live(fp, outcome)
             if outcome == 'infra': self._refund()
@@ -424,9 +466,11 @@ class AssistantExtractor:
         from .thinking import CURRENT
         turn = CURRENT.get()
         if turn is not None:
+            topic = (turn.key.removeprefix('rules:followup:')
+                     if turn.key.startswith('rules:followup:') else turn.root_key)
             with self.store._lock, self.store.connection:
                 self.store.connection.execute('''UPDATE rules_topics SET attempts=max(0,attempts-1),
-                    attempt_reserved=0 WHERE topic_id=? AND attempt_reserved=1''', (turn.root_key,))
+                    attempt_reserved=0 WHERE topic_id=? AND attempt_reserved=1''', (topic,))
 
     def _deepseek(self, job, deadline, usage, start_call):
         """Bind the zero-arg callback to ONE bounded hosted request; never Ollama."""
@@ -507,7 +551,8 @@ class AssistantExtractor:
         if self._closing:
             return None
         deciding = guard_ctx is not None
-        fp = job.get('fingerprint') or batch_fingerprint(job['sources'])
+        run_fp = job.get('fingerprint') or batch_fingerprint(job['sources'])
+        fp = job.get('retry_fingerprint', run_fp)
         if not self._turn_lock.acquire(blocking=False):
             if self.settings.mode == 'live':
                 self._refund()
@@ -532,9 +577,9 @@ class AssistantExtractor:
             self._budget_reason = None
             started = self.clock()
             sources, snapshot = job['sources'], job['snapshot']
-            values = dict(created_at=self.store.clock().timestamp(), turn_key='assistant:' + fp,
+            values = dict(created_at=self.store.clock().timestamp(), turn_key='assistant:' + run_fp,
                 phase='assistant_' + self.settings.mode, mode=self.settings.mode,
-                batch_fingerprint=fp, chat_id=sources[0].chat_id,
+                batch_fingerprint=run_fp, chat_id=sources[0].chat_id,
                 message_ids=classification_log._json([m.message_id for m in sources]),
                 id_space=job.get('id_space', 'message'), topic_id=job.get('topic_id'),
                 rules_fingerprint=snapshot.fingerprint,
@@ -542,6 +587,12 @@ class AssistantExtractor:
                 final_state='HOLD', error_class='infra')
             if values['id_space'] == 'message':
                 values['_source_keys'] = classification_log.source_keys(sources)
+            topic_refs = values['id_space'] == 'topic_ref'
+            topic_sources = None
+            if topic_refs:
+                values['_source_keys'] = job['source_keys']
+                values['image_ids'] = classification_log._json(sorted(job['data']['images'] or {}))
+                topic_sources = {ref: (chat_id, mid) for ref, chat_id, mid in job['source_keys']}
             if deciding:
                 values.update(phase=PHASE_DECIDE, rules_version=assistant.decide_prefix_hash(
                                   self.pack_text, core_pack=self.core_pack),
@@ -559,10 +610,13 @@ class AssistantExtractor:
                 packet = json.loads(job['body']['messages'][1]['content'])
                 pixels = job['body']['messages'][1].get('images', [])
                 local_images = job['data']['images']
+                if topic_refs and len(sources) == 1:
+                    packet['sources'][0]['reply_to_id'] = None
             local = LocalReader(self.config.db_path, sources[0].chat_id,
                 batch_message_ids=[m.message_id for m in sources],
                 images={str(k): v for k, v in local_images.items()} if isinstance(local_images, dict) else {},
-                pack_text=self.pack_text, core_pack=self.core_pack if deciding else None)
+                pack_text=self.pack_text, core_pack=self.core_pack if deciding else None,
+                topic_sources=topic_sources)
             if deciding and not pixels:
                 pixels = {}
                 for image_id in packet.get('images_order', ()):
@@ -633,7 +687,7 @@ class AssistantExtractor:
                     raise ConnectionError('Assistant is stopping')
                 return reply
 
-            def decide_deepseek(model, messages, **kw):
+            def packed_deepseek(model, messages, **kw):
                 if self._closing:
                     raise ConnectionError('Assistant is stopping')
                 c = self.config.model
@@ -665,6 +719,8 @@ class AssistantExtractor:
             if payload:
                 payload[0] = dict(payload[0], batch_context={k: v for k, v in packet.items()
                                   if k not in ('sources', 'source_ids', 'images_order')})
+                if topic_refs:
+                    payload[0]['batch_context']['id_space'] = 'topic_ref'
             from .provider import _image_mime
             image_pairs = (pixels.items() if isinstance(pixels, dict)
                            else zip(packet.get('images_order', ()), pixels))
@@ -675,17 +731,21 @@ class AssistantExtractor:
             decide_kwargs = {}
             if deciding:
                 decide_kwargs.update(batch=sources, guard_ctx=guard_ctx, core_pack=self.core_pack)
+            if deciding or topic_refs:
                 if self.config.model.provider == 'deepseek' and self.config.model.cloud_consent:
                     decide_kwargs.update(deepseek_link=assistant.Link('deepseek', self.config.model.name,
-                        self.settings.deepseek_timeout_s), decide_deepseek=decide_deepseek)
+                        self.settings.deepseek_timeout_s), decide_deepseek=packed_deepseek)
+            links = [assistant.Link(n, m, t) for n, m, t in zip(('gemini', 'gpt'), self.settings.models,
+                         (self.settings.gemini_timeout_s, self.settings.gpt_timeout_s))]
+            if topic_refs:
+                links.reverse()
             result = assistant.run_turn(sources_payload=payload, images=images, pack_text=self.pack_text,
-                links=[assistant.Link(n, m, t) for n, m, t in zip(('gemini', 'gpt'), self.settings.models,
-                    (self.settings.gemini_timeout_s, self.settings.gpt_timeout_s))],
+                links=links,
                 chat=chat, toolbox=toolbox, breakers={n: _BreakerView(self, b) for n, b in self.breakers.items()},
-                redact=redact_data, deepseek=None if deciding else self._deepseek(job, deadline, usage, start_call),
+                redact=redact_data, deepseek=None if deciding or topic_refs else self._deepseek(job, deadline, usage, start_call),
                 images_carry_data=any(m.has_image for m in sources),
                 deadline_s=max(0, deadline - self.clock()), clock=self.clock, record_call=record_call,
-                **decide_kwargs)
+                topic_refs=topic_refs, **decide_kwargs)
             result.model_calls = usage['calls']
             if self._closing:
                 return None  # A late worker must not write after store.close().
