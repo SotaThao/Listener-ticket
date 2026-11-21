@@ -1,5 +1,9 @@
-<!-- rule-file: readiness · version 15 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 16 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
+
+Owner 2026-11-20: "có 'merge' là đã liệt vào Chat cần bỏ qua"
+
+<!-- #3018: Quyết định nghiệp vụ F7 đã chốt; Owner duyệt PR theo README §8. -->
 
 Owner 2026-11-05: “Duyệt lọc trước” — nhờ review/duyệt/merge PR hoặc xem issue GitHub đã có link không phải task, bug hay feedback, không log ticket.
 
@@ -25,9 +29,13 @@ Cách đọc mọi bảng ở đây:
 - Ô `*` = bất kỳ. Ô có một hoặc nhiều giá trị trong backtick = giá trị phải là **một trong** các giá trị đó.
 - `cần CÓ tất cả`: mọi trường liệt kê phải CÓ. `cần CÓ ít nhất một`: ít nhất một trường CÓ. Ô `—` = không yêu cầu.
 
+## Lọc lô nhiều tin
+
+Code xét từng tin theo thứ tự `F7` → `F1` → `F3` → `F4`. Trace ghi mã đầu tiên khớp cho từng tin qua danh sách ID ở từng dòng kiểm tra. Khi mọi tin đều khớp một trong bốn luật, cả lô là `CHAT`; mã của lô là `F7` nếu có tin khớp `F7`, nếu không dùng mã của tin đầu tiên. Nếu còn tin chưa khớp, tiếp tục luồng thường, gồm kiểm tra `F6` rồi `F5` theo điều kiện riêng trên cả lô.
+
 ## Bảng: prefilter
 
-Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ xét tin mới: không phải Reply, không command, không ảnh, không tài liệu. Khớp ⇒ `CHAT` ngay với luật `F1`, không gọi model. Không khớp ⇒ đi tiếp như cũ. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp.
+Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ xét tin mới: không phải Reply, không command, không ảnh, không tài liệu. Khớp ⇒ `CHAT` ngay với luật `F1`, không gọi model. Với lô nhiều tin, áp dụng mục “Lọc lô nhiều tin”.
 
 | # | Bước |
 |---|---|
@@ -81,9 +89,19 @@ Lọc local **trước khi gọi model** và trước bảng `decision`. Chỉ x
 | `đệm` | `please` |
 | `đệm` | `pls` |
 
+## Bảng: merge_word
+
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Áp dụng cả khi tin có từ báo lỗi.
+
+| # | Bước |
+|---|---|
+| M1 | Tin mới: không phải Reply, không command, không ảnh, không tài liệu |
+| M2 | Chuẩn hóa như P2: bỏ ký tự vô hình, mọi link và `@tên`, đổi dấu câu và emoji thành khoảng trắng, chuyển chữ thường và tách từ. Tìm ít nhất một từ `merge`, `merged`, `merging` hoặc `mergeable` |
+| M3 | Khớp M1–M2 ⇒ `CHAT` (luật `F7`), không gọi model, không ticket, không hỏi |
+
 ## Bảng: link_only
 
-Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Khớp ⇒ `CHAT` ngay với luật `F3`, không gọi model, không ticket, không hỏi. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp.
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilter`. Khớp ⇒ `CHAT` ngay với luật `F3`, không gọi model, không ticket, không hỏi. Với lô nhiều tin, áp dụng mục “Lọc lô nhiều tin”.
 
 | # | Bước |
 |---|---|
@@ -94,7 +112,7 @@ Lọc local **trước khi gọi model**, cùng phạm vi với bảng `prefilte
 
 ## Bảng: chat_only
 
-Lọc local **trước khi gọi model**, cùng phạm vi với bảng `link_only`. Khớp ⇒ `CHAT` ngay với luật `F4`, không gọi model, không ticket, không hỏi. Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp. Xét sau `prefilter` (F1) và `link_only` (F3).
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `link_only`. Khớp ⇒ `CHAT` ngay với luật `F4`, không gọi model, không ticket, không hỏi. Với lô nhiều tin, áp dụng mục “Lọc lô nhiều tin”.
 
 | # | Bước |
 |---|---|
@@ -164,7 +182,7 @@ Từ xã giao (Owner duyệt 2026-11-06). Thêm từ: một dòng mới, đúng 
 
 ## Bảng: banter_only
 
-Lọc local **trước khi gọi model**, cùng phạm vi với bảng `chat_only`. Khớp ⇒ `CHAT` ngay với luật `F5`. Xét sau `prefilter` (F1), `link_only` (F3) và `chat_only` (F4). Nhóm nhiều tin chỉ thành `CHAT` khi **mọi** tin đều khớp. Bối cảnh lấy từ các tin đã lưu của chính group đó; không có bối cảnh (tin đầu tiên, bot mới chạy) ⇒ không khớp.
+Lọc local **trước khi gọi model**, cùng phạm vi với bảng `chat_only`. Khớp ⇒ `CHAT` ngay với luật `F5`. Xét sau các luật lọc nội dung và `reply_chat` (F6). Với nhóm nhiều tin, F5 yêu cầu **mọi** tin đều khớp F5. Bối cảnh lấy từ các tin đã lưu của chính group đó; không có bối cảnh (tin đầu tiên, bot mới chạy) ⇒ không khớp.
 
 | # | Bước |
 |---|---|

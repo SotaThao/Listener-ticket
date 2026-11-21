@@ -151,16 +151,9 @@ def _prefilter_scope(message):
     return message.reply_to_id is None and not message.has_attachment and not rules.COMMAND.match(message.text or '')
 
 
-def _prefilter_source(snapshot, message):
-    """readiness.md · prefilter P1–P4 on an in-scope message."""
-    return _prefilter_scope(message) and snapshot.prefilter_text(message.text)
-
-
 def _local_rule(snapshot, members, banter_context=(), chat_replies=frozenset(), *, checks=None):
-    """F1 when every member is a review request, F3 when every member is only a link,
-    F4 when every member is only small talk (chat_words), F5 when every member is a joke inside
-    a group that is already joking (readiness.md · banter_only); else None."""
-    from .decision_rules import PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE, is_link_only
+    """Apply per-message content filters, then the whole-batch reply and banter filters."""
+    from .decision_rules import PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE, MERGE_RULE, is_link_only
     members = list(members)
     if not members: return None
     def matched(rule, name, match, yes, no):
@@ -168,19 +161,24 @@ def _local_rule(snapshot, members, banter_context=(), chat_replies=frozenset(), 
             checks.append(dict(rule=rule, name=name, match=match, why=yes if match else no))
         return match
 
-    if matched(PREFILTER_RULE, 'nhờ review PR/issue',
-               all(_prefilter_source(snapshot, m) for m in members),
-               'mọi tin đều nhờ xem PR/issue', 'thiếu link PR/issue hoặc lời nhờ xem hợp lệ'):
-        return PREFILTER_RULE
     # W1/C1: a forwarded message is someone else's content (often a customer's), never dismissed unread.
-    if matched(LINK_RULE, 'tin chỉ có link',
-               all(_prefilter_scope(m) and not m.is_forward and is_link_only(m.text) for m in members),
-               'mọi tin chỉ có link', 'có tin không phải tin chỉ có link'):
-        return LINK_RULE
-    if matched(CHAT_RULE, 'tin chỉ có từ xã giao',
-               all(_prefilter_scope(m) and not m.is_forward and snapshot.chat_only_text(m.text) for m in members),
-               'mọi tin chỉ có từ xã giao', 'có tin không khớp mẫu xã giao'):
-        return CHAT_RULE
+    content_filters = (
+        (MERGE_RULE, 'chứa từ merge', snapshot.merge_word_text, True),
+        (PREFILTER_RULE, 'nhờ review PR/issue', snapshot.prefilter_text, True),
+        (LINK_RULE, 'tin chỉ có link', is_link_only, False),
+        (CHAT_RULE, 'tin chỉ có từ xã giao', snapshot.chat_only_text, False),
+    )
+    eligible = [m for m in members if _prefilter_scope(m)]
+    by_message = {}
+    for rule, name, predicate, allows_forward in content_filters:
+        ids = [m.message_id for m in eligible if m.message_id not in by_message
+               and (allows_forward or not m.is_forward) and predicate(m.text)]
+        by_message.update(dict.fromkeys(ids, rule))
+        if checks is not None:
+            why = f'tin khớp: {", ".join(map(str, ids))}' if ids else 'không có tin chưa phân loại khớp mẫu'
+            checks.append(dict(rule=rule, name=name, match=bool(ids), why=why, message_ids=ids))
+        if len(by_message) == len(members):
+            return MERGE_RULE if MERGE_RULE in by_message.values() else by_message[members[0].message_id]
     # readiness.md · reply_chat K1-K4: a Reply to a message the bot already settled as CHAT, with no problem word.
     if matched(REPLY_CHAT_RULE, 'trả lời tin đã là CHAT',
                bool(chat_replies) and all(m.message_id in chat_replies and snapshot.reply_chat_match(m, True) for m in members),
@@ -207,6 +205,7 @@ _FILTER_ROWS = {
     'F1': ('prefilter', 'P4'), 'F2': ('team_request', 'T5'), 'F3': ('link_only', 'W4'),
     'F4': ('chat_only', 'C4'), 'F5': ('banter_only', 'B5'), 'F6': ('reply_chat', 'K4'),
 }
+_CODE_ONLY_FILTER_ROWS = {'F7': ('merge_word', 'M3')}
 _INDEPENDENT_CHECKS = {
     'R1': ('lệnh /question', 'tin dùng lệnh /question', 'không dùng lệnh /question'),
     'R2': ('lệnh không có nội dung', 'lệnh không có nội dung', 'không có lệnh rỗng'),
@@ -214,10 +213,11 @@ _INDEPENDENT_CHECKS = {
 }
 
 
-def _snapshot_rule_rows(snapshot):
+def _snapshot_rule_rows(snapshot, *, include_code_only=False):
     tables = snapshot.tables['readiness']
     rows = {row.cells['#']: row for row in tables['decision']}
-    for rule, (table, key) in _FILTER_ROWS.items():
+    filters = _FILTER_ROWS | _CODE_ONLY_FILTER_ROWS if include_code_only else _FILTER_ROWS
+    for rule, (table, key) in filters.items():
         row = next((row for row in tables.get(table, ()) if row.cells['#'] == key), None)
         if row is not None:
             rows[rule] = row
@@ -260,9 +260,10 @@ def early_decision_trace(snapshot, sources, *, prefilter=True, banter_context=()
             checks.append(dict(rule=rule, name=name, match=False, why='batch nhiều tin'))
     rule = decision.rule if decision is not None else None
     trace = dict(handled_by_code=decision is not None, checks=checks, decided_rule=rule,
-                 rule_text=_rule_row_text(_snapshot_rule_rows(snapshot).get(rule)) if rule else None,
+                 rule_text=_rule_row_text(_snapshot_rule_rows(snapshot, include_code_only=True).get(rule)) if rule else None,
                  handoff=None if rule else 'assistant',
-                 reason=checks[-1]['why'] if rule else 'không mẫu cố định nào nhận ra, cần hiểu nội dung')
+                 reason=(next(check['why'] for check in checks if check['rule'] == rule)
+                         if rule else 'không đủ mẫu cố định để xử lý cả lô, cần hiểu nội dung'))
     return decision, trace
 
 
@@ -331,8 +332,7 @@ def _evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_fo
             if len(members) != len(ids): return None
             local = None if allow_mixed else _local_rule(snapshot, members, banter_context, chat_replies)
             if local is not None:
-                # Local rule wins over the model's intent for a group made only of review requests (F1)
-                # or only of bare links (F3).
+                # Local filters also apply to groups after the model splits a batch.
                 outcomes.append((members, snapshot.prefilter_decision(local)))
                 continue
             if snapshot.extensions:

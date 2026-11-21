@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 20 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 21 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 ## Bảng: source_followup_cases
@@ -120,6 +120,23 @@ Cách ghi cột "Dữ kiện": `trường=giá trị` cách nhau bằng `;`; `�
 | X25 | "Mấy anh ơi, link zoom daily 10h-11h các anh có dùng không? Báo giùm em nha" — hỏi ý cả team, người khác trả lời ngay trong group (#115) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `question` | object=link zoom daily 10h-11h; work=báo giùm em | `CHAT` | R8 | — |
 | X26 | Nhóm đang đùa (nhiều tin 😂 😆 ngay trước, `group_mood`): "Thiếu tính năng fake mắt xem rồi" (#118) | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `chat` | ∅ | `CHAT` | R7 | — |
 | X27 | Nhóm không đùa: "Thiếu nút xuất Excel ở màn báo cáo" | `∅` | `none` | `có` | 0 | 0 | `true` | `none` | `feedback` | object=màn báo cáo; proposal=thêm nút xuất Excel | `READY` | R11 | — |
+
+## Bảng: merge_cases
+
+Ca chữ cho `readiness.md` · `merge_word` (F7), tự kiểm khi nạp luật. Bảng này không gửi cho model.
+
+| # | Tin | Kết quả |
+|---|---|---|
+| MC1 | 3 PR của e merge rồi nha @vomaingoc | `CHAT` |
+| MC2 | merge bị conflict lỗi build | `CHAT` |
+| MC3 | MERGED 🎉 | `CHAT` |
+| MC4 | đang merging | `CHAT` |
+| MC5 | PR mergeable | `CHAT` |
+| MC6 | xem https://example.com/merge giúp em | `không` |
+| MC7 | nhờ @merge xem giúp | `không` |
+| MC8 | resubmerge | `không` |
+
+Lô gồm MC1 và tin nhờ review kèm link PR (F1) ⇒ `CHAT`, mã lô F7. Thêm tin “@NguyenLe171120 PR BE check comment của con copilot nha” ⇒ chuyển lô tới luồng thường vì tin này chưa khớp.
 
 ## Bảng: prefilter_cases
 
