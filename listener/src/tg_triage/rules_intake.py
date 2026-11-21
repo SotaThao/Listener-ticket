@@ -278,7 +278,7 @@ def _batch_thread(pipeline, sources, topic):
         reply_to_ids=tuple(dict.fromkeys(m.reply_to_id for m in sources if m.reply_to_id is not None)))
 
 
-def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, topic_id=None, ref_sources=None):
+def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for=None, asked_counts=None, allow_mixed=False, documents=None, read_context=(), banter_context=None, chat_replies=frozenset(), confirm_followup=False, topic_id=None, ref_sources=None, retry_fingerprint=None):
     """Record one rules attempt without changing the evaluation result."""
     sources = list(sources)
     phase = 'followup_confirm' if confirm_followup else 'pending_merge' if allow_mixed else 'extract'
@@ -289,7 +289,8 @@ def evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_for
         from .thinking import CURRENT
         turn = CURRENT.get()
         runtime = getattr(turn.store, 'assistant_runtime', None) if turn is not None else None
-        evaluate = _evaluate_batch if runtime is None else lambda *a, **kw: runtime.evaluate(_evaluate_batch, *a, **kw)
+        evaluate = (_evaluate_batch if runtime is None else lambda *a, **kw: runtime.evaluate(
+            _evaluate_batch, *a, **kw, topic_id=topic_id, retry_fingerprint=retry_fingerprint, **run_options))
         result = evaluate(snapshot, provider, sources, images=images, reply_target_for=reply_target_for,
             asked_counts=asked_counts, allow_mixed=allow_mixed, documents=documents, read_context=read_context,
             banter_context=banter_context, chat_replies=chat_replies, confirm_followup=confirm_followup)
@@ -523,21 +524,58 @@ def process(pipeline, message, start):
     return result
 
 
-def _process_single_pending(pipeline, message, *, allow_unmatched_reply=False):
+def _process_single_pending(pipeline, message, *, allow_unmatched_reply=False, held=False):
     """Single-source NEED_INFO path; other paths remain blocked pending integration."""
     if (message.reply_to_id is not None and not allow_unmatched_reply) or message.chat_id == pipeline.config.telegram.ops_chat_id:
         raise RuntimeError('rules reply integration incomplete')
     if message.has_image and getattr(pipeline.classifier,'supports_vision',False):
         pipeline._prepared_images=pipeline.attachments.prepare_images(f'{message.chat_id}:{message.message_id}',[message])
     try:
-        return _process_single_with_images(pipeline,message)
+        return _process_single_with_images(pipeline,message,held=held)
     finally:
         if pipeline._prepared_images is not None:
             pipeline._prepared_images.close()
             pipeline._prepared_images=None
 
 
-def _process_single_with_images(pipeline, message):
+def _held_source_refs(pipeline, message, topic, held):
+    runtime = getattr(pipeline, 'assistant_runtime', None)
+    if not held or runtime is None or runtime.settings.mode != 'live':
+        return None
+    pair = (message.chat_id, message.message_id)
+    return [(ref, message) for ref, key in pipeline.rules_pending.sources(topic).items() if key == pair]
+
+
+def _evaluate_held_source(pipeline, message, topic, originals, **kwargs):
+    if originals is None or early_decision(pipeline.rules_snapshot, [message],
+            banter_context=kwargs.get('banter_context', ()), chat_replies=kwargs.get('chat_replies', frozenset())):
+        return evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],**kwargs)
+    if not originals:
+        return None
+    from dataclasses import replace
+    from .assistant_extractor import batch_fingerprint
+    from .decision_rules import Field
+    ref, _ = originals[0]
+    scoped = replace(message, message_id=ref)
+    images = kwargs.pop('images', None) or {}
+    documents = kwargs.pop('documents', None) or ()
+    chat_replies = kwargs.pop('chat_replies', ())
+    # The sweep changes the extraction ID space. Continue the initial source's retry budget.
+    result = evaluate_batch(pipeline.rules_snapshot, pipeline.classifier, [scoped],
+        images={ref: images[message.message_id]} if message.message_id in images else {},
+        documents=[dict(row,message_id=ref) for row in documents],
+        chat_replies={ref} if message.message_id in chat_replies else frozenset(),
+        topic_id=topic, ref_sources=originals, retry_fingerprint=batch_fingerprint([message]), **kwargs)
+    if result is None:
+        return None
+    # Single-source sweep executors still take Telegram message IDs.
+    decision = result[0][1]
+    present = {name: Field(field.value, (message.message_id,) if field.source_ids else ())
+               for name, field in decision.present.items()}
+    return (((message,), replace(decision, present=present)),)
+
+
+def _process_single_with_images(pipeline, message, *, held=False):
     from dataclasses import replace
     from .decision_rules import Field
     from .models import Decision
@@ -545,6 +583,7 @@ def _process_single_with_images(pipeline, message):
     topic = f'{message.chat_id}:{message.message_id}'
     pending = pipeline.rules_pending
     pending.create(topic, message.chat_id, message.message_id)
+    originals = _held_source_refs(pipeline, message, topic, held)
     wait = _assistant_wait(pipeline, [message], topic)
     if wait is not None: return wait
     attempt = pending.reserve_attempt(topic, pipeline.rules_snapshot.limits['hold_max_retries'])
@@ -558,7 +597,7 @@ def _process_single_with_images(pipeline, message):
         images=pipeline._prepared_images.for_messages([message]) if pipeline._prepared_images is not None else {}
         unread=any(document_reader.text_intent(message) and row.get('read_status')!='read' for row in documents)
         context=pipeline.store.autonomous_read_context([message]) if pipeline.rules_snapshot.extensions else ()
-        outcome = None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],images=images,documents=documents,read_context=context,banter_context=_banter_history(pipeline,[message]),chat_replies=_chat_reply_ids(pipeline,[message]))
+        outcome = None if unread else _evaluate_held_source(pipeline,message,topic,originals,images=images,documents=documents,read_context=context,banter_context=_banter_history(pipeline,[message]),chat_replies=_chat_reply_ids(pipeline,[message]))
         too_large = outcome is None and _too_large(turn)
     if outcome is None and too_large:
         result = _request_too_large(pipeline,message,topic,attempt)
@@ -1606,7 +1645,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                     if not any(pending_bindings.values()):
                         proofs.update((m.message_id, _resolve_reply_target(pipeline, m)) for m in external)
                     else:
-                        # Keep the message-to-topic_ref merge on the legacy path.
+                        # Keep the message-to-topic_ref merge on the rules executor.
                         pending_bindings.clear()
                         decide = False
                 except Exception:
@@ -2347,8 +2386,11 @@ class _FollowupConfirmationProvider:
         return getattr(self.provider, name)
 
     def _ask(self, body, parse, attempts):
-        import json
         result = self.provider._ask(body, parse, attempts=attempts)
+        return self.accept_extraction(body, result)
+
+    def accept_extraction(self, body, result):
+        import json
         actual = body.get('_evidence_view') or dict(messages=body['messages'])
         users = [m for m in actual['messages'] if m.get('role') == 'user']
         if len(users) != 1: return None
@@ -2551,6 +2593,8 @@ def _process_ops_evaluate(pipeline,message,topic,asked,originals,snapshot,*,is_o
     source = originals[0][1]
     lookup = {(m.chat_id,m.message_id):ref for ref,m in originals}
     model_sources = [replace(m,message_id=ref,reply_to_id=lookup.get((m.chat_id,m.reply_to_id))) for ref,m in originals]
+    wait = _assistant_wait(pipeline, [message], topic, ref_sources=originals, anchor=source)
+    if wait is not None: return wait
     attempt = pending.reserve_attempt(topic,pipeline.rules_snapshot.limits['hold_max_retries'])
     if attempt is None: return _escalate(pipeline,source,topic)
     pipeline.store.finish(message,Decision('pending_review','rule',case_key=topic,reason='rules_extract_pending'))
@@ -2623,7 +2667,7 @@ def _process_ops_evaluate(pipeline,message,topic,asked,originals,snapshot,*,is_o
     return result
 
 
-def _process_source_reply(pipeline,message):
+def _process_source_reply(pipeline,message,*,held=False):
     """Only an exact same-chat, repository-bound issue can be an APPEND target."""
     from dataclasses import replace
     from .decision_rules import Field
@@ -2635,14 +2679,14 @@ def _process_source_reply(pipeline,message):
     if message.has_image and getattr(pipeline.classifier,'supports_vision',False):
         pipeline._prepared_images=pipeline.attachments.prepare_images(f'{message.chat_id}:{message.message_id}',[message])
     try:
-        return _process_source_reply_inner(pipeline,message)
+        return _process_source_reply_inner(pipeline,message,held=held)
     finally:
         if pipeline._prepared_images is not None:
             pipeline._prepared_images.close()
             pipeline._prepared_images=None
 
 
-def _process_source_reply_inner(pipeline,message):
+def _process_source_reply_inner(pipeline,message,*,held=False):
     from dataclasses import replace
     from .decision_rules import Field
     from .models import Decision
@@ -2652,7 +2696,7 @@ def _process_source_reply_inner(pipeline,message):
     expected=f'https://github.com/{pipeline.config.gh_repo}/issues/{number}'
     if (target is None or type(number) is not int or number<=0 or target['issue_url']!=expected
             or target['decision'] not in ('issue','followup')):
-        return _process_single_with_images(pipeline,message)
+        return _process_single_with_images(pipeline,message,held=held)
     topic=f'{message.chat_id}:{message.message_id}'; pending=pipeline.rules_pending
     pending.create(topic,message.chat_id,message.message_id)
     try:
@@ -2668,6 +2712,7 @@ def _process_source_reply_inner(pipeline,message):
         result=Decision('pending_review','rule',case_key=topic,reason='closed_target_not_supported')
         pipeline.store.finish(message,result)
         return result
+    originals = _held_source_refs(pipeline, message, topic, held)
     attempt=pending.reserve_attempt(topic,pipeline.rules_snapshot.limits['hold_max_retries'])
     if attempt is None: return _escalate(pipeline,message,topic)
     pipeline.store.finish(message,Decision('pending_review','rule',case_key=topic,reason='rules_extract_pending'))
@@ -2677,7 +2722,7 @@ def _process_source_reply_inner(pipeline,message):
         if documents: documents=document_processing.prepare(documents,pipeline.classifier)
         unread=any(document_reader.text_intent(message) and row.get('read_status')!='read' for row in documents)
         images=pipeline._prepared_images.for_messages([message]) if pipeline._prepared_images is not None else {}
-        outcome=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,[message],images=images,documents=documents,reply_target_for=lambda _: 'ticket_open')
+        outcome=None if unread else _evaluate_held_source(pipeline,message,topic,originals,images=images,documents=documents,reply_target_for=lambda _: 'ticket_open')
         too_large = outcome is None and _too_large(turn)
     if outcome is None and too_large:
         result = _request_too_large(pipeline,message,topic,attempt)
@@ -2837,8 +2882,8 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
         pending.release_source_confirmation(message)
         result=(_process_ops_reply(pipeline,message) if message.chat_id == pipeline.config.telegram.ops_chat_id
                 else _process_batch(pipeline,[message]) if pipeline.rules_snapshot.extensions
-                else _process_source_reply(pipeline,message) if message.reply_to_id is not None
-                else _process_single_pending(pipeline,message))
+                else _process_source_reply(pipeline,message,held=True) if message.reply_to_id is not None
+                else _process_single_pending(pipeline,message,held=True))
         if message.reply_to_id is not None and pipeline.rules_snapshot.extensions and result is not None and result.decision != 'pending_review':
             pending.close(topic,'CLOSED')
         if result is not None: results.append(result)
@@ -2865,17 +2910,21 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
     return results
 
 
-def _assistant_wait(pipeline, sources, topic, *, force=False):
+def _assistant_wait(pipeline, sources, topic, *, force=False, ref_sources=None, anchor=None):
     """Admission before reserving a foreground attempt; disabled flow is untouched."""
     runtime = getattr(pipeline, 'assistant_runtime', None)
     waiting = getattr(runtime, 'waiting', None)
     if waiting is not None and getattr(getattr(runtime, 'settings', None), 'mode', None) == 'live':
-        status, due = waiting(sources, admit=False)
+        options = {}
+        if ref_sources is not None:
+            options['fingerprint'] = classification_log.topic_fingerprint(
+                topic, ((ref, m.chat_id, m.message_id) for ref, m in ref_sources))
+        status, due = waiting(sources, admit=False, **options)
     elif force:
         status, due = None, False
     else:
         return None
-    if status == 'ESCALATED': return _escalate(pipeline, sources[0], topic)
+    if status == 'ESCALATED': return _escalate(pipeline, anchor or sources[0], topic)
     if not force and (status == 'DONE' or due): return None
     from .models import Decision
     result = Decision('pending_review', 'rule', case_key=topic, reason='rules_hold')

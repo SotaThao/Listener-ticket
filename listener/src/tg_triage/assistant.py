@@ -205,7 +205,7 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
              deepseek: Callable[[], dict] | None, images_carry_data: bool,
              deadline_s: float = 180, clock=time.monotonic, record_call=None,
              batch=(), guard_ctx=None, deepseek_link: Link | None = None,
-             decide_deepseek=None, core_pack=None) -> TurnResult:
+             decide_deepseek=None, core_pack=None, topic_refs=False) -> TurnResult:
     """Run a proposal or a guarded decision using one caller-owned ToolBox.
 
     Router replies/errors use structural interfaces so independently developed
@@ -233,6 +233,9 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                    'Omit uncertain facts. Do not decide actions, targets or templates. '
                    'Return only JSON matching this output schema: '
                    + json.dumps(_schema(snapshot), ensure_ascii=False))
+    if topic_refs:
+        instruction = ('Source IDs are refs in this topic. Use those refs for citations, '
+                       'get_messages and get_image. get_messages reads this topic only.\n' + instruction)
     payload = redact(json.dumps({'sources': sources_payload}, ensure_ascii=False))
     user_content = instruction + '\nUNTRUSTED BATCH DATA:\n' + payload
     if images:
@@ -247,7 +250,7 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
     tickets = {}
     rejected = None
     invalid = None
-    if deciding and deepseek_link is not None and decide_deepseek is not None and not (images or images_carry_data):
+    if (deciding or topic_refs) and deepseek_link is not None and decide_deepseek is not None and not (images or images_carry_data):
         links = (*links, deepseek_link)
     seen = set()
     forced = False
@@ -315,7 +318,8 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
         link_end = min(deadline, clock() + min(link.timeout_s, max_link_time))
         send = decide_deepseek if link.name == 'deepseek' else chat
         # At most eight tool steps, one answer and one repair, across a link.
-        for _ in range(max_rounds):
+        topic_fallback = topic_refs and link.name == 'deepseek'
+        for _ in range(1 if topic_fallback else max_rounds):
             timeout = min(60, link_end - clock(), deadline - clock())
             if timeout <= 0:
                 budget_failure(breaker)
@@ -329,6 +333,9 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                                     lookup=not toolbox.lookup_budget_reported) if core_mode else _tools())
                     reply = send(link.model, copy.deepcopy(outbound), tools=tools,
                                  tool_choice='none' if forced or repairing else 'auto', timeout=timeout)
+                elif topic_fallback:
+                    reply = send(link.model, copy.deepcopy(messages[:2]), tools=(),
+                                 tool_choice='none', timeout=timeout)
                 else:
                     reply = send(link.model, copy.deepcopy(outbound),
                                  tools=() if forced or repairing else _tools(), timeout=timeout)
@@ -368,7 +375,7 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                     capture(reply if deciding else None, error_class=error_kind, finish_reason='length')
             if error_kind in ('schema', 'truncated'):
                 failure(error_kind)
-                if repair_used:
+                if repair_used or topic_fallback:
                     breaker.record_failure(error_kind)
                     break
                 repair_used = True
@@ -381,7 +388,7 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                 continue
             calls = reply.tool_calls
             if calls:
-                if forced or repairing:
+                if forced or repairing or topic_fallback:
                     capture(reply, error_class='limit_reached')
                     failure('limit_reached')
                     cancel = getattr(breaker, 'cancel_probe', None)
@@ -463,7 +470,7 @@ def run_turn(*, sources_payload: list[dict], images: Mapping[str, str] | None,
                 return finish('ok', proposal)
             capture(reply, error_class='schema', schema_error_kind=schema_rejection_kind(reply.content))
             failure('schema')
-            if repair_used:
+            if repair_used or topic_fallback:
                 breaker.record_failure('schema')
                 break
             repair_used = True

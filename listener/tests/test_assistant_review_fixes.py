@@ -122,7 +122,7 @@ class AssistantReviewFixTests(unittest.TestCase):
                 self.assertEqual(runtime.attempts.status(batch_fingerprint(sources)), 'WAIT_INFRA')
                 fallback.assert_not_called(); runtime.chat.assert_not_called()
 
-    def test_topic_refs_colliding_with_real_ids_bypass_assistant_in_both_modes(self):
+    def test_unmapped_topic_refs_colliding_with_real_ids_hold_in_live_mode(self):
         for mid in (1, 2): self.store.enqueue(message(mid, text='UNRELATED REAL MESSAGE'))
         refs = [message(1, text='POS kẹt giấy'), message(2, text='bổ sung cùng chủ đề')]
         for mode in ('shadow', 'live'):
@@ -136,8 +136,12 @@ class AssistantReviewFixTests(unittest.TestCase):
                         result = runtime.evaluate(_evaluate_batch, self.snapshot, provider, refs, allow_mixed=True)
                 finally:
                     classification_log.CURRENT.reset(token)
-                self.assertIsNotNone(result)
-                self.assertEqual(provider.calls, 1)
+                if mode == 'live':
+                    self.assertIsNone(result)
+                    self.assertEqual(provider.calls, 0)
+                else:
+                    self.assertIsNotNone(result)
+                    self.assertEqual(provider.calls, 1)
                 runtime.chat.assert_not_called()
                 self.assertEqual(len(runtime.queue), 0)
         self.assertEqual(self.store.connection.execute("SELECT count(*) FROM classification_runs WHERE phase LIKE 'assistant_%'").fetchone()[0], 0)

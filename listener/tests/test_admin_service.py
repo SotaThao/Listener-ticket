@@ -461,6 +461,21 @@ class AdminServiceTests(unittest.TestCase):
         self.assertEqual(data["run"]["message_refs"], [1, 42])
         self.assertIsNone(data["run"]["ticket_url"])
 
+    def test_topic_ref_detail_joins_real_messages_across_chats(self):
+        classification_log.init_store(self.db)
+        self.db.execute("INSERT INTO messages VALUES (?, 1, '2025-01-01T00:00:00+00:00', 'Ops', ?, 'queued', NULL, NULL)",
+                        (-100, "ops answer"))
+        run_id = self.add_run(id_space="topic_ref", message_ids="[7,8]", topic_id="topic")
+        self.db.executemany("INSERT INTO classification_run_sources VALUES (?,?,?,?,?)",
+                            [(run_id, 0, 7, CHAT, 1), (run_id, 1, 8, -100, 1)])
+        status, _, body = self.request(f"/api/runs/{run_id}", cookie=self.cookie())
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual([(row["input_ref"], row["chat_id"], row["message_id"], row["text"])
+                          for row in data["inputs"]], [(7, CHAT, 1, SCRIPT), (8, -100, 1, "ops answer")])
+        self.assertEqual(data["run"]["message_refs"], [7, 8])
+        self.assertEqual(data["run"]["ticket_url"], URL)
+
     def event(self, response):
         fields = {}
         while True:

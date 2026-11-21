@@ -200,6 +200,11 @@ def source_keys(sources):
     return tuple((m.message_id, m.chat_id, m.message_id) for m in sources)
 
 
+def topic_fingerprint(topic_id, ref_sources):
+    key = dict(id_space='topic_ref', topic_id=topic_id, sources=sorted(ref_sources))
+    return hashlib.sha256(_json(key).encode('utf-8')).hexdigest()
+
+
 def find_thread(store, chat_id, *, reply_to_ids=(), topic_id=None, ticket_ref=None):
     """Match at most 500 recent runs in this chat and resolve the thread root."""
     try:
@@ -287,12 +292,13 @@ class _Attempt:
         self.started = turn.store.clock()
         topic_id = turn.root_key if topic_id is None else topic_id
         keys = sorted([m.chat_id, m.message_id] for m in sources)
-        id_space = 'topic_ref' if phase in ('pending_merge', 'followup_confirm') else 'message'
-        fingerprint = (dict(id_space=id_space, topic_id=topic_id, sources=keys)
-                       if id_space == 'topic_ref' else keys)
+        id_space = 'topic_ref' if ref_sources is not None or phase in ('pending_merge', 'followup_confirm') else 'message'
+        fingerprint = (topic_fingerprint(topic_id, keys) if id_space == 'topic_ref'
+                       else hashlib.sha256(_json(keys).encode('utf-8')).hexdigest())
+        self.replaced = False
         self.values = dict(
             created_at=self.started.timestamp(), turn_key=turn.key, topic_id=topic_id,
-            phase=phase, batch_fingerprint=hashlib.sha256(_json(fingerprint).encode('utf-8')).hexdigest(),
+            phase=phase, batch_fingerprint=fingerprint,
             chat_id=sources[0].chat_id, message_ids=_json([m.message_id for m in sources]),
             id_space=id_space, rules_version=getattr(turn.store, 'assistant_pack_fingerprint', None),
             image_ids=_json(sorted(images or {})), rules_fingerprint=snapshot.fingerprint,
@@ -399,7 +405,7 @@ def run(snapshot, sources, images=None, phase='extract', *, topic_id=None,
         try:
             if token is not None:
                 CURRENT.reset(token)
-            if attempt is not None:
+            if attempt is not None and not attempt.replaced:
                 attempt.write()
         except Exception as error:
             _failed(error)

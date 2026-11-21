@@ -243,7 +243,7 @@ def _authority(phase):
 
 def _messages(db, run, ids, *, include_text=False):
     if run["id_space"] == "topic_ref":
-        return []
+        return _indexed_messages(db, run, include_text=include_text)
     ids = list(dict.fromkeys(value for value in ids[:MAX_INPUTS]
                              if type(value) is int and 0 < value <= MAX_SQLITE_ID))
     if not ids:
@@ -260,6 +260,23 @@ def _messages(db, run, ids, *, include_text=False):
                       (run["chat_id"], *ids))
     by_id = {row["message_id"]: dict(row) for row in rows}
     return [by_id[value] for value in ids if value in by_id]
+
+
+def _indexed_messages(db, run, *, include_text=True):
+    columns = _columns(db, "messages")
+    if not columns or not _columns(db, "classification_run_sources"):
+        return []
+    label = "m.chat_username" if "chat_username" in columns else "NULL AS chat_username"
+    fields = "s.message_id,m.issue_url," + label
+    if include_text:
+        fields += ",s.chat_id,m.received_at,m.sender_name,m.text,m.decision"
+        if run["id_space"] == "topic_ref":
+            fields += ",s.input_id AS input_ref"
+    return [dict(source) for source in db.execute(f"""
+        SELECT {fields}
+        FROM classification_run_sources s
+        JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+        WHERE s.run_id=? ORDER BY s.ordinal LIMIT ?""", (run["run_id"], MAX_INPUTS))]
 
 
 def _https_url(value):
@@ -491,17 +508,7 @@ def _exact_round(db, run_id, now):
         f"SELECT COUNT(*) FROM classification_runs WHERE {key}=? AND run_id<=?",
         (thread if thread is not None else run_id, run_id),
     ).fetchone()[0]
-    inputs = None
-    message_columns = _columns(db, "messages")
-    if message_columns and _columns(db, "classification_run_sources"):
-        label = "m.chat_username" if "chat_username" in message_columns else "NULL AS chat_username"
-        source_ref = "s.input_id AS input_ref," if row["id_space"] == "topic_ref" else ""
-        inputs = [dict(source) for source in db.execute(f"""
-            SELECT {source_ref}s.chat_id,s.message_id,m.received_at,m.sender_name,m.text,m.decision,
-                   m.issue_url,{label}
-            FROM classification_run_sources s
-            JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
-            WHERE s.run_id=? ORDER BY s.ordinal LIMIT ?""", (run_id, MAX_INPUTS))]
+    inputs = _indexed_messages(db, row)
     return {**_format_round(_round_detail(db, row, now, messages=inputs or None)), "round_index": round_index}
 
 
