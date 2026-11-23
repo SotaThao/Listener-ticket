@@ -23,7 +23,7 @@ PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46
 # readiness.md · prefilter P1–P4, implemented explicitly (the prose is hash-locked in _validate).
 # A link/mention tail is printable ASCII without `,` `;` so text glued after it ("…/80,lỗi") is kept.
 _TAIL = r"[\x21-\x2b\x2d-\x3a\x3c-\x7e]"
-_GITHUB_REF = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:pull|issues)/[0-9]+(?![A-Za-z0-9_])" + _TAIL + "*", re.I)
+_GITHUB_REF = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?P<kind>pull|issues)/[0-9]+(?![A-Za-z0-9_])" + _TAIL + "*", re.I)
 _BARE_URL_START = r"\b[A-Za-z0-9.-]+\.[A-Za-z]{2,}/"
 _URL = re.compile(r"(?:https?://|www\.)" + _TAIL + r"+|" + _BARE_URL_START, re.I)
 _MENTION = re.compile(r"@\w+")
@@ -60,9 +60,15 @@ BANTER_MIN_MESSAGES = 2
 BANTER_MIN_SENDERS = 2
 BANTER_KINDS = frozenset({"emoji", "vấn đề"})
 REPLY_CHAT_RULE = "F6"
-# readiness.md · reply_chat K2(a): only these rules settle a message as team talk, small talk or a joke.
+# readiness.md · reply_chat K2(a): these reasons settle ordinary chat replies.
 REPLY_CHAT_TARGET_RULES = frozenset({"F2", "F4", "F5"})
-REPLY_CHAT_SHA256 = "fac256da381f6efabd5c1629c5b4fdacfed6eed3772aa9f83ba9ed13060544f5"
+# K2(b) requires a complete acknowledgement, including when its parent is a PR review request.
+_MERGE_ACKNOWLEDGEMENT = re.compile(
+    r"(?:(?:a|anh|e|em|chị|mình)[ \t]+)?"
+    r"(?:merge[ \t]+rồi|đã[ \t]+merge(?:[ \t]+rồi)?|merged)"
+    r"(?:[ \t]+(?:nha|nhé|nhe|nhá|ạ))?[.!]?"
+)
+REPLY_CHAT_SHA256 = "89617f02b1b6b3961e15d94d8f98af0aed125a03726dbe659ab6049f7134e1a1"
 IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
@@ -528,21 +534,34 @@ class RulesSnapshot:
         value = _MENTION.sub(' ', unicodedata.normalize('NFC', _INVISIBLE.sub('', text))).casefold()
         return not any(w in self.banter_problem for w in re.sub(r'[^\w]+|_', ' ', value).split())
 
-    def reply_target_settled(self, decision, reason, target_sender, sender) -> bool:
-        """readiness.md · reply_chat K2: the target was settled CHAT by F2, F4 or F5 and a different, known person replies.
-        Anything else (no ticket yet, ticket made, waiting for more info, the bot gave up on it) is not settled."""
-        # N1: always a different, known person. Only F2/F4/F5 settle a message (Owner 2026-11-10 dropped the 'bot gave up' case): read-only ANALYZE/STATUS, dry-run, system rows, and
-        # F1/F3/R7/R8 (review requests, links, questions) are also stored as chat but a reply to them may be a real request.
-        if not (type(target_sender) is int and type(sender) is int and target_sender != sender): return False
-        return decision == 'chat' and reason in REPLY_CHAT_TARGET_RULES
+    def reply_target_settled(self, decision, reason, target_sender, sender, *, target_text=None, reply_text=None) -> bool:
+        """readiness.md · reply_chat K2: a stored CHAT target from a different, known sender."""
+        if decision != 'chat' or type(target_sender) is not int or type(sender) is not int or target_sender == sender:
+            return False
+        if reason in REPLY_CHAT_TARGET_RULES:
+            return True
+        if reason != PREFILTER_RULE or not isinstance(reply_text, str) or not isinstance(target_text, str):
+            return False
+        acknowledgement = unicodedata.normalize('NFC', _INVISIBLE.sub('', reply_text)).strip().casefold()
+        if not _MERGE_ACKNOWLEDGEMENT.fullmatch(acknowledgement):
+            return False
+        parent = unicodedata.normalize('NFC', _INVISIBLE.sub('', target_text))
+        return any(ref['kind'].lower() == 'pull' for ref in _GITHUB_REF.finditer(parent)) and self.prefilter_text(parent)
 
     def _reply_chat_case(self, text, target) -> bool:
         from datetime import datetime, timezone
         from .models import IncomingMessage
         now = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
         message = IncomingMessage(1, 8, now, 'Người gửi', text, sender_id=99, reply_to_id=None if target == 'none' else 7)
-        decision, reason, same = {'CHAT': ('chat', 'F2', False), 'ticket': ('issue', None, False), 'CHAT-self': ('chat', 'F2', True), 'CHAT-F1': ('chat', 'F1', False), 'none': (None, None, False)}[target]
-        return self.reply_chat_match(message, self.reply_target_settled(decision, reason, 99 if same else 55, 99))
+        decision, reason, same = {
+            'CHAT': ('chat', 'F2', False), 'ticket': ('issue', None, False), 'CHAT-self': ('chat', 'F2', True),
+            'CHAT-F1': ('chat', 'F1', False), 'CHAT-F1-issue': ('chat', 'F1', False), 'none': (None, None, False),
+        }[target]
+        kind = 'issues' if target == 'CHAT-F1-issue' else 'pull'
+        settled = self.reply_target_settled(decision, reason, 99 if same else 55, 99,
+                                            target_text=f'review giúp em https://github.com/org/repo/{kind}/12',
+                                            reply_text=text)
+        return self.reply_chat_match(message, settled)
 
     def _split_case(self, group) -> str:
         from datetime import datetime, timezone
@@ -772,7 +791,7 @@ class RulesSnapshot:
         outcomes = set()
         for row in self.tables['examples']['reply_chat_cases']:
             target, expected = row.one('Reply vào'), row.one('Kết quả')
-            if target not in {'CHAT', 'CHAT-self', 'CHAT-F1', 'ticket', 'none'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
+            if target not in {'CHAT', 'CHAT-self', 'CHAT-F1', 'CHAT-F1-issue', 'ticket', 'none'} or expected not in {'CHAT', 'không'}: row.fail('invalid reply_chat case')
             if self._reply_chat_case(row.cells['Tin'], target) != (expected == 'CHAT'): row.fail('reply_chat self-check failed')
             outcomes.add(expected)
         if outcomes != {'CHAT', 'không'}: self.tables['examples']['reply_chat_cases'][0].fail('reply_chat cases need both outcomes')

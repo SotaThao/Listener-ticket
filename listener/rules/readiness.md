@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 16 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 17 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-20: "có 'merge' là đã liệt vào Chat cần bỏ qua"
@@ -263,7 +263,7 @@ Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` 
 | # | Bước |
 |---|---|
 | K1 | Tin Reply (có `reply_to_id`), không forward, không command, người gửi không đính kèm ảnh hay tài liệu, không tag bot, có chữ |
-| K2 | Tin được Reply vào đã lưu trong cùng group, do một người khác gửi (người gửi hai tin đều biết và khác nhau), và bot đã quyết `CHAT` cho nó bằng luật `F2` (giao việc hoặc hỏi đồng nghiệp, chỉ khi chính tin đó không phải forward và có `@tên`), `F4` (xã giao) hoặc `F5` (đùa) trong cột lý do; không tính `F1`, `F3`, luật `R`, tin chỉ đọc `semantic_analyze`/`semantic_status`, dry-run hay tin hệ thống cũng lưu là chat. Không tính tin bot đã bỏ cuộc (báo "chưa được phân tích thành công" ở group xử lý), tin chưa quyết, tin đã tạo ticket, tin đang chờ bổ sung, tin của chính người gửi, hay không tìm thấy |
+| K2 | Tin đích đã lưu trong cùng group, do một người khác gửi (cả hai người gửi đều biết), không forward và được bot lưu `CHAT`. Chấp nhận (a) lý do `F2` khi chính tin đích có `@tên`, hoặc `F4`, `F5`; (b) lý do `F1` khi chính tin đích không Reply, không command hay đính kèm, khớp bộ lọc F1 và có link GitHub tới PR. Với (b), toàn bộ tin Reply sau khi chuẩn NFC, bỏ ký tự vô hình, xén khoảng trắng đầu cuối và đổi chữ thường phải gồm câu xác nhận `merge rồi`, `đã merge`, `đã merge rồi` hoặc `merged`. Có thể có một từ xưng hô ở đầu (`a`, `anh`, `e`, `em`, `chị`, `mình`), một từ đệm ở cuối (`nha`, `nhé`, `nhe`, `nhá`, `ạ`) và một dấu `.` hoặc `!` ở cuối. Giữa các từ dùng dấu cách hoặc tab. Các lý do khác và đích chưa quyết, đã tạo ticket, đang chờ bổ sung hoặc không tìm thấy đều nằm ngoài phạm vi |
 | K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
 | K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
 

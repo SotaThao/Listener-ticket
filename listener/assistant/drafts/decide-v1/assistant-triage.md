@@ -1,12 +1,12 @@
 <!-- assistant-triage pack v1
-pack_fingerprint: f6619add3b077cfb4965b68106cfe7a2c38d086b6e3d26e148373391da040b90
+pack_fingerprint: 9a33670ad43fa678b014ac143b38cdc9f4a0002673ed77602d04d404be0f2b61
 source principles.md sha256 0a35acb71ce898d30863de6176ce59e2e330786bddccc9bc2634533c72df7595
 source states.md sha256 9ca16a2562c1d08cbe95653124c191f7504cfd30a85ec438e5c0a491da5ce458
 source facts.md sha256 6aaf256a86f6050664bd855c45970832fbbc6a94edbabca15070797afa796182
-source readiness.md sha256 855715feeec9f5d386d93b2f6a45d0474f11171ff480014677eb33e74d7d5f7b
+source readiness.md sha256 38598013a81fa2ad7967c26f249f4da5af200c7a64942a88e65de12ffc81bd8d
 source questions.md sha256 7b1e1bd94b12184fa1c210d0033c1eb744dcf34114a759c5873b82fd0738e38a
 source channels.md sha256 bc21ed66d7b57f515c16b15590aadc8b9cbddb1c2d5d90c7c48f5b726846f6ff
-source examples.md sha256 4008d3c650a295416ff606ba50146256885c7d797e6401baf3a578eda43e3687
+source examples.md sha256 a2117a2b037e54b5cc6579f60a8fec4139539eb1f8de95ccbadd210834e71828
 source lifecycle.md sha256 6a20e1a60247ed43909cb1374825f50f094b5db7be0f65d57ce428ae7706a154
 source analysis-status.md sha256 7ed57f1a5cbba92ada10934a857b20874209b3a7cf453cfe824acb47cad75485
 -->
@@ -234,7 +234,7 @@ Chỉ gửi model khi code đếm được nhóm đang đùa (`readiness.md` · 
 
 <!-- end-source: facts.md -->
 <!-- source: readiness.md -->
-<!-- rule-file: readiness · version 16 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 17 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-20: "có 'merge' là đã liệt vào Chat cần bỏ qua"
@@ -499,7 +499,7 @@ Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` 
 | # | Bước |
 |---|---|
 | K1 | Tin Reply (có `reply_to_id`), không forward, không command, người gửi không đính kèm ảnh hay tài liệu, không tag bot, có chữ |
-| K2 | Tin được Reply vào đã lưu trong cùng group, do một người khác gửi (người gửi hai tin đều biết và khác nhau), và bot đã quyết `CHAT` cho nó bằng luật `F2` (giao việc hoặc hỏi đồng nghiệp, chỉ khi chính tin đó không phải forward và có `@tên`), `F4` (xã giao) hoặc `F5` (đùa) trong cột lý do; không tính `F1`, `F3`, luật `R`, tin chỉ đọc `semantic_analyze`/`semantic_status`, dry-run hay tin hệ thống cũng lưu là chat. Không tính tin bot đã bỏ cuộc (báo "chưa được phân tích thành công" ở group xử lý), tin chưa quyết, tin đã tạo ticket, tin đang chờ bổ sung, tin của chính người gửi, hay không tìm thấy |
+| K2 | Tin đích đã lưu trong cùng group, do một người khác gửi (cả hai người gửi đều biết), không forward và được bot lưu `CHAT`. Chấp nhận (a) lý do `F2` khi chính tin đích có `@tên`, hoặc `F4`, `F5`; (b) lý do `F1` khi chính tin đích không Reply, không command hay đính kèm, khớp bộ lọc F1 và có link GitHub tới PR. Với (b), toàn bộ tin Reply sau khi chuẩn NFC, bỏ ký tự vô hình, xén khoảng trắng đầu cuối và đổi chữ thường phải gồm câu xác nhận `merge rồi`, `đã merge`, `đã merge rồi` hoặc `merged`. Có thể có một từ xưng hô ở đầu (`a`, `anh`, `e`, `em`, `chị`, `mình`), một từ đệm ở cuối (`nha`, `nhé`, `nhe`, `nhá`, `ạ`) và một dấu `.` hoặc `!` ở cuối. Giữa các từ dùng dấu cách hoặc tab. Các lý do khác và đích chưa quyết, đã tạo ticket, đang chờ bổ sung hoặc không tìm thấy đều nằm ngoài phạm vi |
 | K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
 | K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
 
@@ -737,7 +737,7 @@ Danh mục mọi khối template rules dùng. `có` = đã có trong file templa
 
 <!-- end-source: channels.md -->
 <!-- source: examples.md -->
-<!-- rule-file: examples · version 21 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 22 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 ## Bảng: source_followup_cases
@@ -970,7 +970,7 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `banter_only`)
 
 ## Bảng: reply_chat_cases
 
-Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào do người khác gửi và đã quyết `CHAT` bằng `F2`; `CHAT-self` = như vậy nhưng do chính người gửi tin đang xét; `CHAT-F1` = đã quyết `CHAT` bằng luật ngoài `F2`/`F4`/`F5` (vd nhờ review PR); `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). Bảng này **không** gửi cho model.
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào do người khác gửi và đã quyết `CHAT` bằng `F2`; `CHAT-self` = như vậy nhưng do chính người gửi tin đang xét; `CHAT-F1` = tin nhờ review kèm link PR đã quyết `CHAT` bằng `F1`; `CHAT-F1-issue` = trường hợp tương tự với link issue; `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). RC13 là case 152 của #3018. Bảng này **không** gửi cho model.
 
 | # | Tin | Reply vào | Kết quả |
 |---|---|---|---|
@@ -984,6 +984,14 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`).
 | RC10 | rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =)) | `CHAT-self` | `không` |
 | RC11 | Cần thêm nút xuất Excel ở màn báo cáo | `CHAT-F1` | `không` |
 | RC12 | Cần thêm nút xuất Excel ở màn báo cáo | `CHAT` | `CHAT` |
+| RC13 | a merge rồi nha | `CHAT-F1` | `CHAT` |
+| RC14 | Anh đã merge rồi nhé! | `CHAT-F1` | `CHAT` |
+| RC15 | a merge rồi nha? | `CHAT-F1` | `không` |
+| RC16 | a chưa merge nha | `CHAT-F1` | `không` |
+| RC17 | a merge rồi nha, build bị conflict | `CHAT-F1` | `không` |
+| RC18 | a merge rồi nha, thêm nút export giúp em | `CHAT-F1` | `không` |
+| RC19 | a merge rồi nha | `CHAT-F1-issue` | `không` |
+| RC20 | /task a merge rồi nha | `CHAT-F1` | `không` |
 
 ## Bảng: image_split_cases
 
