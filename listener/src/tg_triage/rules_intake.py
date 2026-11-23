@@ -1483,6 +1483,7 @@ def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, contex
     from dataclasses import replace
     from .assistant_contract import GuardContext, PHASE_DECIDE, to_plan
     from .assistant_extractor import batch_fingerprint
+    from .recent_tickets import candidates
     from .rules_extraction import partition_and_extract
     from .ticket_templates import active
 
@@ -1519,6 +1520,7 @@ def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, contex
         append_confidence=pipeline.config.assistant.append_confidence,
         seen_image_ids=frozenset(packet['images_order']), read_document_ids=frozenset(reads),
         document_reads=reads,
+        recent_targets={row['number']: row for row in candidates(pipeline.store, sources, pipeline.config.gh_repo)},
     )
     deadline = getattr(runtime, 'clock', time.monotonic)() + pipeline.config.assistant.turn_deadline_s
     data = dict(packet, images=images, documents=documents, read_context=context)
@@ -2014,7 +2016,8 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 if plan.get('authority') == 'decide':
                     block = plan.get('question_block') or DEFAULT_QUESTION_BLOCK
                     _question(pipeline, first, topic, replace(decision, questions=(block,),
-                                                              asked_fields=tuple(dict.fromkeys(decision.asked_fields))))
+                                                              asked_fields=tuple(dict.fromkeys(decision.asked_fields))),
+                              candidate_numbers=plan.get('question_candidate_numbers', ()))
                 else:
                     pipeline._acknowledge(Plan(topic,members,first,'rule','pending_review'))
                     _question(pipeline,first,topic,decision)
@@ -2123,7 +2126,11 @@ def _finish_comment_proven(pipeline, chat_id, message_id, number, comment_id):
         raise RulesHalt('comment outcome unresolved; Owner inspection required') from error
 
 
-def _search_target_current(pipeline, proof):
+def _append_target_current(pipeline, proof, members):
+    if proof['basis'] == 'recent':
+        from .recent_tickets import still_proven
+        if not still_proven(pipeline.store, proof, members, pipeline.config.gh_repo):
+            return False
     observed = pipeline.github.lifecycle_snapshot(proof['number'])
     return (observed.get('number') == proof['number']
             and observed.get('repo', '').casefold() == pipeline.config.gh_repo.casefold()
@@ -2144,11 +2151,12 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     if not proofs or len({p['number'] for p in proofs}) != 1: raise ValueError('invalid append target')
     proof=proofs[0]; number=proof['number']
     expected_state = 'closed' if decision.state == 'APPEND_CLOSED' else 'open'
-    search = decide_plan is not None and len(proofs) == 1 and proof.get('basis') == 'search'
-    if search:
+    inferred = decide_plan is not None and len(proofs) == 1 and proof.get('basis') in ('search', 'recent')
+    recent = inferred and proof['basis'] == 'recent'
+    if inferred:
         authority = min(members, key=lambda m: m.message_id)
         try:
-            valid = expected_state == proof['state'] and _search_target_current(pipeline, proof)
+            valid = expected_state == proof['state'] and _append_target_current(pipeline, proof, members)
         except Exception:
             valid = False
     else:
@@ -2156,7 +2164,11 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
         current=_resolve_lifecycle_target(pipeline,authority,proof)
         valid = current == proof and current['state'] == expected_state
     if not valid:
-        return Decision('pending_review','rule',case_key=topic,reason='lifecycle_lookup_failed')
+        reason = 'recent_target_unavailable' if recent else 'lifecycle_lookup_failed'
+        if recent:
+            classification_log.record_recent_append_outcome(
+                pipeline.store, decide_plan, status='blocked', reason=reason)
+        return Decision('pending_review','rule',case_key=topic,reason=reason)
     if pipeline.config.mode=='dry-run':
         result=Decision('chat','rule',case_key=topic,reason='dry_run_append')
         for member in members: pipeline.store.finish(member,result)
@@ -2178,9 +2190,9 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     if decide_plan is not None:
         body += ''.join('\n\n' + line for line in _related_lines(decide_plan.get('related'), decide_plan.get('refs', ())))
     for target_proof in proofs:
-        if search:
+        if inferred:
             try:
-                unchanged = _search_target_current(pipeline, target_proof)
+                unchanged = _append_target_current(pipeline, target_proof, members)
             except Exception:
                 unchanged = False
         else:
@@ -2188,6 +2200,9 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
             unchanged = _resolve_lifecycle_target(pipeline,target_source,target_proof) == target_proof
         if not unchanged:
             from .rules_pending_store import RulesHalt
+            if recent:
+                classification_log.record_recent_append_outcome(
+                    pipeline.store, decide_plan, status='blocked', reason='recent_target_changed_before_comment')
             raise RulesHalt('comment target changed after attachment processing; Owner inspection required')
     if evidence_plan is not None:
         _prewrite_lifecycle_guard(pipeline,topic,evidence_plan,members,plan_origin,question_answer=True)
@@ -2195,19 +2210,28 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     except Exception: comment_id=None
     _finish_comment_proven(pipeline,authority.chat_id,authority.message_id,number,comment_id)
     if type(comment_id) is not int or comment_id<=0:
+        if recent:
+            classification_log.record_recent_append_outcome(
+                pipeline.store, decide_plan, status='ambiguous', reason='comment_ambiguous')
         _send_ops(pipeline,authority,topic,'error',active().render('group-replies.md','notice.comment_ambiguous'))
         return Decision('error','rule',case_key=topic,reason='comment_ambiguous')
     expected=f'https://github.com/{pipeline.config.gh_repo}/issues/{number}'
-    if search:
+    title = None
+    if inferred:
         with pipeline.store._lock:
-            target = pipeline.store.connection.execute('''SELECT case_key,group_key FROM messages
+            target = pipeline.store.connection.execute('''SELECT case_key,group_key,title FROM messages
                 WHERE chat_id=? AND issue_number=? AND issue_url=? AND decision IN ('issue','followup')
                 ORDER BY message_id LIMIT 1''', (authority.chat_id, number, expected)).fetchone()
         if target is None:
             target = {'case_key': topic, 'group_key': topic}
+        elif recent:
+            title = target['title']
     else:
         target=pipeline.store.get(authority.chat_id,proof.get('recurrence_parent_source_id',proof.get('target_source_id',authority.reply_to_id)))
-    _map_append_proven(pipeline,members,number,expected,target)
+    _map_append_proven(pipeline,members,number,expected,target,title=title)
+    if recent:
+        classification_log.record_recent_append_outcome(
+            pipeline.store, decide_plan, status='appended', reason=decision.rule, ticket_ref=expected)
     if not _send_ops(pipeline,authority,topic,'other',active().render('group-replies.md','followup.updated')+'\n'+expected):
         from .rules_pending_store import RulesHalt
         raise RulesHalt('comment notice unavailable; Owner inspection required')
@@ -2216,13 +2240,14 @@ def _append_batch_group(pipeline,topic,members,decision,proofs,document_reads,*,
     return Decision('followup','rule',case_key=target['case_key'],issue_number=number,issue_url=expected,reason=decision.rule)
 
 
-def _map_append_proven(pipeline,members,number,expected,target):
+def _map_append_proven(pipeline,members,number,expected,target,*,title=None):
     from .rules_pending_store import RulesHalt
     try:
         with pipeline.store._lock,pipeline.store.connection:
             for member in members:
-                changed=pipeline.store.connection.execute("UPDATE messages SET decision='followup',issue_number=?,issue_url=?,case_key=?,group_key=? WHERE chat_id=? AND message_id=?",
-                    (number,expected,target['case_key'],target['group_key'],member.chat_id,member.message_id)).rowcount
+                changed=pipeline.store.connection.execute("""UPDATE messages SET decision='followup',issue_number=?,
+                    issue_url=?,case_key=?,group_key=?,title=COALESCE(?,title) WHERE chat_id=? AND message_id=?""",
+                    (number,expected,target['case_key'],target['group_key'],title,member.chat_id,member.message_id)).rowcount
                 mapped=pipeline.store.connection.execute('SELECT decision,issue_number,issue_url,case_key,group_key FROM messages WHERE chat_id=? AND message_id=?',(member.chat_id,member.message_id)).fetchone()
                 if changed!=1 or mapped is None or tuple(mapped)!=('followup',number,expected,target['case_key'],target['group_key']):
                     raise RulesHalt('comment mapping unresolved; Owner inspection required')
@@ -2937,12 +2962,23 @@ def _assistant_wait(pipeline, sources, topic, *, force=False, ref_sources=None, 
     return result
 
 
-def _question(pipeline, source, topic, decision):
-    from . import group_notices
+def _question(pipeline, source, topic, decision, *, candidate_numbers=()):
     from .ticket_templates import active
     if pipeline.config.mode == 'dry-run': return
     templates = active()
-    text = '\n'.join(templates.render('group-replies.md',block) for block in decision.questions)
+
+    def render(block):
+        if block == 'question.recent_ticket':
+            from .recent_tickets import MAX_CANDIDATES
+            from .rules_pending_store import RulesHalt
+            if (not isinstance(candidate_numbers, (tuple, list)) or not 1 <= len(candidate_numbers) <= MAX_CANDIDATES
+                    or any(type(number) is not int or number <= 0 for number in candidate_numbers)):
+                raise RulesHalt('ticket clarification requires a verified shortlist')
+            numbers = ', '.join(f'#{number}' for number in candidate_numbers)
+            return templates.render('group-replies.md', block, {'ticket_numbers': numbers})
+        return templates.render('group-replies.md', block)
+
+    text = '\n'.join(render(block) for block in decision.questions)
     _send_ops(pipeline,source,topic,'question',text,decision.asked_fields)
 
 

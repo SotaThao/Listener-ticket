@@ -8,16 +8,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tg_triage import admin, classification_log, rules_intake
+from tg_triage import admin, classification_log, recent_tickets, rules_intake
 from tg_triage.__main__ import _load_assistant_pack, _load_decision_rules
 from tg_triage.assistant_contract import GroupDecision, PHASE_DECIDE
 from tg_triage.assistant_extractor import batch_fingerprint
 from tg_triage.decision_rules import RulesSnapshot
 from tg_triage.pipeline import Pipeline
 from tg_triage.router_transport import RouterError, ToolCall
+from tg_triage.rules_pending_store import RulesPendingStore
 from tg_triage.store import Store
 from tg_triage.ticket_templates import active
-from tests.helpers import PNG, Clock, FakeGitHub, config, message
+from tests.helpers import ASSET_BASE, PNG, Clock, FakeGitHub, FakeUploader, config, message
 from tests.test_assistant_contract import issue
 from tests.test_assistant_decide_turn import reply
 
@@ -505,6 +506,296 @@ class RealDecideIntakeTests(unittest.TestCase):
         return [reply(mid, calls=(tool,)),
                 reply(mid, state='APPEND', rule='R6', target=dict(number=number, basis='search'),
                       relation='duplicate', confidence=confidence, **fields)]
+
+    @staticmethod
+    def recent(mid, number=42, **fields):
+        return reply(mid, state='APPEND', rule='R6', target=dict(number=number, basis='recent'),
+                     relation='duplicate', **fields)
+
+    @staticmethod
+    def packet(call):
+        content = call.args[1][1]['content']
+        return json.loads((content[0]['text'] if isinstance(content, list) else content)
+                          .split('UNTRUSTED BATCH DATA:\n', 1)[1])
+
+    def test_recent_duplicate_screenshots_append_without_tool_calls(self):
+        def download(chat_id, mid, directory):
+            path = directory / 'inbox.png'
+            path.write_bytes(PNG)
+            return path
+
+        opened = reply(1, state='READY', rule='R9', template='bug',
+                       issue=issue('object', 'observed', source_ids=(1,)))
+        chat = Mock(side_effect=[opened, self.recent(2, reasoning_summary='Same inbox redirect'),
+                                 self.recent(3, reasoning_summary='Same inbox sign-in loop')])
+        pipeline = self.pipeline(chat, downloader=download)
+        uploader = FakeUploader()
+        pipeline.attachments.uploader = uploader
+        first = message(1, 'Hộp thư báo lỗi chuyển hướng; thông báo gửi cho test@example.com.')
+        self.assertEqual(pipeline.process(first).issue_number, 42)
+        for mid, caption in ((2, 'Ảnh bước chuyển hướng hộp thư'),
+                             (3, 'Ảnh thông báo đăng nhập trong hộp thư')):
+            self.clock.advance(1)
+            source = message(mid, caption, has_image=True, received_at=self.clock())
+            result = pipeline.process(source)
+            self.assertEqual((result.decision, result.issue_number), ('followup', 42))
+            upload = uploader.uploads[-1]
+            self.assertIn(f"{ASSET_BASE}/{upload['tag']}/{upload['asset']}",
+                          pipeline.github.add_comment.call_args.args[1])
+            data = self.packet(chat.call_args)
+            self.assertTrue(data['sources'][0]['pixels_available'])
+            [candidate] = data['sources'][0]['batch_context']['decision_context']['recent_ticket_candidates']
+            self.assertEqual((candidate['number'], candidate['source_message_id'], candidate['evidence']),
+                             (42, mid - 1, 'create' if mid == 2 else 'append'))
+            self.assertTrue(candidate['title'])
+            self.assertTrue(candidate['source_excerpt'])
+            self.assertNotIn('test@example.com', candidate['source_excerpt'])
+            row = self.rows(pipeline)[-1]
+            detail = admin._exact_round(pipeline.store.connection, row['run_id'], self.clock().timestamp())
+            [outcome] = detail['run']['outcomes']
+            self.assertEqual(outcome['target'], {'basis': 'recent', 'number': 42})
+            self.assertEqual(outcome['recent_ticket_candidates'][0]['source_message_id'], mid - 1)
+            self.assertEqual(outcome['execution']['status'], 'appended')
+            self.assertIn('Same inbox', outcome['reasoning_summary'])
+            self.assertNotIn('source_excerpt', outcome['recent_ticket_candidates'][0])
+        rules_intake._process_batch(pipeline, [source], f'batch:{CHAT}:3')
+        self.assertEqual(chat.call_count, 3)
+        self.assertEqual(pipeline.github.add_comment.call_count, 2)
+        self.assertEqual(len(uploader.uploads), 2)
+        self.assertEqual(pipeline.github.lifecycle_snapshot.call_count, 4)
+        self.assertEqual(len(pipeline.github.calls), 1)
+        self.assertEqual(pipeline.store.connection.execute(
+            'SELECT COUNT(*) FROM classification_tool_calls').fetchone()[0], 0)
+
+    def test_recent_ambiguity_asks_with_candidates_before_writing(self):
+        opened = reply(1, state='READY', rule='R9', template='bug',
+                       issue=issue('object', 'observed', source_ids=(1,)))
+        for basis in ('recent', 'search', 'question'):
+            with self.subTest(basis=basis):
+                if basis == 'recent':
+                    uncertain = [self.recent(2, confidence=.55, reasoning_summary='Several possible causes')]
+                elif basis == 'search':
+                    uncertain = self.search(2, 42, .55)
+                else:
+                    uncertain = [reply(2, state='NEED_INFO', rule='R13',
+                                       question={'block_id': 'question.recent_ticket', 'fields': []},
+                                       reasoning_summary='Possible continuation; no clear target')]
+                chat = Mock(side_effect=[opened, *uncertain])
+                pipeline = self.pipeline(chat)
+                pipeline.process(message(1, 'Hộp thư báo lỗi chuyển hướng'))
+                self.sent.reset_mock()
+                self.clock.advance(1)
+                with patch('tg_triage.assistant_github.GitHubReader.search_tickets',
+                           return_value=[dict(repo=pipeline.config.gh_repo, number=42, state='open')]):
+                    result = pipeline.process(message(2, 'Phần này lại báo lỗi', received_at=self.clock()))
+                self.assertEqual(result.decision, 'pending_review')
+                self.assertEqual(len(pipeline.github.calls), 1)
+                pipeline.github.add_comment.assert_not_called()
+                pipeline.github.lifecycle_snapshot.assert_not_called()
+                self.sent.assert_called_once()
+                self.assertEqual(self.sent.call_args.args[0], OPS)
+                self.assertIn('#42', self.sent.call_args.args[2])
+                self.assertIn('Reply', self.sent.call_args.args[2])
+                row = self.rows(pipeline)[-1]
+                [outcome] = json.loads(row['outcomes_json'])
+                self.assertEqual(outcome['question_candidate_numbers'], [42])
+                self.assertEqual((outcome['state'], row['final_state']), ('NEED_INFO', 'NEED_INFO'))
+
+    def test_recent_candidate_can_be_ignored_for_independent_report(self):
+        chat = Mock(side_effect=[reply(mid, state='READY', rule='R9', template='bug',
+                                       issue=issue('object', 'observed', source_ids=(mid,)),
+                                       reasoning_summary=summary)
+                      for mid, summary in ((1, 'Inbox redirect'), (2, 'Independent pricing failure'))])
+        pipeline = self.pipeline(chat)
+        pipeline.process(message(1, 'Hộp thư báo lỗi chuyển hướng'))
+        self.clock.advance(1)
+        result = pipeline.process(message(2, 'Màn tính tiền không cộng giảm giá',
+                                          received_at=self.clock()))
+        self.assertEqual(result.decision, 'issue')
+        self.assertEqual(len(pipeline.github.calls), 2)
+        pipeline.github.add_comment.assert_not_called()
+        [outcome] = json.loads(self.rows(pipeline)[-1]['outcomes_json'])
+        self.assertEqual(outcome['recent_ticket_candidates'][0]['number'], 42)
+        self.assertEqual((outcome['state'], outcome['target'], outcome['reasoning_summary']),
+                         ('READY', None, 'Independent pricing failure'))
+
+    def test_recent_append_stops_if_authoritative_ticket_is_closed(self):
+        chat = Mock(side_effect=[
+            reply(1, state='READY', rule='R9', template='bug',
+                  issue=issue('object', 'observed', source_ids=(1,))),
+            self.recent(2),
+        ])
+        pipeline = self.pipeline(chat)
+        pipeline.process(message(1, 'Hộp thư báo lỗi chuyển hướng'))
+        pipeline.github.lifecycle_snapshot.side_effect = lambda number: dict(
+            number=number, repo=pipeline.config.gh_repo, state='closed', observed_at='immediate')
+        self.clock.advance(1)
+        result = pipeline.process(message(2, 'Hộp thư vẫn báo lỗi chuyển hướng', received_at=self.clock()))
+        self.assertEqual((result.decision, result.reason), ('pending_review', 'recent_target_unavailable'))
+        pipeline.github.add_comment.assert_not_called()
+        self.assertEqual(len(pipeline.github.calls), 1)
+        self.assertIsNone(pipeline.rules_pending.comment_status(CHAT, 2))
+        row = self.rows(pipeline)[-1]
+        [outcome] = json.loads(row['outcomes_json'])
+        self.assertEqual((row['final_state'], outcome['execution']['status'], outcome['ticket_ref']),
+                         ('HOLD', 'blocked', None))
+
+    def test_recovery_uses_published_recent_comment_without_repeating_effects(self):
+        class Interrupted(BaseException):
+            pass
+
+        chat = Mock(side_effect=[
+            reply(1, state='READY', rule='R9', template='bug',
+                  issue=issue('object', 'observed', source_ids=(1,))),
+            self.recent(2),
+        ])
+        pipeline = self.pipeline(chat)
+        pipeline.process(message(1, 'Hộp thư báo lỗi chuyển hướng'))
+        self.clock.advance(1)
+        source = message(2, 'Hộp thư vẫn báo lỗi chuyển hướng', received_at=self.clock())
+        batch_id = f'batch:{CHAT}:2'
+        topic = f'{CHAT}:2'
+        close = pipeline.rules_pending.close
+
+        def interrupt(topic_id, status):
+            if topic_id == topic and status == 'CLOSED':
+                raise Interrupted
+            return close(topic_id, status)
+
+        with patch.object(pipeline.rules_pending, 'close', side_effect=interrupt):
+            with self.assertRaises(Interrupted):
+                pipeline.process(source)
+        self.assertEqual(pipeline.rules_pending.batch(batch_id)[1][0][2], 'RESERVED')
+        self.assertEqual(pipeline.rules_pending.topic_snapshot(topic)['status'], 'OPEN')
+        pipeline.rules_pending = RulesPendingStore(pipeline.store)
+        self.assertEqual(pipeline.rules_pending.batch(batch_id)[1][0][2], 'DONE')
+        self.assertEqual(pipeline.rules_pending.topic_snapshot(topic)['status'], 'CLOSED')
+        rules_intake._process_batch(pipeline, [source], batch_id)
+        pipeline.github.add_comment.assert_called_once()
+        self.assertEqual(chat.call_count, 2)
+        self.assertEqual(self.sent.call_count, 2)
+
+    def test_recent_candidates_bound_and_deduplicate_prior_success_in_chat_and_repo(self):
+        chat = Mock(return_value=reply(100))
+        pipeline = self.pipeline(chat)
+        store = pipeline.store
+        repo = pipeline.config.gh_repo
+        anchor = self.clock()
+
+        def mapped(mid, minutes, number, *, source_chat=CHAT, issue_repo=repo,
+                   state='issue', reserved=True, group_key=None, case_key=None, comment=None):
+            source = message(mid, f'Prior source {mid}', chat_id=source_chat,
+                             received_at=anchor + timedelta(minutes=minutes))
+            store.enqueue(source)
+            with store.connection:
+                store.connection.execute("""UPDATE messages SET title=?, decision=?, issue_number=?,
+                    issue_url=?, github_called_at=?, processed_at=?, group_key=?, case_key=?
+                    WHERE chat_id=? AND message_id=?""",
+                    (f'Ticket {number}', state, number, f'https://github.com/{issue_repo}/issues/{number}',
+                     anchor.isoformat() if reserved else None, (anchor + timedelta(minutes=1)).isoformat(),
+                     group_key, case_key, source_chat, mid))
+                if comment:
+                    store.connection.execute("INSERT INTO rules_comments VALUES(?,?,?,?,?,?)",
+                                             (source_chat, mid, issue_repo, number, *comment))
+
+        mapped(1, -11, 101)
+        mapped(2, -10, 102)
+        mapped(3, -7, 103)
+        mapped(4, -6, 104)
+        mapped(5, -1, 105, issue_repo='other/repo')
+        mapped(6, -1, 106, source_chat=CHAT - 1)
+        mapped(7, 1, 107)
+        mapped(120, -1, 108)
+        mapped(8, -1, 109, reserved=False)
+        mapped(9, -1, 110, state='followup', comment=('reserved', None))
+        mapped(10, -1, 103, state='followup', comment=('done', 101))
+        mapped(11, -1, 111, state='followup', comment=('ambiguous', None))
+        mapped(12, -1, 112, group_key='mixed')
+        mapped(121, 1, 112, group_key='mixed', reserved=False)
+        mapped(14, -1, 114, case_key=f'{CHAT}:14')
+        store.enqueue(message(15, 'Chỉ nhóm ops biết nội dung này', chat_id=OPS,
+                              received_at=anchor + timedelta(seconds=5)))
+        with store.connection:
+            store.connection.execute('INSERT INTO rules_sources VALUES (?,?,?,?)', (f'{CHAT}:14', 2, OPS, 15))
+
+        sources = [message(100, 'Cần kiểm tra trang tính tiền', received_at=anchor)]
+        candidates = recent_tickets.candidates(store, sources, repo)
+        self.assertEqual([(c['number'], c['source_message_id'], c['evidence']) for c in candidates],
+                         [(103, 10, 'append'), (104, 4, 'create'), (102, 2, 'create')])
+        mapped(13, -5, 113)
+        self.assertEqual([c['number'] for c in recent_tickets.candidates(store, sources, repo)],
+                         [103, 113, 104])
+        later = [replace(sources[0], received_at=anchor + timedelta(seconds=6))]
+        self.assertEqual([c['number'] for c in recent_tickets.candidates(store, later, repo)],
+                         [114, 103, 113])
+
+    def test_recent_group_uses_latest_member_and_preserves_successful_authority(self):
+        for evidence in ('create', 'append'):
+            with self.subTest(evidence=evidence):
+                born = reply(1, state='READY', rule='R9', template='bug',
+                             issue=issue('object', 'observed', source_ids=(1,)))
+                if evidence == 'create':
+                    selected = reply(2, state='READY', rule='R9', template='bug', message_ids=[2, 3],
+                                     issue=issue('object', 'observed', source_ids=(3,)))
+                    turns = [selected, self.recent(4)]
+                else:
+                    turns = [born, self.recent(2, message_ids=[2, 3]), self.recent(4)]
+                chat = Mock(side_effect=turns)
+                pipeline = self.pipeline(chat)
+                anchor = self.clock()
+                if evidence == 'append':
+                    pipeline.process(message(1, 'Hộp thư báo lỗi chuyển hướng',
+                                             received_at=anchor - timedelta(minutes=20)))
+                group = [message(2, 'Báo lỗi hộp thư', received_at=anchor - timedelta(minutes=10, seconds=5)),
+                         message(3, 'Màn chuyển hướng đứng liên tục',
+                                 received_at=anchor - timedelta(minutes=9, seconds=55))]
+                for source in group:
+                    pipeline.store.enqueue(source)
+                rules_intake._process_batch(pipeline, group)
+                current = message(4, 'Lỗi hộp thư vẫn tiếp tục', received_at=anchor)
+                self.assertEqual(pipeline.process(current).decision, 'followup')
+                [candidate] = self.packet(chat.call_args)['sources'][0]['batch_context']['decision_context'][
+                    'recent_ticket_candidates']
+                self.assertEqual((candidate['source_message_id'], candidate['evidence']), (3, evidence))
+                self.assertEqual(candidate['source_excerpt'], group[1].text)
+                [(_, plan, status)] = pipeline.rules_pending.batch(f'batch:{CHAT}:4')[1]
+                self.assertEqual(status, 'DONE')
+                self.assertEqual(plan['targets'][0]['authority_message_id'], 2)
+
+    def test_older_true_reply_takes_priority_only_in_its_group(self):
+        def ready(mid):
+            return reply(mid, state='READY', rule='R9', template='bug',
+                         issue=issue('object', 'observed', source_ids=(mid,)))
+
+        decision = self.recent(3, 43)
+        groups = json.loads(decision.content)
+        groups['groups'].extend(json.loads(self.recent(4, 43).content)['groups'])
+        chat = Mock(side_effect=[ready(1), ready(2), replace(decision, content=json.dumps(groups))])
+        pipeline = self.pipeline(chat)
+        create = pipeline.github.create_issue
+
+        def distinct_create(issue_body):
+            create(issue_body)
+            return 41 + len(pipeline.github.calls), None
+
+        pipeline.github.create_issue = distinct_create
+        pipeline.process(message(1, 'Hộp thư báo lỗi chuyển hướng'))
+        self.clock.advance(20)
+        pipeline.process(message(2, 'Màn tính tiền không cộng giảm giá', received_at=self.clock()))
+        self.clock.advance(1)
+        batch = [message(3, 'Hộp thư báo lỗi y như trên', reply_to_id=1, received_at=self.clock()),
+                 message(4, 'Có thêm lỗi giảm giá khi áp hai mã', received_at=self.clock())]
+        for source in batch:
+            pipeline.store.enqueue(source)
+        rules_intake._process_batch(pipeline, batch)
+        self.assertEqual([call.args[0] for call in pipeline.github.add_comment.call_args_list], [42, 43])
+        self.assertNotIn('Related to #43', pipeline.github.add_comment.call_args_list[0].args[1])
+        context = self.packet(chat.call_args)['sources'][0]['batch_context']['decision_context']
+        self.assertEqual([c['number'] for c in context['recent_ticket_candidates']], [43])
+        self.assertEqual(context['reply_targets'], [dict(message_id=3, number=42, state='open')])
+        outcomes = json.loads(self.rows(pipeline)[-1]['outcomes_json'])
+        self.assertEqual([o['target']['basis'] for o in outcomes], ['reply', 'recent'])
+        self.assertIn('prioritized proven Telegram reply', outcomes[0]['violations'][0]['detail'])
 
     def test_search_duplicate_below_threshold_creates_related_ticket(self):
         chat = Mock(side_effect=self.search(1, 17, .6, template='bug', issue=issue(
