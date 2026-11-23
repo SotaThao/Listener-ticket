@@ -26,6 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OPS = -1009876543210
 CHAT = message().chat_id
 CHECKS = ('F7', 'F1', 'F3', 'F4', 'F6', 'F5', 'R1', 'R2', 'R3')
+PR_REVIEW = 'anh review giúp em PR https://github.com/org/repo/pull/12'
+MERGE_ACK = 'a merge rồi nha'
 
 
 class Audit:
@@ -259,6 +261,66 @@ class DecideIntakeTests(unittest.TestCase):
         self.assertEqual('assistant', trace['handoff'])
         self.assertEqual([('F7', [1]), ('F1', [3])],
                          [(row['rule'], row['message_ids']) for row in trace['checks'] if row['match']])
+
+    def test_review_merge_reply_skips_both_model_routes_and_side_effects(self):
+        for authority in ('decide', 'propose'):
+            with self.subTest(authority=authority):
+                pipeline, audit, jobs, sent = self.pipeline(authority=authority)
+                parent = message(10, PR_REVIEW, sender_id=201, mentions_listener=False)
+                acknowledgement = message(11, MERGE_ACK, sender_id=202, reply_to_id=10, mentions_listener=False)
+                self.assertEqual('F1', pipeline.process(parent).reason)
+                result = pipeline.process(acknowledgement)
+                self.assertEqual(('chat', 'F6'), (result.decision, result.reason))
+                self.assertEqual(([], [], [], []), (jobs, pipeline.classifier.calls, pipeline.github.calls, sent))
+                self.assertEqual(('CHAT', 'F6'), tuple(pipeline.store.connection.execute(
+                    'SELECT state, decision_rule FROM rules_decisions ORDER BY id DESC LIMIT 1').fetchone()))
+                if authority == 'decide':
+                    trace = json.loads(audit.rows()[-1]['code_precheck_json'])
+                    self.assertTrue(trace['handled_by_code'])
+                    self.assertEqual('F6', trace['decided_rule'])
+                    self.assertIsNone(trace['handoff'])
+                    self.assertTrue(trace['rule_text'].startswith('| K4 |'))
+
+    def test_review_merge_reply_batch_skips_both_model_routes(self):
+        for authority in ('decide', 'propose'):
+            with self.subTest(authority=authority):
+                pipeline, _, jobs, sent = self.pipeline(authority=authority)
+                parent = message(10, PR_REVIEW, sender_id=201, mentions_listener=False)
+                self.assertEqual('F1', pipeline.process(parent).reason)
+                replies = [message(mid, text, sender_id=202, reply_to_id=10, mentions_listener=False)
+                           for mid, text in ((11, MERGE_ACK), (12, 'Anh đã merge rồi nhé!'))]
+                for source in replies:
+                    pipeline.store.enqueue(source)
+                rules_intake._process_batch(pipeline, replies)
+                for source in replies:
+                    stored = pipeline.store.get(source.chat_id, source.message_id)
+                    self.assertEqual(('chat', 'F6'), (stored['decision'], stored['reason']))
+                self.assertEqual(([], [], [], []), (jobs, pipeline.classifier.calls, pipeline.github.calls, sent))
+
+    def test_review_merge_reply_requires_plain_acknowledgement_and_eligible_parent(self):
+        pipeline, _, jobs, _ = self.pipeline()
+        parent = message(10, PR_REVIEW, sender_id=201, mentions_listener=False)
+        foreign_parent = replace(parent, chat_id=CHAT - 1, message_id=8)
+        issue_parent = replace(parent, message_id=9, text=PR_REVIEW.replace('/pull/', '/issues/'))
+        for target in (foreign_parent, issue_parent, parent):
+            self.assertEqual('F1', pipeline.process(target).reason)
+        acknowledgement = message(11, MERGE_ACK, sender_id=202, reply_to_id=10, mentions_listener=False)
+        for changes in (
+            {'text': 'a merge rồi nha?'}, {'text': 'a merge rồi nha？'}, {'text': 'a chưa merge nha'},
+            {'text': 'a merge rồi nha nhưng conflict'}, {'text': 'a merge rồi nha, thêm nút export giúp em'},
+            {'text': 'anh merge nha'}, {'text': '/task a merge rồi nha'}, {'mentions_listener': True},
+            {'has_image': True}, {'has_document': True}, {'is_forward': True}, {'sender_id': 201},
+            {'sender_id': None}, {'reply_to_id': 8}, {'reply_to_id': 9},
+        ):
+            with self.subTest(changes=changes):
+                source = replace(acknowledgement, **changes)
+                decision = rules_intake.early_decision(
+                    self.snapshot, [source], chat_replies=rules_intake._chat_reply_ids(pipeline, [source]))
+                self.assertIsNone(decision)
+        request = replace(acknowledgement, text='a merge rồi nha, thêm nút export giúp em')
+        pipeline.process(request)
+        self.assertEqual(1, len(jobs))
+        self.assertEqual((request,), jobs[0]['sources'])
 
     def test_content_only_batch_without_merge_uses_first_messages_rule(self):
         small_talk = message(1, 'cảm ơn')

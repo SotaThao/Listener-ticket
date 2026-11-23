@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 21 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 22 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 ## Bảng: source_followup_cases
@@ -231,7 +231,7 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `banter_only`)
 
 ## Bảng: reply_chat_cases
 
-Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào do người khác gửi và đã quyết `CHAT` bằng `F2`; `CHAT-self` = như vậy nhưng do chính người gửi tin đang xét; `CHAT-F1` = đã quyết `CHAT` bằng luật ngoài `F2`/`F4`/`F5` (vd nhờ review PR); `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). Bảng này **không** gửi cho model.
+Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`). `Reply vào`: `CHAT` = tin được Reply vào do người khác gửi và đã quyết `CHAT` bằng `F2`; `CHAT-self` = như vậy nhưng do chính người gửi tin đang xét; `CHAT-F1` = tin nhờ review kèm link PR đã quyết `CHAT` bằng `F1`; `CHAT-F1-issue` = trường hợp tương tự với link issue; `ticket` = đã tạo ticket; `none` = không phải Reply. RC1 là dạng ẩn danh của tin 6508 (ticket #121). RC13 là case 152 của #3018. Bảng này **không** gửi cho model.
 
 | # | Tin | Reply vào | Kết quả |
 |---|---|---|---|
@@ -245,6 +245,14 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`).
 | RC10 | rồi giờ call ct kéo ảnh vào zoom cho ảnh review đi @Sellisloss =)) | `CHAT-self` | `không` |
 | RC11 | Cần thêm nút xuất Excel ở màn báo cáo | `CHAT-F1` | `không` |
 | RC12 | Cần thêm nút xuất Excel ở màn báo cáo | `CHAT` | `CHAT` |
+| RC13 | a merge rồi nha | `CHAT-F1` | `CHAT` |
+| RC14 | Anh đã merge rồi nhé! | `CHAT-F1` | `CHAT` |
+| RC15 | a merge rồi nha? | `CHAT-F1` | `không` |
+| RC16 | a chưa merge nha | `CHAT-F1` | `không` |
+| RC17 | a merge rồi nha, build bị conflict | `CHAT-F1` | `không` |
+| RC18 | a merge rồi nha, thêm nút export giúp em | `CHAT-F1` | `không` |
+| RC19 | a merge rồi nha | `CHAT-F1-issue` | `không` |
+| RC20 | /task a merge rồi nha | `CHAT-F1` | `không` |
 
 ## Bảng: image_split_cases
 

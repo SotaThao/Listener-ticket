@@ -104,9 +104,8 @@ def _banter_history(pipeline, sources):
 
 
 def _chat_reply_ids(pipeline, sources):
-    """readiness.md · reply_chat K2: ids of sources that Reply to a stored message the bot settled as CHAT (F2, F4, F5)
-    when a different person replies."""
-    from .decision_rules import has_team_mention
+    """readiness.md · reply_chat K2: ids of replies with an eligible same-chat parent."""
+    from .decision_rules import PREFILTER_RULE
     found = set()
     for source in sources:
         if source.reply_to_id is None: continue
@@ -118,7 +117,11 @@ def _chat_reply_ids(pipeline, sources):
         if row is None or row['is_forward']: continue   # a forwarded message is someone else's content, never settles replies
         reason = row['reason']
         if reason == 'F2' and not has_team_mention(row['text']): reason = None   # K2(a): F2 settles only a message that itself carries the @name
-        if pipeline.rules_snapshot.reply_target_settled(row['decision'], reason, row['sender_id'], source.sender_id):
+        if reason == PREFILTER_RULE and (row['reply_to_id'] is not None or row['has_image'] or row['has_document']
+                                         or rules.COMMAND.match(row['text'])):
+            continue
+        if pipeline.rules_snapshot.reply_target_settled(row['decision'], reason, row['sender_id'], source.sender_id,
+                                                       target_text=row['text'], reply_text=source.text):
             found.add(source.message_id)
     return frozenset(found)
 
@@ -179,7 +182,7 @@ def _local_rule(snapshot, members, banter_context=(), chat_replies=frozenset(), 
             checks.append(dict(rule=rule, name=name, match=bool(ids), why=why, message_ids=ids))
         if len(by_message) == len(members):
             return MERGE_RULE if MERGE_RULE in by_message.values() else by_message[members[0].message_id]
-    # readiness.md · reply_chat K1-K4: a Reply to a message the bot already settled as CHAT, with no problem word.
+    # readiness.md · reply_chat K1-K4: eligible stored CHAT parent and a text reply with no problem word.
     if matched(REPLY_CHAT_RULE, 'trả lời tin đã là CHAT',
                bool(chat_replies) and all(m.message_id in chat_replies and snapshot.reply_chat_match(m, True) for m in members),
                'mọi tin đều trả lời tin CHAT hợp lệ',

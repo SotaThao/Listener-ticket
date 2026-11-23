@@ -103,7 +103,7 @@ class DecisionRulesTest(unittest.TestCase):
         self.assertEqual(['chat', 'feedback'], [row['intent (model)'].strip('`') for row in snapshot.mood_examples])
 
     def test_reply_chat_definition_is_hash_locked(self):
-        self.mutate('readiness', '| K2 | Tin được Reply vào đã lưu', '| K2 | Tin được Reply vào đã đọc')
+        self.mutate('readiness', 'có link GitHub tới PR. Với (b)', 'có link GitHub tới PR hoặc issue. Với (b)')
         with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported reply_chat definition'): self.load()
 
     def test_image_split_definition_is_hash_locked(self):
