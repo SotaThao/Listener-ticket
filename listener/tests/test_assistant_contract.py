@@ -126,7 +126,7 @@ class ContractTests(unittest.TestCase):
             ("reply", 12, "APPEND", None, 0.0, True),
             ("reply", 99, "APPEND", None, 0.0, False),
             ("search", 12, "APPEND", "duplicate", 0.8, False),
-            ("search", 23, "APPEND", "duplicate", 0.8, True),
+            ("search", 23, "APPEND", "duplicate", 0.8, False),
             ("search", 23, "APPEND", "duplicate", 0.79, False),
             ("search", 23, "APPEND", "related", 1.0, False),
             ("search", 22, "APPEND", "duplicate", 1.0, False),
@@ -150,6 +150,22 @@ class ContractTests(unittest.TestCase):
                     self.assertEqual(groups[0].state, "APPEND")
                 elif errors:
                     self.assertTrue(errors[0].blocking)
+
+    def test_a_verified_reply_precedes_an_outside_search_and_conflicts_block(self):
+        shortlist = {11: {'number': 11, 'repo': self.ctx.gh_repo, 'chat_id': self.ctx.chat_id}}
+        candidate = group(state="APPEND", target={"number": 23, "basis": "search"},
+                          relation="duplicate", confidence=1)
+        groups, errors = self.parse(candidate, recent_targets=shortlist, tool_targets={23: "open"},
+                                    reply_targets={42: (7, "open")})
+        self.assertEqual(groups[0].target, {"basis": "reply", "number": 7})
+        self.assertEqual([(v.guard, v.blocking) for v in errors], [("guard_target", False)])
+        two_sources = [self.batch[0], replace(self.batch[0], message_id=43)]
+        groups, errors = contract.parse(wire({**candidate, 'message_ids': [42, 43]}),
+            batch=two_sources, ctx=replace(self.ctx, message_ids=frozenset({42, 43}),
+                recent_targets=shortlist, tool_targets={23: "open"},
+                reply_targets={42: (7, "open"), 43: (8, "open")}))
+        self.assertEqual(groups[0].targets, ())
+        self.assertTrue(any(v.blocking and v.guard == "guard_target" for v in errors))
 
     def test_search_downgrade_preserves_question_and_rechecks_grounding(self):
         candidate = group(state="APPEND", target={"number": 22, "basis": "search"},

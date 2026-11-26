@@ -505,6 +505,7 @@ class FollowupStoreMixin:
             state=json.loads(row[0])
             if 'managed_snapshot' not in state:
                 state['managed_snapshot']=snapshot
+                state['created_title']=issue.title
                 self.connection.execute('UPDATE followup_roots SET context_state=? WHERE root_key=?',
                                         (json.dumps(state,ensure_ascii=False),root_key))
             self.project_topics(first.chat_id,case_key)

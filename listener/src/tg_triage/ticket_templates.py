@@ -45,6 +45,7 @@ CATALOG = {
                          "ops.header": _spec("source_chat_name:T source_link:T topic_id:T sender_name:T"),
                          "notice.hold_escalated": _spec("retry_count:T"),
                          "notice.request_too_large": _spec("limit_bytes:T"),
+                         "question.recent_ticket": _spec("ticket_numbers:T"),
                          **{x: {} for x in ("notice.error", "notice.comment_ambiguous", "notice.attachment_ambiguous", "notice.rate_limited", "notice.context_pending", "question.fallback", "question.legacy_pending", "question.technical_context", "followup.updated", "followup.split", "followup.recurrence", "ask.object", "ask.observed", "ask.work", "ask.problem")}},
 }
 NUMBERED = frozenset(("bug.md", "feedback.md", "task.md", "needs-human.md"))

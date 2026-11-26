@@ -122,6 +122,37 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
 
 
+def record_recent_append_outcome(store, plan, *, status, reason, ticket_ref=None):
+    """Add write evidence to the existing Admin decision detail."""
+    if plan.get('run_id') is None:
+        return
+    try:
+        with store._lock:
+            connection = store.connection
+            with nullcontext() if connection.in_transaction else connection:
+                row = connection.execute('SELECT outcomes_json FROM classification_runs WHERE run_id=?',
+                                         (plan['run_id'],)).fetchone()
+                if row is None:
+                    return
+                groups = json.loads(row['outcomes_json'] or '[]')
+                ids = plan.get('classified_message_ids') or sorted(key[1] for key in plan['source_keys'])
+                group = next((value for value in groups if sorted(value['message_ids']) == ids), None)
+                if group is None:
+                    return
+                group['execution'] = dict(status=status, reason=reason)
+                group['ticket_ref'] = ticket_ref
+                if len(groups) == 1 and status != 'appended':
+                    code = 'guard_target' if status == 'blocked' else reason
+                    connection.execute("""UPDATE classification_runs
+                        SET outcomes_json=?, final_state='HOLD', decision_rule=?, error_class=? WHERE run_id=?""",
+                        (_json(groups), code, code, plan['run_id']))
+                else:
+                    connection.execute('UPDATE classification_runs SET outcomes_json=? WHERE run_id=?',
+                                       (_json(groups), plan['run_id']))
+    except (sqlite3.Error, TypeError, ValueError, KeyError) as error:
+        _failed(error)
+
+
 def _ids(values):
     return [value for value in values if type(value) is int and value > 0]
 
