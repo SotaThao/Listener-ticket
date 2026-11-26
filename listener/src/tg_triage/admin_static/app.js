@@ -19,7 +19,7 @@
   });
   const badgeClasses = new Map([
     ["READY", "READY"], ["APPEND", "APPEND"], ["NEED_INFO", "NEED"],
-    ["HOLD", "HOLD"], ["CHAT", "CHAT"], ["ESCALATED", "ESC"]
+    ["HOLD", "HOLD"], ["CHAT", "CHAT"], ["ESCALATED", "ESC"], ["SUPERSEDED", "CHAT"]
   ]);
   const actions = new Map([
     ["READY", "Tạo ticket mới, trả lời đúng tin gốc"],
@@ -29,6 +29,7 @@
     ["CHAT", "Bỏ qua tin nhắn"],
     ["HOLD", "Tạm giữ lượt xử lý"],
     ["ESCALATED", "Báo cho nhóm vận hành"],
+    ["SUPERSEDED", "Đã thay thế"],
     ["MULTI", "Xử lý theo quyết định của từng nhóm tin"]
   ]);
   const batchStates = new Map([

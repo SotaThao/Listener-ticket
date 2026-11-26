@@ -1,7 +1,10 @@
 """Trusted code facts for the rules-based intake path."""
 from . import rules
 from . import classification_log
-from .decision_rules import CodeFacts, Decision as RuleDecision, has_team_mention
+from .decision_rules import (
+    CodeFacts, Decision as RuleDecision, PARENT_PULL_WINDOW_SECONDS, REPLY_CHAT_RULE,
+    has_team_mention, is_link_only, parent_pull_eligible, parent_pull_filter_allowed, parent_pull_ready_ids,
+)
 
 
 def _direct_closed_evidence(snapshot, members):
@@ -391,7 +394,10 @@ def _evaluate_batch(snapshot, provider, sources, *, images=None, reply_target_fo
                 if not (ambiguous or ambiguous_document) or (normalize(field['value']) and normalize(field['value']) in normalize(' '.join([m.text for m in cited] + [row.get('text','') for row in documents or () if row.get('read_status')=='read' and row.get('message_id') in {m.message_id for m in cited}]))):
                     grounded[name]=field
             # A pending-answer merge (allow_mixed) keeps the open question's topic: team_request never applies.
-            evaluated = snapshot.evaluate(grounded,code_facts(members,seen_image_ids=selected_images,reply_target='ticket_open' if target=='ticket_closed' else target,document_text_ids=doc_ids,team=not allow_mixed),asked_counts)
+            evaluated = snapshot.evaluate(grounded, code_facts(
+                members, seen_image_ids=selected_images,
+                reply_target='ticket_open' if target == 'ticket_closed' else target,
+                document_text_ids=doc_ids, team=not allow_mixed), asked_counts)
             if target == 'ticket_closed' and snapshot.extensions and evaluated.state != 'CHAT':
                 from dataclasses import replace
                 if (lifecycle['kind']=='evidence' and _direct_closed_evidence(snapshot,members)
@@ -495,6 +501,12 @@ def process(pipeline, message, start):
     decision, trace = early_decision_trace(pipeline.rules_snapshot, [message],
                                           banter_context=_banter_history(pipeline, [message]),
                                           chat_replies=_chat_reply_ids(pipeline, [message]))
+    if decision is not None and decision.rule == REPLY_CHAT_RULE and decide:
+        selection = _pull_parents(pipeline, [message])
+        if selection[1]:
+            result = _process_batch(pipeline, [message], parent_selection=selection)
+            pipeline.rules_pending.finish_source_confirmations()
+            return result
     if decision is None or decision.state == 'MEDIA_ONLY':
         # questions.source_followup: single-message hook before extensions route
         # even one source through _process_batch. Multi-source batches stay above.
@@ -1439,15 +1451,375 @@ def _hold_lifecycle_reply(pipeline,message):
     return result
 
 
-def _process_batch(pipeline, sources, batch_id=None):
-    if any(m.has_image for m in sources) and getattr(pipeline.classifier,'supports_vision',False):
-        pipeline._prepared_images=pipeline.attachments.prepare_images(batch_id or f'{sources[0].chat_id}:{sources[0].message_id}',sources)
+_PARENT_PULL_ASSIGNMENT = ('case_key', 'group_key', 'issue_number', 'issue_url', 'github_called_at')
+_PARENT_PULL_UNASSIGNED = ' AND '.join(f'm.{key} IS NULL' for key in _PARENT_PULL_ASSIGNMENT)
+_PARENT_PULL_OPEN = """EXISTS (
+    SELECT 1 FROM rules_sources s JOIN rules_topics t ON t.topic_id=s.topic_id
+    WHERE s.chat_id=m.chat_id AND s.message_id=m.message_id AND t.status='OPEN'
+)"""
+
+
+def _parent_pull_content_filtered(snapshot, message, *, historical):
+    """J1/J3 evaluate text independently of the ordinary prefilter scope."""
+    from .decision_rules import has_github_pr_or_issue_link
+
+    text = message.text or ''
+    if not historical and has_github_pr_or_issue_link(text):
+        return True
+    return (snapshot.merge_word_text(text) or snapshot.prefilter_text(text) or is_link_only(text)
+            or (historical and snapshot.chat_only_text(text)))
+
+
+def _pull_parents(pipeline, sources):
+    """Read one hop of settled F2 history. This does not claim any messages."""
+    from .decision_rules import TEAM_RULE
+    from .store import _aware, _to_message
+
+    if not sources or not _decide_applies(pipeline, sources[0].chat_id):
+        return [], {}
+    snapshot = pipeline.rules_snapshot
+    replies = [m for m in sources if m.reply_to_id is not None and not m.is_forward
+               and not rules.COMMAND.match(m.text or '')
+               and not _parent_pull_content_filtered(snapshot, m, historical=False)]
+    if not replies:
+        return [], {}
+    chat_replies = _chat_reply_ids(pipeline, sources)
+    banter = _banter_history(pipeline, sources)
+    filters = {m.message_id: _local_rule(snapshot, [m], banter, chat_replies) for m in sources}
+    if any(not parent_pull_filter_allowed(rule) for rule in filters.values()):
+        return [], {}
+    original_ids = {m.message_id for m in sources}
+    pulled = {}
+    reply_pulls = {}
+    store = pipeline.store
+    with store._lock:
+        connection = store.connection
+        for reply in replies:
+            if reply.reply_to_id in original_ids or reply.reply_to_id >= reply.message_id:
+                continue
+            parent = connection.execute(f"""SELECT m.*, {_PARENT_PULL_OPEN} AS in_open_topic
+                FROM messages m WHERE chat_id=? AND message_id=?""", (reply.chat_id, reply.reply_to_id)).fetchone()
+            if parent is None:
+                continue
+            parent_message = _to_message(parent)
+            age = (_aware(reply.received_at) - _aware(parent_message.received_at)).total_seconds()
+            if not parent_pull_eligible(parent['decision'], parent['reason'], age,
+                                        forwarded=parent['is_forward'], open_topic=parent['in_open_topic'],
+                                        assigned=any(parent[key] is not None for key in _PARENT_PULL_ASSIGNMENT)):
+                continue
+            if _parent_pull_content_filtered(snapshot, parent_message, historical=True):
+                continue
+            topics = connection.execute("""SELECT t.topic_id FROM rules_sources s
+                JOIN rules_topics t ON t.topic_id=s.topic_id
+                JOIN rules_decisions d ON d.id=(SELECT MAX(id) FROM rules_decisions WHERE topic_id=t.topic_id)
+                WHERE s.chat_id=? AND s.message_id=? AND t.source_chat_id=s.chat_id AND t.status='CLOSED'
+                    AND d.state='CHAT' AND d.decision_rule=? LIMIT 2""",
+                (reply.chat_id, reply.reply_to_id, TEAM_RULE)).fetchall()
+            selected = {parent_message.message_id: parent_message}
+            if len(topics) == 1 and parent_message.sender_id is not None:
+                rows = connection.execute(f"""SELECT m.* FROM rules_sources s JOIN messages m
+                    ON m.chat_id=s.chat_id AND m.message_id=s.message_id
+                    WHERE s.topic_id=? AND s.chat_id=? AND m.sender_id=?
+                        AND m.decision='chat' AND m.reason=? AND m.is_forward=0
+                        AND {_PARENT_PULL_UNASSIGNED} AND NOT {_PARENT_PULL_OPEN}""",
+                    (topics[0]['topic_id'], reply.chat_id, parent_message.sender_id, TEAM_RULE))
+                for row in rows:
+                    if row['message_id'] not in original_ids:
+                        candidate = _to_message(row)
+                        if not _parent_pull_content_filtered(snapshot, candidate, historical=True):
+                            selected[candidate.message_id] = candidate
+            pulled.update(selected)
+            reply_pulls[reply.message_id] = sorted(selected)
+    if any(rule == REPLY_CHAT_RULE and mid not in reply_pulls for mid, rule in filters.items()):
+        return [], {}
+    if len(sources) + len(pulled) > pipeline.config.aggregation.max_messages_per_window:
+        return [], {}
+    return list(pulled.values()), reply_pulls
+
+
+def _claim_pulled_source(connection, key):
+    from .decision_rules import TEAM_RULE
+    from .rules_pending_store import PARENT_PULL_CLAIM
+
+    return connection.execute(f"""UPDATE messages AS m SET reason=?
+        WHERE m.chat_id=? AND m.message_id=? AND m.decision='chat' AND m.reason=?
+            AND m.is_forward=0 AND {_PARENT_PULL_UNASSIGNED} AND NOT {_PARENT_PULL_OPEN}""",
+        (PARENT_PULL_CLAIM, *key, TEAM_RULE)).rowcount == 1
+
+
+def _reserve_pulled_group(store, batch_id, ordinal, plan, topic, first):
+    """Claim the historical rows and their topic membership in one transaction."""
+    import json
+
+    with store._lock, store.connection:
+        connection = store.connection
+        if not all(_claim_pulled_source(connection, key) for key in plan['pulled_keys']):
+            connection.rollback()
+            return False
+        cursor = connection.execute("""UPDATE rules_batch_groups SET status='RESERVED',plan=?
+            WHERE batch_id=? AND ordinal=? AND status='PLANNED'""",
+            (json.dumps(dict(plan, pull_claimed=True), ensure_ascii=False, separators=(',', ':')), batch_id, ordinal))
+        if cursor.rowcount != 1:
+            connection.rollback()
+            return False
+        now = store.clock().isoformat()
+        anchor = (first.chat_id, first.message_id)
+        connection.execute("""INSERT OR IGNORE INTO rules_topics(topic_id,source_chat_id,last_at,status)
+            VALUES(?,?,?,'OPEN')""", (topic, first.chat_id, now))
+        owner = connection.execute('SELECT source_chat_id,status FROM rules_topics WHERE topic_id=?', (topic,)).fetchone()
+        refs = {row[0]: (row[1], row[2]) for row in connection.execute(
+            'SELECT ref,chat_id,message_id FROM rules_sources WHERE topic_id=?', (topic,))}
+        current = {tuple(key) for key in plan['source_keys']}
+        if tuple(owner) != (first.chat_id, 'OPEN') or (refs and (refs.get(1) != anchor or not set(refs.values()) <= current)):
+            connection.rollback()
+            return False
+        keys = current | {tuple(key) for key in plan['pulled_keys']}
+        ordered = [anchor, *sorted(keys - {anchor}, key=lambda key: key[1])]
+        additions = [key for key in ordered if key not in refs.values()]
+        connection.executemany('INSERT INTO rules_sources VALUES(?,?,?,?)',
+            [(topic, ref, *key) for ref, key in enumerate(additions, max(refs, default=0) + 1)])
+        connection.execute('UPDATE rules_topics SET last_at=? WHERE topic_id=?', (now, topic))
+        return True
+
+
+_NO_PARENT_PULL_CHILD = ':no-parent-pull:'
+_NO_PARENT_PULL_RULE = 'rules_parent_pull_no_retry'
+
+
+def _defer_pull_group_without_parents(store, batch_id, ordinal, plan):
+    import json
+
+    child_batch = f'{batch_id}{_NO_PARENT_PULL_CHILD}{ordinal}'
+    replacement = dict(plan, pulled_keys=[], pull_fallback_batch=child_batch)
+    with store._lock, store.connection:
+        updated = store.connection.execute("""UPDATE rules_batch_groups SET plan=?
+            WHERE batch_id=? AND ordinal=? AND status='PLANNED'""",
+            (json.dumps(replacement, ensure_ascii=False, separators=(',', ':')), batch_id, ordinal))
+        if updated.rowcount != 1:
+            return None
+        if plan.get('run_id') is not None:
+            classification_log.supersede_parent_pull(store.connection, [plan['run_id']],
+                discarded_ids={mid for _, mid in [*plan['pulled_keys'], *plan['source_keys']]})
+        return child_batch
+
+
+def _complete_group_without_effect(store, batch_id, ordinal):
+    with store._lock, store.connection:
+        store.connection.execute("""UPDATE rules_batch_groups SET status='DONE'
+            WHERE batch_id=? AND ordinal=? AND status='PLANNED'""", (batch_id, ordinal))
+
+
+def _batch_key(sources):
+    return f'batch:{sources[0].chat_id}:{min(m.message_id for m in sources)}'
+
+
+class _RetryWithoutParentPull(Exception):
+    """Discard the speculative turn before persisting any executable group."""
+
+
+def _is_parent_pull_child(batch_id):
+    prefix, _, ordinal = batch_id.rpartition(_NO_PARENT_PULL_CHILD)
+    return bool(prefix) and ordinal.isdecimal()
+
+
+def _parent_pull_disabled(store, batch_id):
+    # A group-only retry is already durably named by its parent checkpoint.
+    if _is_parent_pull_child(batch_id):
+        return True
+    with store._lock:
+        if store.connection.execute('SELECT 1 FROM rules_topics WHERE topic_id=?', (batch_id,)).fetchone() is None:
+            return False
+        return store.connection.execute("""SELECT 1 FROM rules_decisions
+            WHERE topic_id=? AND decision_rule=? LIMIT 1""", (batch_id, _NO_PARENT_PULL_RULE)).fetchone() is not None
+
+
+def _retry_without_parent_pull(store, batch_id, fingerprint, *, attempt=None, audit_after=None):
+    # The speculative turn must not spend an ordinary classification attempt.
+    # Journal the opt-out with the refund so an admission hold or restart can't pull again.
+    with store._lock, store.connection:
+        connection = store.connection
+        if attempt is not None:
+            connection.execute("""UPDATE rules_topics SET attempt_reserved=0,attempts=attempts-1
+                WHERE topic_id=? AND attempt_reserved=1 AND attempts=?""", (batch_id, attempt))
+        connection.execute("""INSERT INTO rules_decisions
+            (topic_id,recorded_at,state,intent_rule,decision_rule,fingerprint,present_sources)
+            VALUES (?,?,'HOLD','parent_pull',?,?,'{}')""",
+            (batch_id, store.clock().isoformat(), _NO_PARENT_PULL_RULE, fingerprint))
+        if audit_after is not None:
+            classification_log.supersede_parent_pull(connection,
+                classification_log.parent_pull_runs(connection, batch_id, audit_after))
+    raise _RetryWithoutParentPull
+
+
+def _batch_read_context(pipeline, expanded, originals, reply_pulls):
+    if not pipeline.rules_snapshot.extensions:
+        return (), frozenset()
+    if not reply_pulls:
+        return pipeline.store.autonomous_read_context(expanded), frozenset()
+    from datetime import timedelta
+    from .store import _aware, _to_message
+
+    used = {m.message_id for m in expanded}
+    window = timedelta(seconds=PARENT_PULL_WINDOW_SECONDS)
+
+    def is_prior(message, anchor):
+        return (message.message_id not in used and message.chat_id == anchor.chat_id
+                and message.message_id < anchor.message_id
+                and _aware(message.received_at) <= _aware(anchor.received_at))
+
+    store = pipeline.store
+    # Keep ordinary history and explicit reply targets without an age cutoff.
+    # The 24 h cap applies to the extra history added by the pull.
+    recent = {m.message_id: m for m in store.autonomous_read_context(originals) if m.message_id not in used}
+    exact = {}
+    for reply in originals:
+        if reply.reply_to_id is not None:
+            target = store.group_notice_reply_target(reply.chat_id, reply.reply_to_id)
+            row = store.get(reply.chat_id, target)
+            if row is not None and is_prior(message := _to_message(row), reply):
+                exact[message.message_id] = message
+        if reply.message_id in reply_pulls and reply.reply_to_id is not None:
+            # Pulling a parent must not hide the conversation between it and the Reply.
+            for message in store.autonomous_read_context([reply]):
+                if (message.message_id > reply.reply_to_id and is_prior(message, reply)
+                        and _aware(reply.received_at) - _aware(message.received_at) <= window):
+                    recent[message.message_id] = message
+    rows = [recent[mid] for mid in sorted(recent) if mid not in exact] + list(exact.values())
+    return rows[-8:], frozenset(exact)
+
+
+def _pull_batch_mood(pipeline, originals):
+    """Reuse the ordinary packer's mood calculation on the unchanged batch."""
+    import json
+    from .rules_extraction import partition_and_extract
+
+    context = pipeline.store.autonomous_read_context(originals)
+    if not context:
+        return None
+    body = []
+    # This reference is build-only. The expanded packet is budgeted below.
+    partition_and_extract(pipeline.classifier, pipeline.rules_snapshot, originals,
+                          read_context=context, body_out=body, limit=float('inf'))
+    return json.loads(body[0]['messages'][1]['content']).get('group_mood') if body else None
+
+
+def _fit_pulled_batch_context(provider, snapshot, body, packet, sources, context, *, anchor, mood, reply_target_ids):
+    """Fit trusted context projections into the existing bounded extraction body."""
+    import json
+    from .document_reader import request_fits
+    from .store import _aware
+    from .thinking import LOCAL_REQUEST_BUDGET_BYTES
+
+    system, user = body['messages']
+    kind = type(user['content'])
+    limit = getattr(provider, 'request_budget_bytes', LOCAL_REQUEST_BUDGET_BYTES)
+    if not reply_target_ids <= {message.message_id for message in context}:
+        return False
+    context_rows = packet.get('read_only_context', [])
+    refs = {(m.chat_id, m.sender_id): row['sender_ref'] for m, row in zip(sources, packet['sources'])
+            if type(m.sender_id) is int}
+    next_ref = max(int(row['sender_ref'][1:]) for row in packet['sources']) + 1
+    for message in context:
+        key = (message.chat_id, message.sender_id)
+        ref = refs.get(key) if type(message.sender_id) is int else None
+        if ref is None:
+            ref = f's{next_ref}'
+            next_ref += 1
+            if type(message.sender_id) is int:
+                refs[key] = ref
+        text = (provider._ingress_source_text(message.text) if getattr(provider, '_ingress_cloud_view', False)
+                else message.text)
+        item = dict(message_id=message.message_id, sender_ref=ref, reply_to_id=message.reply_to_id,
+                    is_forward=message.is_forward, text=text[:700], text_truncated=len(text) > 700,
+                    pixels_available=False, has_image=message.has_image)
+        if mood is not None:
+            item['min_ago'] = max(0, int((_aware(anchor.received_at) - _aware(message.received_at)).total_seconds() // 60))
+            if snapshot.banter_text(message.text):
+                item['laugh'] = True
+        context_rows.append(item)
+    if mood is not None:
+        packet['group_mood'] = mood
+
+    def render_user():
+        user['content'] = kind(json.dumps(packet, ensure_ascii=False, separators=(',', ':')))
+
+    render_user()
+    # Like the ordinary packer, remove optional teaching before losing evidence.
+    intro, encoded = system['content'].split('\n', 1)
+    teaching = json.loads(encoded)
+    while not request_fits(body, limit) and teaching['examples']:
+        teaching['examples'].pop()
+        system['content'] = intro + '\n' + json.dumps(teaching, ensure_ascii=False, separators=(',', ':'))
+    while not request_fits(body, limit) and context_rows:
+        if context_rows[0]['message_id'] in reply_target_ids:
+            return False
+        context_rows.pop(0)
+        render_user()
+    # If the mood alone prevents fit, keep it and reject this optional pull.
+    return request_fits(body, limit)
+
+
+def _parent_pull_needs_originals(groups, reply_pulls, f6_ids):
+    """Return whether the speculative partition separated a pull or would displace F6."""
+    ownership = {mid: (ordinal, state) for ordinal, (state, ids) in enumerate(groups) for mid in ids}
+    return any(
+        reply not in ownership or any(ownership.get(mid) != ownership[reply] for mid in pulled)
+        or (reply in f6_ids and ownership[reply][1] != 'READY')
+        for reply, pulled in reply_pulls.items()
+    )
+
+
+def _process_batch(pipeline, sources, batch_id=None, *, allow_parent_pull=True, parent_selection=None):
+    from .store import _to_message
+
+    key = batch_id or _batch_key(sources)
+    cached = pipeline.rules_pending.batch(key)
+    decide = _decide_applies(pipeline, sources[0].chat_id)
+    early = trace = None
+    pulled, reply_pulls = [], {}
+    if cached is None and decide:
+        early, trace = early_decision_trace(pipeline.rules_snapshot, sources,
+            banter_context=_banter_history(pipeline, sources), chat_replies=_chat_reply_ids(pipeline, sources))
+        if (allow_parent_pull and (early is None or early.rule == REPLY_CHAT_RULE)
+                and any(m.reply_to_id is not None for m in sources)
+                and not _parent_pull_disabled(pipeline.store, key)):
+            pulled, reply_pulls = parent_selection or _pull_parents(pipeline, sources)
+            if early is not None and reply_pulls:
+                early = None
+                trace.update(handled_by_code=False, decided_rule=None, rule_text=None,
+                             handoff='assistant', reason='Xét tin cha F2 trước khi áp F6')
+    elif cached is not None:
+        pull_checkpoint = any(plan.get('pulled_keys') or plan.get('pull_fallback_batch') for _, plan, _ in cached[1])
+        child_checkpoint = _is_parent_pull_child(key) and any(
+            status == 'PLANNED' and plan.get('authority') == 'decide' for _, plan, status in cached[1])
+        if not decide and (pull_checkpoint or child_checkpoint):
+            cached = pipeline.rules_pending.restart_parent_pull_batch(
+                key, {(m.chat_id, m.message_id) for m in sources}, pipeline.rules_snapshot.fingerprint,
+                fallback_suffix=_NO_PARENT_PULL_CHILD)
+        elif decide and any((plan.get('pulled_keys') or plan.get('pull_fallback_batch'))
+                            and plan.get('authority') != 'decide' for _, plan, _ in cached[1]):
+            from .models import Decision
+            return Decision('pending_review', 'rule', case_key=key, reason='rules_authority_changed')
+        # New-source membership remains stable. The saved plan owns the historical sources for replay.
+        if decide:
+            pulled = [_to_message(row) for _, plan, status in cached[1] if status == 'PLANNED'
+                      for source_key in plan.get('pulled_keys', ())
+                      if (row := pipeline.store.get(*source_key)) is not None]
+    expanded = sorted([*sources, *pulled], key=lambda m: m.message_id) if pulled else sources
+    previous_images = pipeline._prepared_images
+    pipeline._prepared_images = None
     try:
-        return _process_batch_inner(pipeline,sources,batch_id)
+        if any(m.has_image for m in expanded) and getattr(pipeline.classifier, 'supports_vision', False):
+            pipeline._prepared_images = pipeline.attachments.prepare_images(
+                batch_id or f'{sources[0].chat_id}:{sources[0].message_id}', expanded)
+        return _process_batch_inner(pipeline, sources, batch_id, expanded, reply_pulls, early, trace)
+    except _RetryWithoutParentPull:
+        pass
     finally:
         if pipeline._prepared_images is not None:
             pipeline._prepared_images.close()
-            pipeline._prepared_images=None
+        pipeline._prepared_images = previous_images
+    return _process_batch(pipeline, sources, batch_id, allow_parent_pull=False)
 
 
 def _hold_rule(snapshot, rule):
@@ -1477,13 +1849,23 @@ def _guard_reason(store, run_id):
     return 'guard_unknown'
 
 
-def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, context, trace):
+def _decide_request_too_large(store, run_id):
+    if run_id is None:
+        return False
+    with store._lock:
+        return store.connection.execute("""SELECT 1 FROM classification_runs WHERE run_id=? AND error_class='too_large'
+            UNION ALL SELECT 1 FROM classification_model_calls WHERE run_id=? AND error_class='too_large' LIMIT 1""",
+            (run_id, run_id)).fetchone() is not None
+
+
+def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, context, trace, *,
+                  original_sources, reply_pulls, reply_target_ids):
     import json
     import time
     from dataclasses import replace
     from .assistant_contract import GuardContext, PHASE_DECIDE, to_plan
     from .assistant_extractor import batch_fingerprint
-    from .rules_extraction import partition_and_extract
+    from .rules_extraction import TOO_LARGE, partition_and_extract
     from .ticket_templates import active
 
     snapshot = pipeline.rules_snapshot
@@ -1492,9 +1874,24 @@ def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, contex
         return None, None, 'infra'
     body = []
     sizes = []
+    mood = _pull_batch_mood(pipeline, original_sources) if reply_pulls and snapshot.extensions else None
+    # The normal extractor accepts history only before every source. Pulled
+    # evidence predates some legitimate context, so project that history separately.
     partition_and_extract(pipeline.classifier, snapshot, sources, images=images,
-                          documents=documents, read_context=context, body_out=body, size_out=sizes)
-    thread = _batch_thread(pipeline, sources, batch_id)
+                          documents=documents, read_context=() if reply_pulls else context,
+                          body_out=body, size_out=sizes)
+    packet = json.loads(body[0]['messages'][1]['content']) if body else None
+    if body and reply_pulls:
+        packet['parent_pull'] = reply_pulls
+        anchor = min(original_sources, key=lambda m: m.message_id)
+        if not _fit_pulled_batch_context(pipeline.classifier, snapshot, body[0], packet, sources, context,
+                                        anchor=anchor, mood=mood, reply_target_ids=reply_target_ids):
+            sizes.append(TOO_LARGE)
+            body.clear()
+        else:
+            delivered = {row['message_id'] for row in packet.get('read_only_context', ())}
+            context = [message for message in context if message.message_id in delivered]
+    thread = _batch_thread(pipeline, original_sources, batch_id)
     if not body:
         reason = 'too_large' if sizes else 'invalid_packet'
         with classification_log.run(snapshot, sources, images, phase=PHASE_DECIDE,
@@ -1502,7 +1899,6 @@ def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, contex
             if logged is not None:
                 logged.values.update(error_class=reason, error=reason)
         return None, None, reason
-    packet = json.loads(body[0]['messages'][1]['content'])
     chat_id = sources[0].chat_id
     rows = _snapshot_rule_rows(snapshot)
     blocks = active().blocks['group-replies.md']
@@ -1533,7 +1929,7 @@ def _decide_batch(pipeline, sources, batch_id, proofs, documents, images, contex
             for group in decisions], run_id, outcome
 
 
-def _reject_decide_plan(pipeline, sources, batch_id, plans, reason):
+def _reject_decide_plan(pipeline, sources, batch_id, reason):
     from .models import Decision
 
     pending = pipeline.rules_pending
@@ -1541,7 +1937,8 @@ def _reject_decide_plan(pipeline, sources, batch_id, plans, reason):
         return Decision('pending_review', 'rule', case_key=batch_id, reason=reason)
     guard = reason if reason.startswith('guard_') else 'guard_' + reason
     result = Decision('pending_review', 'rule', case_key=batch_id, reason=guard)
-    done = {tuple(key) for _, plan, status in plans if status == 'DONE' for key in plan['source_keys']}
+    done = {tuple(key) for _, plan, status in pending.batch(batch_id)[1] if status == 'DONE'
+            for key in plan['source_keys']}
     for source in sources:
         if (source.chat_id, source.message_id) not in done:
             pipeline.store.finish(source, result)
@@ -1557,7 +1954,24 @@ def _reject_decide_plan(pipeline, sources, batch_id, plans, reason):
     return result
 
 
-def _process_batch_inner(pipeline, sources, batch_id=None):
+def _prune_decide_pull(plan, reply_pulls, pulled_ids):
+    ids = {mid for _, mid in plan['source_keys']}
+    kept = parent_pull_ready_ids(plan['state'], ids, reply_pulls)
+    plan['pulled_keys'] = [key for key in plan['source_keys'] if key[1] in kept]
+    plan['source_keys'] = [key for key in plan['source_keys'] if key[1] not in pulled_ids]
+    dropped = (ids & pulled_ids) - kept
+    if dropped:
+        present = {name: field for name, field in plan['present'].items()
+                   if dropped.isdisjoint(field['source_ids'])}
+        if plan['state'] == 'READY' and len(present) != len(plan['present']):
+            plan.update(state='HOLD', rule='rules_parent_pull_split', present={}, pulled_keys=[])
+        else:
+            plan['present'] = present
+    effective_ids = {mid for _, mid in plan['source_keys'] + plan['pulled_keys']}
+    plan['document_reads'] = [row for row in plan['document_reads'] if row['message_id'] in effective_ids]
+
+
+def _process_batch_inner(pipeline, sources, batch_id, expanded, reply_pulls, early, trace):
     from .assistant_contract import DEFAULT_QUESTION_BLOCK, guard_provenance
     from .models import Decision
     from .thinking import decision_turn
@@ -1583,9 +1997,10 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
         result=Decision('pending_review','rule',reason='legacy_transition_awaiting_release')
         for m in sources: pipeline.store.finish(m,result)
         return result
-    ids={m.message_id for m in sources}
+    ids={m.message_id for m in expanded}
+    pulled_ids=frozenset(ids - {m.message_id for m in sources})
     external=[m for m in sources if m.reply_to_id is not None and m.reply_to_id not in ids]
-    batch_id=batch_id or 'batch:' + str(sources[0].chat_id) + ':' + str(min(m.message_id for m in sources))
+    batch_id=batch_id or _batch_key(sources)
     cached=pending.batch(batch_id)
     if cached is None:
         from .rules_analysis import has_binding
@@ -1595,9 +2010,21 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
         for source in sources[1:]: pending.add_source(batch_id,source.chat_id,source.message_id)
         snapshot = pipeline.rules_snapshot
         decide = _decide_applies(pipeline, sources[0].chat_id)
-        early, trace = (early_decision_trace(snapshot, sources, banter_context=_banter_history(pipeline, sources),
-                                            chat_replies=_chat_reply_ids(pipeline, sources)) if decide else (None, None))
-        wait = _assistant_wait(pipeline, sources, batch_id) if early is None else None
+        if not decide:
+            early = trace = None
+        chat_replies = _chat_reply_ids(pipeline, sources)
+        f6_ids = {m.message_id for m in sources if m.message_id in reply_pulls and m.message_id in chat_replies
+                  and snapshot.reply_chat_match(m, True)}
+        attempt = audit_after = None
+
+        def retry_without_pull():
+            _retry_without_parent_pull(pipeline.store, batch_id, snapshot.fingerprint,
+                                       attempt=attempt, audit_after=audit_after)
+
+        wait_options = {'original_sources': sources} if reply_pulls else {}
+        if f6_ids:
+            wait_options['on_unavailable'] = retry_without_pull
+        wait = _assistant_wait(pipeline, expanded, batch_id, **wait_options) if early is None else None
         if wait is not None: return wait
         attempt=pending.reserve_attempt(batch_id,pipeline.rules_snapshot.limits['hold_max_retries'])
         if attempt is None: return _escalate(pipeline,sources[0],batch_id)
@@ -1605,6 +2032,10 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             pipeline.store.finish(source,Decision('pending_review','rule',case_key=batch_id,reason='rules_extract_pending'))
         too_large=False
         decide_plans = None
+        if reply_pulls:
+            with pipeline.store._lock:
+                audit_after = classification_log.parent_pull_checkpoint(pipeline.store.connection)
+
         with decision_turn(pipeline,'rules:' + batch_id,batch_id,sources[0].message_id) as turn:
             pending_bindings={}
             proofs={}
@@ -1632,14 +2063,6 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 states={proofs[m.message_id]['state'] for m in members if proofs.get(m.message_id)}
                 if len(states)>1: raise ValueError('conflicting lifecycle states')
                 return ('ticket_closed' if states=={'closed'} else 'ticket_open') if targets else 'none'
-            from . import document_reader, document_processing
-            documents=[] if early is not None else document_reader.read_documents(sources,pipeline.attachments.downloader)
-            if documents: documents=document_processing.prepare(documents,pipeline.classifier)
-            by_id={m.message_id:m for m in sources}
-            unread=any(document_reader.text_intent(by_id[row['message_id']]) and row.get('read_status')!='read' for row in documents)
-            images=pipeline._prepared_images.for_messages(sources) if pipeline._prepared_images is not None else {}
-            context=pipeline.store.autonomous_read_context(sources) if pipeline.rules_snapshot.extensions else ()
-            outcome = None
             if decide and early is None:
                 try:
                     for member in external:
@@ -1654,6 +2077,16 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                 except Exception:
                     pending.finish_attempt(batch_id, attempt)
                     return Decision('pending_review', 'rule', case_key=batch_id, reason='lifecycle_lookup_failed')
+                if not decide and reply_pulls:
+                    retry_without_pull()
+            from . import document_reader, document_processing
+            documents=[] if early is not None else document_reader.read_documents(expanded,pipeline.attachments.downloader)
+            if documents: documents=document_processing.prepare(documents,pipeline.classifier)
+            by_id={m.message_id:m for m in expanded}
+            unread=any(document_reader.text_intent(by_id[row['message_id']]) and row.get('read_status')!='read' for row in documents)
+            images=pipeline._prepared_images.for_messages(expanded) if pipeline._prepared_images is not None else {}
+            context, reply_target_ids = _batch_read_context(pipeline, expanded, sources, reply_pulls)
+            outcome = None
             if decide and early is not None:
                 groups = ((tuple(sources), early),)
                 with classification_log.run(snapshot, sources, images, topic_id=batch_id, code_precheck=trace,
@@ -1662,25 +2095,42 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                         logged.result = groups
             elif decide:
                 decide_plans, run_id, outcome = _decide_batch(
-                    pipeline, sources, batch_id, proofs, documents, images, context, trace)
+                    pipeline, expanded, batch_id, proofs, documents, images, context, trace,
+                    original_sources=sources, reply_pulls=reply_pulls, reply_target_ids=reply_target_ids)
+                guard = _guard_reason(pipeline.store, run_id) if outcome == 'guard' else None
+                if reply_pulls and (outcome == 'too_large' or guard in ('guard_coverage', 'guard_image_split')
+                        or _too_large(turn) or (outcome != 'done' and (
+                            f6_ids or _decide_request_too_large(pipeline.store, run_id)))):
+                    retry_without_pull()
+                if decide_plans is not None and reply_pulls:
+                    partition = ((plan['state'], [mid for _, mid in plan['source_keys']]) for plan in decide_plans)
+                    if _parent_pull_needs_originals(partition, reply_pulls, f6_ids):
+                        retry_without_pull()
+                    for plan in decide_plans:
+                        _prune_decide_pull(plan, reply_pulls, pulled_ids)
+                    if any(plan['rule'] == 'rules_parent_pull_split' for plan in decide_plans):
+                        retry_without_pull()
                 groups = None
                 if outcome == 'guard':
-                    groups = ((tuple(sources), _hold_rule(snapshot, _guard_reason(pipeline.store, run_id))),)
+                    groups = ((tuple(sources), _hold_rule(snapshot, guard)),)
                 elif outcome == 'invalid_packet':
                     groups = ((tuple(sources), _hold_rule(snapshot, 'guard_invalid_packet')),)
                 elif outcome == 'infra':
                     with pipeline.store._lock, pipeline.store.connection:
                         pipeline.store.connection.execute('''UPDATE rules_topics SET attempt_reserved=0,attempts=attempts-1
                             WHERE topic_id=? AND attempt_reserved=1 AND attempts=?''', (batch_id, attempt))
-                    return _assistant_wait(pipeline, sources, batch_id, force=True)
+                    return _assistant_wait(pipeline, expanded, batch_id, force=True, **wait_options)
                 elif outcome == 'model_error':
                     pending.finish_attempt(batch_id, attempt)
                     if attempt >= snapshot.limits['hold_max_retries']:
                         return _escalate(pipeline, sources[0], batch_id)
-                    return (_assistant_wait(pipeline, sources, batch_id)
+                    return (_assistant_wait(pipeline, expanded, batch_id, **wait_options)
                             or Decision('pending_review', 'rule', case_key=batch_id, reason='rules_hold'))
             else:
-                groups=None if unread else evaluate_batch(pipeline.rules_snapshot,pipeline.classifier,sources,images=images,documents=documents,reply_target_for=reply_target,read_context=context,banter_context=_banter_history(pipeline,sources),chat_replies=_chat_reply_ids(pipeline,sources))
+                groups=None if unread else evaluate_batch(
+                    pipeline.rules_snapshot, pipeline.classifier, sources, images=images, documents=documents,
+                    reply_target_for=reply_target, read_context=context, banter_context=_banter_history(pipeline,sources),
+                    chat_replies=chat_replies)
             too_large=outcome == 'too_large' or (groups is None and not unread and _too_large(turn))
             pending_groups={}
             if groups is not None:
@@ -1721,7 +2171,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                     asked=next(pending_bindings[m.message_id][1] for m in members if pending_bindings.get(m.message_id))
                     scoped_images={}
                     if any(m.has_image for _,m in originals) and getattr(pipeline.classifier,'supports_vision',False):
-                        actual={(m.chat_id,m.message_id):m for m in sources}
+                        actual={(m.chat_id,m.message_id):m for m in expanded}
                         actual.update({(m.chat_id,m.message_id):m for _,m in originals})
                         if pipeline._prepared_images is not None: pipeline._prepared_images.close()
                         pipeline._prepared_images=pipeline.attachments.prepare_images(batch_id,list(actual.values()))
@@ -1734,6 +2184,8 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
                     pending_groups[index]=(topic,merged[0][1],tuple(m.message_id for m in members if pending_bindings.get(m.message_id)),snapshot,additions)
         if groups is None and decide_plans is None:
             if too_large:
+                if reply_pulls:
+                    retry_without_pull()
                 result=_request_too_large(pipeline,sources[0],batch_id,attempt)
                 if result is not None: return result
             pending.finish_attempt(batch_id,attempt)
@@ -1745,6 +2197,9 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_reply_partition_conflict')
         plans=decide_plans if decide_plans is not None else []
         for index,(members,decision) in enumerate(groups or ()):
+            if not members:
+                plans.append(dict(source_keys=[], state=decision.state))
+                continue
             pending_group=pending_groups.get(index)
             if pending_group: decision=pending_group[1]
             if decision.state not in ('READY','APPEND','APPEND_CLOSED','NEED_INFO','CHAT','MEDIA_ONLY','ANALYZE','STATUS','HOLD','LIFECYCLE_QUESTION','RELATED'):
@@ -1802,7 +2257,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
 
     def reject(reason):
         if decide_batch:
-            return _reject_decide_plan(pipeline, sources, batch_id, plans, reason)
+            return _reject_decide_plan(pipeline, sources, batch_id, reason)
         return Decision('pending_review', 'rule', case_key=batch_id, reason=reason)
 
     fingerprint_changed = fingerprint != pipeline.rules_snapshot.fingerprint
@@ -1819,11 +2274,23 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
     all_keys=[tuple(key) for _,plan,_ in plans for key in plan['source_keys']]
     if len(all_keys)!=len(set(all_keys)) or set(all_keys)!=set(pending.sources(batch_id).values()):
         return reject('rules_partition_changed')
-    for _,plan,status in plans:
+    pulled_keys = [tuple(key) for _, plan, _ in plans for key in plan.get('pulled_keys', ())]
+    if len(pulled_keys) != len(set(pulled_keys)) or not set(all_keys).isdisjoint(pulled_keys):
+        return reject('rules_partition_changed')
+    for ordinal,plan,status in plans:
         if status != 'PLANNED': continue
+        if not plan['source_keys']:
+            # No current sources belong to this group. It has no write to reserve or recover.
+            _complete_group_without_effect(pipeline.store, batch_id, ordinal)
+            continue
+        if plan.get('pull_fallback_batch'):
+            continue
         rows=[pipeline.store.get(*key) for key in plan['source_keys']]
         ids={key[1] for key in plan['source_keys']}
         if any(row is None for row in rows):
+            return reject('rules_authority_changed')
+        if plan.get('pulled_keys') and (plan['state'] != 'READY' or plan.get('pending_topic')
+                or any(chat_id != rows[0]['chat_id'] for chat_id, _ in plan['pulled_keys'])):
             return reject('rules_authority_changed')
         if plan.get('authority') == 'decide':
             if guard_provenance(plan['state'], None):
@@ -1923,7 +2390,7 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
     from .pipeline import Plan
     results=[]
     for ordinal,plan,status in plans:
-        if status == 'DONE': continue
+        if status == 'DONE' or not plan['source_keys']: continue
         members=[]
         for chat_id,message_id in plan['source_keys']:
             row=pipeline.store.get(chat_id,message_id)
@@ -1933,6 +2400,22 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
         if not members or any(m.chat_id != members[0].chat_id for m in members):
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_authority_changed')
         first=min(members,key=lambda m:m.message_id); topic=plan.get('pending_topic') or f'{first.chat_id}:{first.message_id}'
+        pulled_keys = plan.get('pulled_keys', ())
+        fallback = plan.get('pull_fallback_batch')
+        if pulled_keys:
+            rows = [pipeline.store.get(*key) for key in pulled_keys]
+            if all(row is not None for row in rows) and _reserve_pulled_group(
+                    pipeline.store, batch_id, ordinal, plan, topic, first):
+                members = sorted([*members, *map(_to_message, rows)], key=lambda m: m.message_id)
+            else:
+                fallback = _defer_pull_group_without_parents(pipeline.store, batch_id, ordinal, plan)
+                if fallback is None:
+                    results.append(Decision('pending_review', 'rule', case_key=batch_id, reason='rules_pending_changed'))
+                    continue
+        if fallback:
+            results.append(_process_batch(pipeline, members, fallback, allow_parent_pull=False))
+            _complete_group_without_effect(pipeline.store, batch_id, ordinal)
+            continue
         if plan.get('pending_topic'):
             rows=[pipeline.store.get(*pair) for _,pair in sorted(pending.sources(topic).items())]
             if any(row is None for row in rows): return Decision('pending_review','rule',case_key=batch_id,reason='rules_source_missing')
@@ -1940,15 +2423,16 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             first=originals[0]
             source_members=[m for m in originals if m.chat_id==first.chat_id]
         else:
-            pending.create(topic,first.chat_id,first.message_id)
-            for member in members:
-                if member.message_id != first.message_id: pending.add_source(topic,member.chat_id,member.message_id)
+            if not pulled_keys:
+                pending.create(topic,first.chat_id,first.message_id)
+                for member in members:
+                    if member.message_id != first.message_id: pending.add_source(topic,member.chat_id,member.message_id)
             originals=members
             source_members=members
         decision=RuleDecision(plan['state'],plan['intent'],plan['intent_rule'],plan['rule'],
             {k:Field(v['value'],tuple(v['source_ids'])) for k,v in plan['present'].items()},
             tuple(plan['questions']),tuple(plan['asked_fields']),fingerprint,plan.get('task'))
-        claimed=(pending.transition_group(batch_id,ordinal,'PLANNED','RESERVED',topic=topic,snapshot=plan['pending_snapshot'])
+        claimed=bool(pulled_keys) or (pending.transition_group(batch_id,ordinal,'PLANNED','RESERVED',topic=topic,snapshot=plan['pending_snapshot'])
                  if plan.get('pending_topic') else pending.transition_group(batch_id,ordinal,'PLANNED','RESERVED'))
         if not claimed:
             return Decision('pending_review','rule',case_key=batch_id,reason='rules_pending_changed')
@@ -1990,10 +2474,22 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             if decision.state!='STATUS' or ticket_status.resolve(pipeline.store,[first],pipeline.config.gh_repo)['state']!='missing_target':
                 pending.close(topic,'CLOSED')
         elif decision.state == 'READY':
-            for member in source_members: _resume_source(pipeline,member)
+            historical = set(map(tuple, pulled_keys))
+            for member in source_members:
+                if (member.chat_id, member.message_id) not in historical:
+                    _resume_source(pipeline,member)
             options = {'related': plan.get('related'), 'refs': plan.get('refs', ())} if plan.get('authority') == 'decide' else {}
-            result=_create_single(pipeline,first,topic,decision,evidence_messages=originals if plan.get('pending_topic') else None,
-                                  members=source_members,document_reads=plan.get('document_reads',()), **options)
+            if pulled_keys:
+                options['pulled_keys'] = pulled_keys
+            try:
+                result=_create_single(pipeline,first,topic,decision,evidence_messages=originals if plan.get('pending_topic') else None,
+                                      members=source_members,document_reads=plan.get('document_reads',()), **options)
+            except Exception:
+                if pulled_keys:
+                    from .rules_pending_store import RulesHalt, restore_unposted_parent_pull
+                    if restore_unposted_parent_pull(pipeline.store, batch_id, ordinal):
+                        raise RulesHalt('pre-POST parent pull interrupted; batch can resume after restart') from None
+                raise
         elif decision.state in ('APPEND','APPEND_CLOSED'):
             options = {'decide_plan': plan} if plan.get('authority') == 'decide' else {}
             result=_append_batch_group(pipeline,topic,members,decision,plan['targets'],plan.get('document_reads',()), **options)
@@ -2033,8 +2529,9 @@ def _process_batch_inner(pipeline, sources, batch_id=None):
             from .rules_pending_store import RulesHalt
             raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
     # Completing a cached batch never calls the model again.
-    _link_decide_tickets(pipeline.store, plans)
-    blocked=any(status=='BLOCKED' for _,_,status in pending.batch(batch_id)[1])
+    _, settled_plans = pending.batch(batch_id)
+    _link_decide_tickets(pipeline.store, settled_plans)
+    blocked=any(status=='BLOCKED' for _,_,status in settled_plans)
     pending.close(batch_id,'ESCALATED' if blocked else 'CLOSED')
     if cached is not None:
         with pipeline.store._lock,pipeline.store.connection:
@@ -2052,8 +2549,9 @@ def _link_decide_tickets(store, plans):
         with store._lock, store.connection:
             for run_id in run_ids:
                 urls = set()
-                for _, plan, _ in plans:
-                    if plan.get('run_id') != run_id or plan['state'] not in ('READY', 'APPEND', 'APPEND_CLOSED'):
+                for _, plan, status in plans:
+                    if (status != 'DONE' or plan.get('pull_fallback_batch') or plan.get('run_id') != run_id
+                            or plan['state'] not in ('READY', 'APPEND', 'APPEND_CLOSED')):
                         continue
                     for key in plan['source_keys']:
                         row = store.get(*key)
@@ -2260,7 +2758,40 @@ def _ready_summary(intent, present):
     return text[:200]
 
 
-def _create_single(pipeline, source, topic, decision, evidence_messages=None, members=None, document_reads=(), *, related=None, refs=()):
+def _settle_parent_pull(store, source, topic, case, group, members, keys, result):
+    from .rules_pending_store import PARENT_PULL_CLAIM, RulesHalt, retain_ambiguous_parent_pull, release_parent_pull_rows
+
+    with store._lock, store.connection:
+        connection = store.connection
+        row = store.get(source.chat_id, source.message_id)
+        if row is None:
+            raise RulesHalt('parent pull anchor missing; Owner inspection required')
+        if result.issue_number is None:
+            if row['github_called_at'] is None:
+                release_parent_pull_rows(connection, topic, keys)
+            else:
+                retain_ambiguous_parent_pull(connection, keys)
+            return
+        if (row['decision'] != 'issue' or row['issue_number'] != result.issue_number
+                or row['github_called_at'] is None or row['issue_url'] != result.issue_url):
+            raise RulesHalt('parent pull ticket outcome could not be verified')
+        fields = ('decision', 'tier', 'type', 'confidence', 'title', 'summary', 'priority', 'issue_number',
+                  'issue_url', 'error', 'processed_at', 'latency_ms', 'reason', 'model_reason')
+        updates = ','.join(f'{field}=?' for field in fields)
+        for key in keys:
+            changed = connection.execute(f"""UPDATE messages AS m SET case_key=?,group_key=?,{updates}
+                WHERE m.chat_id=? AND m.message_id=? AND m.decision='chat' AND m.reason=?
+                AND {_PARENT_PULL_UNASSIGNED}""",
+                (case, group, *(row[field] for field in fields), *key, PARENT_PULL_CLAIM))
+            if changed.rowcount != 1:
+                raise RulesHalt('parent pull claim changed after issue creation')
+        connection.execute('UPDATE groups SET message_count=? WHERE group_key=?', (len(members), group))
+        connection.execute('UPDATE cases SET message_count=?,last_message_at=? WHERE case_key=?',
+            (len(members), max(m.received_at for m in members).isoformat(), case))
+        store.project_topics(source.chat_id, case)
+
+
+def _create_single(pipeline, source, topic, decision, evidence_messages=None, members=None, document_reads=(), *, related=None, refs=(), pulled_keys=()):
     from dataclasses import replace
     from .models import Classification
     from .pipeline import Plan
@@ -2269,7 +2800,12 @@ def _create_single(pipeline, source, topic, decision, evidence_messages=None, me
     if not values or decision.intent not in ('bug','task','feedback'): raise ValueError('invalid ready facts')
     summary = _ready_summary(decision.intent,decision.present)
     classification = Classification(decision.intent,1.0,summary[:80],summary,'medium')
-    case,group,members = pipeline.store.autonomy_case(list(members or [source]))
+    members = list(members or [source])
+    pulled = set(map(tuple, pulled_keys))
+    current = [m for m in members if (m.chat_id, m.message_id) not in pulled]
+    case, group, assigned = pipeline.store.autonomy_case(current)
+    if not pulled:
+        members = assigned
     plan = Plan(group,members,source,'rule','issue',classification,typed=True,reason=decision.rule,
                 key_ids=tuple(m.message_id for m in members) if evidence_messages is None else (),
                 evidence_messages=tuple(evidence_messages) if evidence_messages is not None else None,
@@ -2294,6 +2830,8 @@ def _create_single(pipeline, source, topic, decision, evidence_messages=None, me
     finally:
         pipeline.notice_sender = sender
         pipeline._rules_warning_sender = None
+    if pulled:
+        _settle_parent_pull(pipeline.store, source, topic, case, group, members, pulled_keys, result)
     result=replace(result,reaction_chat_id=source.chat_id,
                    reaction_targets=((source.chat_id,source.message_id),) if result.issue_number is not None else ())
     pipeline.store.close_case(case,result,0)
@@ -2913,7 +3451,8 @@ def sweep(pipeline, *, exclude_chat_ids=frozenset()):
     return results
 
 
-def _assistant_wait(pipeline, sources, topic, *, force=False, ref_sources=None, anchor=None):
+def _assistant_wait(pipeline, sources, topic, *, force=False, ref_sources=None, anchor=None,
+                    original_sources=None, on_unavailable=None):
     """Admission before reserving a foreground attempt; disabled flow is untouched."""
     runtime = getattr(pipeline, 'assistant_runtime', None)
     waiting = getattr(runtime, 'waiting', None)
@@ -2927,13 +3466,16 @@ def _assistant_wait(pipeline, sources, topic, *, force=False, ref_sources=None, 
         status, due = None, False
     else:
         return None
-    if status == 'ESCALATED': return _escalate(pipeline, anchor or sources[0], topic)
-    if not force and (status == 'DONE' or due): return None
+    if status != 'ESCALATED' and not force and (status == 'DONE' or due): return None
+    if on_unavailable is not None:
+        on_unavailable()  # Speculative pull falls back before any hold or escalation is written.
+    current = sources if original_sources is None else original_sources
+    if status == 'ESCALATED': return _escalate(pipeline, anchor or current[0], topic)
     from .models import Decision
     result = Decision('pending_review', 'rule', case_key=topic, reason='rules_hold')
     with pipeline.store._lock, pipeline.store.connection:
         pipeline.store.connection.execute("UPDATE rules_topics SET phase='HOLD' WHERE topic_id=? AND status='OPEN' AND phase='NEW' AND attempt_reserved=0", (topic,))
-    for source in sources: pipeline.store.finish(source, result)
+    for source in current: pipeline.store.finish(source, result)
     return result
 
 

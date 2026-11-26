@@ -132,6 +132,10 @@ def _print_confusion(rows):
     print(f'Ticket reference agreement {sum(tickets)}/{len(tickets)}')
 
 
+def _without_superseded(rows):
+    return [row for row in rows if row['skipped'] != 'superseded']
+
+
 def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='full', append_output=False,
                router_usage_db=None):
     source = _copy_path(db)
@@ -168,7 +172,10 @@ def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='f
                 with output.open('a' if append_output else 'w', encoding='utf-8') as artifact:
                     for batch in batches:
                         window.start()
-                        sources, skipped = _sources(original, batch)
+                        if batch['final_state'] == 'SUPERSEDED':
+                            sources, skipped = (), 'superseded'
+                        else:
+                            sources, skipped = _sources(original, batch)
                         groups, metrics = [], {}
                         if sources:
                             # Restrict local read tools to this batch. Historical DB state
@@ -194,19 +201,22 @@ def run_replay(*, db, config, limit=200, out, runtime_factory=None, pack_mode='f
                                    skipped=skipped, comparable=not skipped and batch['final_state'] is not None,
                                    pack_mode=pack_mode, pack_fingerprint=pack.fingerprint,
                                    core_pack_fingerprint=pack.core.fingerprint if pack.core else None,
-                                   **_comparison(groups, batch, config.gh_repo), **metrics, **window.finish())
+                                   **_comparison(groups, batch, config.gh_repo), **metrics,
+                                   **(window.finish() if skipped != 'superseded' else {}))
                         rows.append(row)
                         artifact.write(json.dumps(row, ensure_ascii=False) + '\n')
                         artifact.flush()
-                        if usage is not None:
+                        if usage is not None and skipped != 'superseded':
                             print(f"Batch {row['run_id']}")
                             print_usage(row, response=True)
         finally:
             store.close()
-    _print_confusion(rows)
-    print(f"Skipped batches {sum(row['skipped'] is not None for row in rows)}/{len(rows)}")
-    p8.print_summary(rows, usage_enabled=usage is not None)
-    p8.print_pack_comparison({pack_mode: rows}, usage_enabled=usage is not None)
+    replayed = _without_superseded(rows)
+    _print_confusion(replayed)
+    print(f'Superseded batches {len(rows) - len(replayed)}/{len(rows)}')
+    print(f"Skipped batches {sum(row['skipped'] is not None for row in replayed)}/{len(replayed)}")
+    p8.print_summary(replayed, usage_enabled=usage is not None)
+    p8.print_pack_comparison({pack_mode: replayed}, usage_enabled=usage is not None)
     return rows
 
 
@@ -230,7 +240,7 @@ def main(argv=None):
         results = {mode: run_replay(**options, pack_mode=mode, append_output=index > 0)
                    for index, mode in enumerate(modes)}
         if compare:
-            p8.print_pack_comparison(results)
+            p8.print_pack_comparison({mode: _without_superseded(rows) for mode, rows in results.items()})
     except (ReplayInputError, p8.DecideRuntimeUnavailable, RouterUsageError) as error:
         print(str(error), file=sys.stderr)
         return 2

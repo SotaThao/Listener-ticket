@@ -18,9 +18,9 @@ class PendingChat:
 
 class ChatCollector:
     """Pure scheduling only; source membership is still decided by the model."""
-    def __init__(self,quiet_seconds=30,max_wait_seconds=60):
-        if not 30<=quiet_seconds<=max_wait_seconds<=60:
-            raise ValueError('Expected 30 <= quiet seconds <= maximum wait <= 60')
+    def __init__(self,quiet_seconds=60,max_wait_seconds=120):
+        if not 30<=quiet_seconds<=max_wait_seconds<=120:
+            raise ValueError('Expected 30 <= quiet seconds <= maximum wait <= 120')
         self.quiet_seconds=quiet_seconds
         self.max_wait_seconds=max_wait_seconds
         self.pending={}

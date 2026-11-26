@@ -232,6 +232,8 @@ class Store(FollowupStoreMixin, TopicStoreMixin, AutonomyStoreMixin):
             classification_log.init_store(self.connection)
             collection_log.init_store(self.connection, recover_pending=recover_pending)
             if recover_pending:
+                from .rules_pending_store import recover_parent_pulls
+                recover_parent_pulls(self)
                 self._recover_cases()
                 if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rules_deferred_ops'").fetchone():
                     self.connection.execute("""UPDATE messages SET decision='pending_review',

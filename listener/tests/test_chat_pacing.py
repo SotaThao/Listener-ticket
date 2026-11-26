@@ -91,19 +91,19 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual("interrupted", row[0])
 
     def test_trailing_quiet_and_absolute_cap(self):
-        collector=ChatCollector()
+        collector=ChatCollector(30, 60)
         for mid,when in ((1,0),(2,20),(3,45)):
             collector.add(message(mid),when)
         self.assertEqual(15,collector.next_timeout(45))
         self.assertEqual([],collector.release_due(59.999))
         self.assertEqual([[1,2,3]],[[m.message_id for m in b] for b in collector.release_due(60)])
     def test_continuous_hundred_messages_still_release_at_sixty(self):
-        collector=ChatCollector()
+        collector=ChatCollector(30, 60)
         for mid in range(100): collector.add(message(mid+1),mid*.6)
         self.assertEqual([],collector.release_due(59.9))
         self.assertEqual(100,len(collector.release_due(60)[0]))
     def test_multiple_chats_deadlines_are_independent_and_fair(self):
-        collector=ChatCollector()
+        collector=ChatCollector(30, 60)
         collector.add(message(1,chat_id=-1),0)
         collector.add(message(2,chat_id=-2),5)
         collector.add(message(3,chat_id=-1),20)
@@ -112,7 +112,12 @@ class SchedulerTests(unittest.TestCase):
     def test_configuration_defaults_and_bounds(self):
         text=EXAMPLE.read_text(encoding='utf-8')
         text=re.sub(r'(?m)^context_(quiet|max_wait)_seconds\s*=.*\n','',text)
-        for quiet,maximum,valid in ((30,60,True),(60,60,True),(29,60,False),(30,61,False),(40,30,False),(True,60,False),(30.5,60,False)):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.toml'
+            path.write_text(text, encoding='utf-8')
+            parsed = load_config(path, {'TG_API_ID': '123', 'TG_API_HASH': FAKE_HASH})
+            self.assertEqual((60, 120), (parsed.context_quiet_seconds, parsed.context_max_wait_seconds))
+        for quiet,maximum,valid in ((30,60,True),(60,120,True),(120,120,True),(29,60,False),(30,121,False),(61,60,False),(True,60,False),(30.5,60,False)):
             extra=f'context_quiet_seconds = {str(quiet).lower()}\ncontext_max_wait_seconds = {maximum}\n'
             with self.subTest(quiet=quiet,maximum=maximum),tempfile.TemporaryDirectory() as directory:
                 path=Path(directory)/'config.toml'; path.write_text(text.replace('[thinking]','[thinking]\n'+extra),encoding='utf-8')
@@ -121,6 +126,18 @@ class SchedulerTests(unittest.TestCase):
                     self.assertEqual((quiet,maximum),(parsed.context_quiet_seconds,parsed.context_max_wait_seconds))
                 else:
                     with self.assertRaises(ConfigError): load_config(path,{'TG_API_ID':'123','TG_API_HASH':FAKE_HASH})
+
+    def test_default_window_collects_four_messages_with_27_46_24_second_gaps(self):
+        collector = ChatCollector()
+        for mid, at in zip(range(7132, 7136), (0, 27, 73, 97)):
+            self.assertEqual([], collector.release_due(at))
+            collector.add(message(mid), at)
+        self.assertEqual([], collector.release_due(119.999))
+        self.assertEqual([[7132, 7133, 7134, 7135]],
+                         [[m.message_id for m in batch] for batch in collector.release_due(120)])
+        for quiet, maximum in ((30, 121), (61, 60), (29, 120)):
+            with self.subTest(quiet=quiet, maximum=maximum), self.assertRaises(ValueError):
+                ChatCollector(quiet, maximum)
 
 
 class WorkerPacingTests(unittest.IsolatedAsyncioTestCase):
@@ -132,8 +149,11 @@ class WorkerPacingTests(unittest.IsolatedAsyncioTestCase):
     async def shutdown(self):
         if self.task and not self.task.done():
             self.stop.set(); await asyncio.wait_for(self.task,2)
-    def build(self,model,**kwargs):
-        p=Pipeline(replace(config('live'),autonomous_enabled=True),self.store,model,FakeGitHub(),**kwargs)
+    def build(self,model,*,settings=None,**kwargs):
+        if settings is None:
+            settings = replace(config('live'), autonomous_enabled=True, context_quiet_seconds=30,
+                               context_max_wait_seconds=60)
+        p=Pipeline(settings,self.store,model,FakeGitHub(),**kwargs)
         self.task=asyncio.create_task(telegram_io.worker(self.queue,p,self.stop,_clock=self.clock,_receive=self.clock.receive))
         return p
     async def send(self,incoming):
@@ -151,6 +171,24 @@ class WorkerPacingTests(unittest.IsolatedAsyncioTestCase):
     def model(self,groups):
         http=FakeHTTP({'message':{'content':json.dumps(dict(groups=groups),ensure_ascii=False)}})
         return Classifier(config().ollama,opener=http),http
+
+    async def test_worker_collects_four_sources_at_production_pacing_defaults(self):
+        ids = [7132, 7133, 7134, 7135]
+        model, http = self.model([self.wire(ids)])
+        settings = replace(config('live'), autonomous_enabled=True)
+        self.assertEqual((60, 120), (settings.context_quiet_seconds, settings.context_max_wait_seconds))
+        pipeline = self.build(model, settings=settings)
+        for mid, when in zip(ids, (0, 27, 73, 97)):
+            await self.advance(when)
+            await self.send(message(mid, text='POS báo lỗi in phiếu', mentions_listener=False))
+        await self.advance(119.999)
+        self.assertEqual([], http.calls)
+        await self.advance(120)
+        await spin_until(lambda: len(pipeline.github.calls) == 1)
+        await asyncio.wait_for(self.queue.join(), 2)
+        self.assertEqual(1, len(http.calls))
+        body = json.loads(http.calls[0][0].data)
+        self.assertEqual(ids, json.loads(body['messages'][1]['content'])['NEW_SOURCE_IDS'])
 
     async def test_login_text_short_context_late_photo_joint_no_early_call(self):
         model,http=self.model([self.wire([1,2,3])]); notices=[]
@@ -192,7 +230,8 @@ class WorkerPacingTests(unittest.IsolatedAsyncioTestCase):
 
         class BlockingPipeline:
             def __init__(self):
-                self.config = replace(config("live"), autonomous_enabled=True)
+                self.config = replace(config("live"), autonomous_enabled=True, context_quiet_seconds=30,
+                                      context_max_wait_seconds=60)
                 self.store = store
                 self.started = threading.Event()
                 self.release = threading.Event()

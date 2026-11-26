@@ -74,6 +74,11 @@ class AdminStaticTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotRegex(self.read(name), re.compile(r"https?://", re.IGNORECASE))
 
+    def test_superseded_run_uses_neutral_badge_and_action_label(self):
+        script = self.read("app.js")
+        self.assertIn('["SUPERSEDED", "CHAT"]', script)
+        self.assertIn('["SUPERSEDED", "Đã thay thế"]', script)
+
     def test_required_controls_and_labels(self):
         markup = Markup(self.read("index.html"))
         ids = {attrs["id"]: (tag, attrs) for tag, attrs in markup.elements if "id" in attrs}

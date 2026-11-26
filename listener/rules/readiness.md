@@ -1,4 +1,4 @@
-<!-- rule-file: readiness · version 17 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 24 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-20: "có 'merge' là đã liệt vào Chat cần bỏ qua"
@@ -267,6 +267,17 @@ Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` 
 | K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
 | K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
 
+## Bảng: parent_pull
+
+| # | Bước |
+|---|---|
+| J1 | Chỉ áp dụng khi `authority = "decide"`. `propose` không kéo và giữ nguyên luồng gốc. Xét trước F6 với Reply không forward, không lệnh, khi lô chưa khớp F7, F1, F3, F4 hoặc F5. Reply có link GitHub PR/issue theo P1 (kể cả có chữ khác) hoặc tự khớp F7/F3 không kích hoạt kéo, kể cả có đính kèm. |
+| J2 | Tin cha đã lưu trong cùng nhóm, còn `CHAT/F2`, không forward, chưa gắn ticket hoặc case, không thuộc chủ đề `OPEN` và được gửi trong vòng 24 giờ trước tin Reply. |
+| J3 | Kiểm tra trực tiếp nội dung từng ứng viên theo F7, F1, F3 và F4, kể cả tin đang lưu F2, là Reply hoặc có đính kèm. Tin cha tự khớp bộ lọc thì không kéo gì cho Reply đó. Nếu có đúng một chủ đề đã đóng chứa tin cha và quyết định cuối `CHAT/F2`, xét thêm các tin còn đủ điều kiện do cùng người gửi với tin cha. Nếu không, chỉ xét tin cha. Không lần tiếp Reply. Nếu lô vượt giới hạn số tin, giữ lô gốc. |
+| J4 | Đưa tin kéo vào nguồn trước khi chuẩn bị ảnh và gọi model. `batch_context.parent_pull` ánh xạ ID Reply đến các ID tin kéo. Giữ tin đích của các Reply gốc không giới hạn tuổi. Chỉ áp giới hạn 24 giờ với ngữ cảnh bổ sung giữa cha và Reply. Nếu không giữ được `group_mood` hoặc tin đích Reply gốc trong giới hạn byte, chạy lại lô gốc. Không thêm `mood_examples`. «Tin kéo là yêu cầu gốc, chỉ để hiểu ngữ cảnh. Chỉ ra READY khi các tin Reply mới chốt việc cần làm hoặc cách làm (vd người giao: "sửa cho đồng bộ đi Mai cùng ý nghĩa"). Lời nhận việc, hứa làm, báo đã xong, hỏi lại hoặc nhờ review PR của người được giao KHÔNG biến tin kéo thành việc mới — khi đó giữ CHAT/F2. Trợ lý quyết cuối.» |
+| J5 | Chỉ nhận tin kéo cùng nhóm với tin Reply đã kéo nó khi nhóm ra `READY` và tạo được ticket. Dùng ID nhỏ nhất trong `source_keys` của nhóm (không gồm tin kéo) làm khóa chủ đề, marker và đích reaction. Khi chuyển sang `propose`, bỏ checkpoint kéo chưa thực thi và chạy lại tin gốc chưa xử lý, không phát lại tác động đã hoàn tất hoặc chưa rõ kết quả. Lỗi kích thước, thiếu ID hoặc tách sai nhóm thì lưu quyết định xử lý lại lô gốc, kể cả khi lần chạy lại bị giữ chờ. Nếu trợ lý không nhận lô có Reply vốn khớp F6, xử lý lại lô gốc trước khi ghi giữ chờ hoặc báo leo thang. Nếu đã đặt chỗ gọi GitHub mà chưa biết kết quả, giữ tin kéo bằng dấu riêng để không kéo lại. Bot chỉ tự trả về `CHAT/F2` khi chưa đặt chỗ gọi GitHub. |
+| J6 | Nếu nhóm không ra `READY`, tin được xét kéo giữ `CHAT/F2` và Reply vốn khớp F6 ở chế độ `decide` đi theo F6 như trước. Giao việc thuần (không ai Reply rồi chốt thành việc) vẫn là `CHAT/F2`. Phân nhóm các tin vốn cùng lô vẫn theo quyết định thông thường. |
+
 ## Bảng: image_split
 
 Chỉnh phân nhóm sau model, không đổi bảng `decision`. Lý do (live #121): ảnh chụp lỗi timeout của Ngọc bị model dán vào tin trả lời về v3 của Mai Vo, hai tin không có Reply nối và khác người gửi.
@@ -281,6 +292,8 @@ Chỉnh phân nhóm sau model, không đổi bảng `decision`. Lý do (live #12
 ## Bảng: team_request
 
 Xét **sau model**, sau bảng `intent_resolve`, **trước** bảng `decision`. Chỉ dựa vào dữ kiện code tính và `intent`; model không biết luật này. Khớp ⇒ `CHAT` với luật `F2`: không ticket, không hỏi. Không khớp ⇒ đi tiếp bảng `decision` như cũ.
+
+Trong `decide`, nếu có `batch_context.parent_pull`, áp dụng J4. «Tin kéo là yêu cầu gốc, chỉ để hiểu ngữ cảnh. Chỉ ra READY khi các tin Reply mới chốt việc cần làm hoặc cách làm (vd người giao: "sửa cho đồng bộ đi Mai cùng ý nghĩa"). Lời nhận việc, hứa làm, báo đã xong, hỏi lại hoặc nhờ review PR của người được giao KHÔNG biến tin kéo thành việc mới — khi đó giữ CHAT/F2. Trợ lý quyết cuối.»
 
 | # | Bước |
 |---|---|

@@ -14,10 +14,10 @@ File quyết định — bot nạp theo thứ tự:
 |---|---|---|---|---|
 | [states.md](states.md) | 6 trạng thái kết quả, vòng đời pending, hạn 7 ngày, số lần thử `HOLD` | Code | 1 | ACTIVE |
 | [facts.md](facts.md) | Dữ kiện model trích (`fields`), dữ kiện code tính (`code_facts`), command → intent, điều kiện CÓ V1–V4, chuẩn hóa N1–N6 (N6 bỏ chữ đệm cuối), giá trị chung chung; mục 5 "Cách model ghi giá trị": nhóm đang đùa ⇒ `chat`; bảng `group_mood` (tín hiệu đùa do code đếm + 2 ví dụ đối chiếu, chỉ gửi khi nhóm đang đùa) | **Model** (`fields`, cách ghi giá trị) + Code | 2 | ACTIVE |
-| [readiness.md](readiness.md) | Lọc local trước model `prefilter` P1–P4 + `prefilter_words` (nhờ review/merge PR ⇒ `CHAT`, luật `F1`), `link_only` W1–W4 (tin chỉ có link ⇒ `CHAT`, luật `F3`), `chat_only` C1–C4 + `chat_words` (tin chỉ có từ xã giao ⇒ `CHAT`, luật `F4`), `banter_only` B1–B5 + `banter_signals` (tin đùa giữa lúc nhóm đang cười ⇒ `CHAT`, luật `F5`), `reply_chat` K1–K4 (Reply vào tin đã quyết `CHAT`, gồm xác nhận đã merge với đích F1 kèm link PR, luật `F6`), `image_split` S1–S4 (ảnh trần khác người gửi không bị gộp nhầm nhóm), bảng `intent_resolve` I1–I3, `team_request` T1–T5 (task giao/hỏi đồng nghiệp có `@tên` ⇒ `CHAT`, luật `F2`) và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
+| [readiness.md](readiness.md) | Lọc local trước model `prefilter` P1–P4 + `prefilter_words` (nhờ review/merge PR ⇒ `CHAT`, luật `F1`), `link_only` W1–W4 (tin chỉ có link ⇒ `CHAT`, luật `F3`), `chat_only` C1–C4 + `chat_words` (tin chỉ có từ xã giao ⇒ `CHAT`, luật `F4`), `banter_only` B1–B5 + `banter_signals` (tin đùa giữa lúc nhóm đang cười ⇒ `CHAT`, luật `F5`), `reply_chat` K1–K4 (Reply vào tin đã quyết `CHAT`, gồm xác nhận đã merge với đích F1 kèm link PR, luật `F6`), `parent_pull` J1–J6 (chỉ ở `authority = "decide"`, xét kéo nguồn F2 trước F6 cho nhóm `READY`), `image_split` S1–S4 (ảnh trần khác người gửi không bị gộp nhầm nhóm), bảng `intent_resolve` I1–I3, `team_request` T1–T5 (task giao/hỏi đồng nghiệp có `@tên` ⇒ `CHAT`, luật `F2`) và `decision` R1–R13 dạng cột, thứ không bao giờ chặn, ảnh chưa xem (D7 = A), confidence (bỏ) | Code | 3 | ACTIVE |
 | [questions.md](questions.md) | Hỏi gì khi thiếu, thứ tự, giới hạn, nối câu trả lời ở group xử lý (L1–L4), `source_followup` SF1–SF5 cho tin đơn không Reply | Code | 4 | ACTIVE |
 | [channels.md](channels.md) | Bot nói gì ở group gốc (chỉ reaction) và group xử lý; danh mục khối template | Code | 5 | ACTIVE |
-| [examples.md](examples.md) | 27 ví dụ X1–X27 phủ mọi luật (X26, X27 chỉ gửi model khi nhóm đang đùa) + 23 ca lọc trước PF1–PF23 + 14 ca chỉ có link LC1–LC14 + 12 ca xã giao CC1–CC12 + 12 ca đùa BC1–BC12 + 18 ca Reply RC1–RC7, RC10–RC20 + 6 ca tách ảnh IS1–IS6 + 12 ca việc nội bộ TC1–TC12 + 15 ca chuẩn hóa G1–G15 + source_followup_cases SF1–SF34 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
+| [examples.md](examples.md) | 27 ví dụ X1–X27 phủ mọi luật (X26, X27 chỉ gửi model khi nhóm đang đùa) + 23 ca lọc trước PF1–PF23 + 14 ca chỉ có link LC1–LC14 + 12 ca xã giao CC1–CC12 + 12 ca đùa BC1–BC12 + 18 ca Reply RC1–RC7, RC10–RC20 + 24 ca kéo tin cha PP1–PP24 (chỉ code) + 6 ca tách ảnh IS1–IS6 + 12 ca việc nội bộ TC1–TC12 + 15 ca chuẩn hóa G1–G15 + source_followup_cases SF1–SF34 | Code (tự kiểm) + **Model** (cột Tin, intent, Dữ kiện) | 6 | ACTIVE |
 
 
 File mở rộng — loader source nạp cùng sáu file trên khi bật rules; chỉ host áp dụng, không gửi bảng quyết định cho model:
@@ -55,10 +55,10 @@ Chưa soạn: `topics.md` (TG-05/06) · `priority.md`.
  ┌─ đọc thư mục rules/ (source tree, nếu không có thì bản cài sys.prefix/share/tg-triage/rules)
  ├─ 1. states.md      → tập trạng thái hợp lệ, limits
  ├─ 2. facts.md       → trường, code_facts, command_intent, field_valid, normalize, generic_values
- ├─ 3. readiness.md   → prefilter (khóa hash) + prefilter_words, link_only (khóa hash), chat_only (khóa hash) + chat_words, banter_only (khóa hash) + banter_signals, reply_chat (khóa hash), image_split (khóa hash), team_request (khóa hash), intent_resolve + decision (chỉ dùng trạng thái ở 1, trường/giá trị ở 2)
+ ├─ 3. readiness.md   → prefilter (khóa hash) + prefilter_words, link_only (khóa hash), chat_only (khóa hash) + chat_words, banter_only (khóa hash) + banter_signals, reply_chat (khóa hash), parent_pull (khóa hash), image_split (khóa hash), team_request (khóa hash), intent_resolve + decision (chỉ dùng trạng thái ở 1, trường/giá trị ở 2)
  ├─ 4. questions.md   → ask_order, fallback, answer_link, source_followup, limits (chỉ dùng trường ở 2)
  ├─ 5. channels.md    → outputs (đủ mọi trạng thái ở 1), blocks (khối phải có trong template)
- ├─ 6. examples.md    → chạy TỰ KIỂM: mỗi ví dụ ra đúng Kết quả, Luật, Hỏi; mỗi ca PF ra đúng `CHAT`/`không`; mỗi ca LC, CC, BC, RC ra đúng `CHAT`/`không`; mỗi ca IS ra đúng tin bị tách; mỗi ca TC ra đúng luật
+ ├─ 6. examples.md    → chạy TỰ KIỂM: mỗi ví dụ ra đúng Kết quả, Luật, Hỏi; mỗi ca PF ra đúng `CHAT`/`không`; mỗi ca LC, CC, BC, RC ra đúng `CHAT`/`không`; mỗi ca IS ra đúng tin bị tách; mỗi ca TC ra đúng luật, mỗi ca PP ra đúng kết quả kéo nguồn
  ├─ 7. lifecycle.md + analysis-status.md → kiểm extension ACTIVE và các bảng mở rộng
  ├─ tính fingerprint SHA-256 (tên file + nội dung chuẩn hóa LF, theo thứ tự tên)
  └─ ghi log fingerprint; check-config in ra "rules": {"fingerprint": …}
@@ -99,9 +99,11 @@ K1–K10 đã có trong `test_rules_markdown`; K11 kiểm khi có code nạp con
 - Bot **sinh schema JSON** trả về của model từ bảng `fields` (đúng tên trường, đúng kiểu, mỗi trường có `source_ids`). Trường thừa ⇒ bỏ; trường thiếu ⇒ trống; `source_ids` không thuộc chủ đề ⇒ trường trống (V2).
 - Prompt model (`listener/prompts/`) chỉ chứa hướng dẫn trích dữ kiện chung; định nghĩa trường lấy từ `facts.md` lúc nạp, không chép tay vào prompt.
 
-**`authority = "decide"` (thiết kế #3018, yêu cầu `mode = "live"`).** Code chạy bộ lọc đầu vào trước. Với batch còn lại, trợ lý đọc pack luật và kết quả công cụ chỉ đọc, rồi trả trạng thái, mã luật, nguồn cho các trường ticket và mã khối phản hồi theo `decide/v1`. Code kiểm schema, bằng chứng, quyền và thực thi.
+**`authority = "decide"` (thiết kế #3018, yêu cầu `mode = "live"`).** Code chạy bộ lọc đầu vào trước. `parent_pull` chỉ chạy ở `decide`, không thêm nguồn cho `propose`. J4 hướng dẫn trợ lý phân biệt Reply mới chốt việc với lời nhận việc khi có tin kéo. Với batch còn lại, trợ lý đọc pack luật và kết quả công cụ chỉ đọc, rồi trả trạng thái, mã luật, nguồn cho các trường ticket và mã khối phản hồi theo `decide/v1`. Code kiểm schema, bằng chứng, quyền và thực thi.
 
 T1 cung cấp contract và cấu hình. [Nguyên tắc và pack bản thảo](../assistant/drafts/decide-v1/principles.md) dùng các luật ACTIVE làm nguồn. [Trạng thái v6](drafts/decide-v1/states.md) và [dữ kiện v8](drafts/decide-v1/facts.md) chờ Owner duyệt theo §8. Thư mục bản thảo nằm ngoài đường nạp runtime để giữ nguyên fingerprint của các plan và log propose.
+
+Lô kéo cha giữ tin đích của mọi Reply gốc như luồng thường, không giới hạn 24 giờ. Giới hạn đó chỉ áp dụng cho ngữ cảnh bổ sung giữa cha và Reply. Nếu gói kéo không giữ được `group_mood` hoặc tin đích Reply gốc trong ngân sách byte, bot chạy lại lô gốc. Payload `decide` không thêm `mood_examples`.
 
 Kiểm lại pack bản thảo từ repo root bằng `python scripts/build-assistant-pack.py --check --principles listener/assistant/drafts/decide-v1/principles.md --out listener/assistant/drafts/decide-v1/assistant-triage.md`.
 
