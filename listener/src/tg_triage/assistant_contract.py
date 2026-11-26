@@ -40,8 +40,11 @@ PLAN_KEYS_DECIDE = ("authority", "rule_text", "question_block", "refs", "run_id"
 _TEXT_FIELDS = ("object", "observed", "expected", "work", "problem", "proposal")
 _APPEND = {"APPEND": "open", "APPEND_CLOSED": "closed"}
 _SEARCH_RELATED = "search target may only be related"
+_RECENT_UNCERTAIN = "recent target needs clarification before append"
+_RECENT_CLOSED = "recent target is closed"
 _PHASE_ONE_BLOCKED = frozenset({"ANALYZE", "RELATED", "LIFECYCLE_QUESTION", "APPEND_CLOSED"})
 DEFAULT_QUESTION_BLOCK = "question.fallback"
+RECENT_QUESTION_BLOCK = "question.recent_ticket"
 
 
 def _object(properties, *, required=None):
@@ -68,7 +71,7 @@ def json_schema() -> dict:
         "template": _nullable({"type": "string", "enum": ["bug", "task", "feedback"]}),
         "issue": _nullable(_object({"title": string, "fields": fields})),
         "target": _nullable(_object({"number": number, "basis": {
-            "type": "string", "enum": ["reply", "search"],
+            "type": "string", "enum": ["reply", "recent", "search"],
         }})),
         "relation": _nullable({"type": "string", "enum": ["duplicate", "related"]}),
         "question": _nullable(_object({
@@ -110,6 +113,7 @@ class GroupDecision(Decision):
     targets: tuple[Mapping, ...] = ()
     document_reads: tuple[Mapping, ...] = ()
     related: tuple[int, ...] = ()
+    question_candidate_numbers: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,7 @@ class GuardContext:
     seen in multiple repositories. question_block_ids holds
     the blocks available to the question renderer. reply_proofs and
     document_reads may carry full executor records, keyed by source ID.
+    recent_targets maps ticket numbers to locally proven create/append records.
     """
 
     message_ids: frozenset[int]
@@ -149,6 +154,7 @@ class GuardContext:
     tool_target_repos: Mapping[int, str | None] = field(default_factory=dict)
     reply_proofs: Mapping[int, Mapping] = field(default_factory=dict)
     document_reads: Mapping[int, Mapping] = field(default_factory=dict)
+    recent_targets: Mapping[int, Mapping] = field(default_factory=dict)
 
 
 class DecideRuntime(Protocol):
@@ -250,11 +256,16 @@ def guard_repo(group, ctx, index):
         return Violation("guard_repo", index, "missing write repository")
     if group.target is None:
         return None
-    if not _tool_repo_matches(group.target["number"], ctx) or (
-        group.target["basis"] == "reply" and any(
-            not _reply_repo_matches(mid, ctx) for mid, _ in _reply_matches(group, ctx)
-        )
-    ):
+    basis = group.target["basis"]
+    if basis == "reply":
+        if any(not _reply_repo_matches(mid, ctx) for mid, _ in _reply_matches(group, ctx)):
+            return Violation("guard_repo", index, "reply target is outside the write repository")
+        return None
+    if basis == "recent":
+        proof = ctx.recent_targets.get(group.target["number"])
+        if proof is not None and proof["repo"].casefold() != ctx.gh_repo.casefold():
+            return Violation("guard_repo", index, "recent target is outside the write repository")
+    if not _tool_repo_matches(group.target["number"], ctx):
         return Violation("guard_repo", index, "target repository is ambiguous or outside the write repository")
     return None
 
@@ -303,7 +314,18 @@ def guard_target(group, ctx, index):
         if expected:
             return Violation("guard_target", index, "APPEND needs a proven target")
         return None
-    if target["basis"] == "reply":
+    basis = target["basis"]
+    if basis == "recent":
+        proof = ctx.recent_targets.get(target["number"])
+        if group.state != "APPEND" or not proof or proof["chat_id"] != ctx.chat_id:
+            return Violation("guard_target", index, "recent APPEND needs a candidate from this chat")
+        if ctx.tool_targets.get(target["number"]) == "closed":
+            return Violation("guard_target", index, _RECENT_CLOSED)
+        if (group.relation != "duplicate" or group.confidence < ctx.append_confidence
+                or not group.reasoning_summary.strip()):
+            return Violation("guard_target", index, _RECENT_UNCERTAIN, blocking=False)
+        return None
+    if basis == "reply":
         states = {state for _, state in _reply_matches(group, ctx)}
         if expected and any(proof[0] != target["number"] for mid in group.message_ids
                             if (proof := ctx.reply_targets.get(mid))):
@@ -312,24 +334,28 @@ def guard_target(group, ctx, index):
         states = {ctx.tool_targets.get(target["number"])} & {"open", "closed"}
     if not states or (expected and states != {expected}):
         return Violation("guard_target", index, "target proof missing or ticket state mismatched")
-    if expected and target["basis"] == "search" and (
+    if expected and basis == "search" and (
         group.relation != "duplicate" or group.confidence < ctx.append_confidence
     ):
-        return Violation("guard_target", index, _SEARCH_RELATED, blocking=False)
+        detail = _RECENT_UNCERTAIN if target["number"] in ctx.recent_targets else _SEARCH_RELATED
+        return Violation("guard_target", index, detail, blocking=False)
     return None
+
+
+def _prioritize_reply(group, ctx):
+    replies = {ctx.reply_targets[mid] for mid in group.message_ids if mid in ctx.reply_targets}
+    if any(state == "closed" for _, state in replies):
+        return None
+    number = min(number for number, _ in replies)
+    other = group.target["number"]
+    related = (other,) if other != number and group.target["basis"] == "search" else ()
+    # The ordinary target guard rejects conflicting reply proofs.
+    return replace(group, rule="R6", target=_freeze({"number": number, "basis": "reply"}),
+                   relation=None, related=related, question=None)
 
 
 def _downgrade_search(group, ctx):
     related = (group.target["number"],)
-    replies = {ctx.reply_targets[mid] for mid in group.message_ids if mid in ctx.reply_targets}
-    if replies:
-        if any(state == "closed" for _, state in replies):
-            return None
-        number = min(number for number, _ in replies)
-        # The ordinary target guard below rejects conflicting reply proofs.
-        return replace(group, state="APPEND",
-                       rule="R6", target=_freeze({"number": number, "basis": "reply"}),
-                       relation=None, related=related)
     group = replace(group, target=None, relation=None, related=related)
     ready_rule = {"bug": "R9", "task": "R10", "feedback": "R11"}.get(group.template)
     if guard_missing_field(replace(group, state="READY"), ctx, None) is None:
@@ -337,11 +363,22 @@ def _downgrade_search(group, ctx):
     return replace(group, state="NEED_INFO", rule="R12" if group.template else "R13")
 
 
+def _clarify_recent(group):
+    return replace(group, state="NEED_INFO", rule="R12" if group.template else "R13",
+                   related=(group.target["number"],), target=None, relation=None,
+                   question=_freeze({"block_id": RECENT_QUESTION_BLOCK, "fields": []}))
+
+
 def guard_channel(group, ctx, index):
     question = group.question
     if question and (question["block_id"] not in ctx.question_block_ids
                      or len(question["fields"]) > ctx.max_fields_per_ask):
         return Violation("guard_channel", index, "unknown question block or too many fields")
+    if (question and question["block_id"] == RECENT_QUESTION_BLOCK
+            and (group.state != "NEED_INFO" or not ctx.recent_targets or question["fields"]
+                 or group.target is not None
+                 or any(mid in ctx.reply_targets for mid in group.message_ids))):
+        return Violation("guard_channel", index, "recent question needs candidates and no proven reply")
     return None
 
 
@@ -408,6 +445,11 @@ def _targets(group, ctx, batch):
     number = target["number"]
     if target["basis"] == "search":
         return (_freeze({"number": number, "state": ctx.tool_targets[number], "basis": "search"}),)
+    if target["basis"] == "recent":
+        proof = ctx.recent_targets[number]
+        proof = {key: proof[key] for key in ("number", "repo", "chat_id", "source_message_id",
+                                            "authority_message_id", "received_at", "evidence")}
+        return (_freeze(dict(proof, basis="recent", state="open")),)
     return tuple(_freeze(ctx.reply_proofs.get(mid, {
         "number": number, "state": state, "chat_id": group.chat_id,
         "reply_message_id": mid, "reply_to_id": batch[mid].reply_to_id,
@@ -465,17 +507,34 @@ def parse(text_or_obj, *, batch: Sequence[IncomingMessage], ctx: GuardContext
         repo_error = guard_repo(group, ctx, index)
         target_error = guard_target(group, ctx, index)
         channel_error = guard_channel(group, ctx, index)
-        if not repo_error and not rule_error and target_error and not target_error.blocking:
-            errors.append(target_error)
-            downgraded = _downgrade_search(group, ctx)
-            if downgraded is None:
+        if (not repo_error and not rule_error and group.state == "APPEND" and group.target
+                and group.target["basis"] in ("recent", "search")
+                and (not target_error or not target_error.blocking or target_error.detail == _RECENT_CLOSED)
+                and any(mid in ctx.reply_targets for mid in group.message_ids)):
+            errors.append(Violation("guard_target", index, "prioritized proven Telegram reply", blocking=False))
+            preferred = _prioritize_reply(group, ctx)
+            if preferred is None:
                 errors.append(guard_provenance("APPEND_CLOSED", index))
                 groups[index] = group
                 continue
+            group = preferred
+            repo_error = guard_repo(group, ctx, index)
+            target_error = guard_target(group, ctx, index)
+            group, rule_error = guard_unknown_rule(group, ctx, index)
+        if (not repo_error and not target_error and group.state == "APPEND" and group.target
+                and group.target["basis"] == "search" and group.target["number"] in ctx.recent_targets):
+            group = replace(group, target=_freeze(dict(group.target, basis="recent")))
+            repo_error = guard_repo(group, ctx, index)
+            target_error = guard_target(group, ctx, index)
+        if not repo_error and not rule_error and target_error and not target_error.blocking:
+            errors.append(target_error)
+            downgraded = (_clarify_recent(group) if target_error.detail == _RECENT_UNCERTAIN
+                          else _downgrade_search(group, ctx))
             group = downgraded
             repo_error = guard_repo(group, ctx, index)
             target_error = guard_target(group, ctx, index)
             group, rule_error = guard_unknown_rule(group, ctx, index)
+            channel_error = channel_error or guard_channel(group, ctx, index)
         errors.extend(error for error in (
             guard_state(group, ctx, index), guard_missing_field(group, ctx, index),
             repo_error, target_error, channel_error,
@@ -487,10 +546,14 @@ def parse(text_or_obj, *, batch: Sequence[IncomingMessage], ctx: GuardContext
             targets = _targets(group, ctx, messages)
         if group.state == "NEED_INFO" and group.question is None:
             group = replace(group, question=_freeze({"block_id": DEFAULT_QUESTION_BLOCK, "fields": []}))
-        groups[index] = replace(group, targets=targets, document_reads=tuple(
+        numbers = (tuple(ctx.recent_targets) if not channel_error and group.question
+                   and group.question["block_id"] == RECENT_QUESTION_BLOCK else ())
+        document_reads = tuple(
             _freeze(ctx.document_reads[mid]) for mid in sorted(group.message_ids)
             if mid in ctx.read_document_ids and mid in ctx.document_reads
-        ))
+        )
+        groups[index] = replace(group, targets=targets, question_candidate_numbers=numbers,
+                                document_reads=document_reads)
     return groups, errors
 
 
@@ -506,11 +569,12 @@ def to_plan(group: GroupDecision, *, rules_fingerprint: str) -> dict:
     # questions, asked_fields              | Selected block (0 or 1) and requested fields
     # task, analysis_review, analysis_origin | No analysis task/proof in decide/v1
     # lifecycle, lifecycle_*               | Trusted lifecycle data supplied by intake
-    # targets                              | Validated reply proofs, or tagged search proof for APPEND*
+    # targets                              | Validated reply, search or recent proof for APPEND*
     # pending_topic, pending_reply_ids     | Phase 1 uses the existing follow-up path
     # document_reads                       | Trusted read records for this group
     # authority, rule_text                 | "decide" and snapshot rule text
     # question_block                       | Selected block ID or None
+    # question_candidate_numbers           | Verified shortlist for the recent ticket question
     # refs, run_id                         | Ticket references and runtime-assigned run ID
     # related                              | Proven target number when used as a relation
     # The legacy READY path derives its title from present. The model's title
@@ -522,8 +586,8 @@ def to_plan(group: GroupDecision, *, rules_fingerprint: str) -> dict:
                group.target["number"] if group.target and group.targets
                and group.state not in _APPEND and group.relation else None)
     targets = [proof for proof in group.targets
-               if proof.get("basis") != "search" or group.state in _APPEND]
-    return dict(
+               if proof.get("basis") not in ("search", "recent") or group.state in _APPEND]
+    plan = dict(
         source_keys=[[group.chat_id, mid] for mid in group.message_ids],
         state=group.state, intent=group.template, intent_rule="assistant", rule=group.rule,
         present=_json_value(fields), questions=[block] if block else [],
@@ -537,3 +601,6 @@ def to_plan(group: GroupDecision, *, rules_fingerprint: str) -> dict:
         authority="decide", rule_text=group.rule_text, question_block=block,
         refs=_json_value(group.refs), run_id=group.run_id, related=related,
     )
+    if block == RECENT_QUESTION_BLOCK:
+        plan["question_candidate_numbers"] = list(group.question_candidate_numbers)
+    return plan

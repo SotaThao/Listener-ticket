@@ -192,6 +192,26 @@ def _unmarked_open_comment(connection,tables):
         WHERE c.status='done' AND t.status='OPEN' """+marker+" LIMIT 1").fetchone())
 
 
+def _recent_append_completed(connection, topic, keys, target):
+    chat, repo, number = target['chat_id'], target['repo'], target['number']
+    if target['state'] != 'open' or not repo or any(key[0] != chat for key in keys):
+        return False
+    authority = min(mid for _, mid in keys)
+    completed = connection.execute("""SELECT 1 FROM rules_comments c JOIN rules_append_completions a
+        ON a.chat_id=c.chat_id AND a.message_id=c.message_id
+        WHERE c.chat_id=? AND c.message_id=? AND c.repo=? AND c.issue_number=?
+          AND c.status='done' AND c.result>0 AND a.topic_id=? AND a.status='done'""",
+        (chat, authority, repo, number, topic)).fetchone()
+    notice = connection.execute("""SELECT 1 FROM rules_notices
+        WHERE topic_id=? AND kind='other' AND status='sent' AND notice_id>0""", (topic,)).fetchone()
+    url = f'https://github.com/{repo}/issues/{number}'
+    return bool(completed and notice and all(connection.execute("""SELECT 1 FROM messages m
+        JOIN rules_sources s ON s.chat_id=m.chat_id AND s.message_id=m.message_id
+        WHERE m.chat_id=? AND m.message_id=? AND s.topic_id=?
+          AND m.decision='followup' AND m.issue_number=? AND m.issue_url=?""",
+        (*key, topic, number, url)).fetchone() for key in keys))
+
+
 def _recoverable_batch_groups(connection, *, parent_claims=None):
     """Classify only checkpoints whose completed work can be proved from ledgers."""
     rows=connection.execute("SELECT batch_id,ordinal,plan,status FROM rules_batch_groups WHERE status IN ('RESERVED','AMBIGUOUS')").fetchall()
@@ -368,6 +388,11 @@ def _recoverable_batch_groups(connection, *, parent_claims=None):
                 target=targets[0]
                 number=target['number']
                 if type(number) is not int or number<=0: raise ValueError()
+                if target.get('basis') == 'recent':
+                    if (state == 'APPEND' and len(targets) == 1 and plan.get('authority') == 'decide'
+                            and _recent_append_completed(connection, topic, keys, target)):
+                        recover.append((batch_id,ordinal,'DONE')); continue
+                    raise ValueError()
                 comment=connection.execute("SELECT repo FROM rules_comments WHERE chat_id=? AND message_id=? AND issue_number=? AND status='done' AND result>0",(target['chat_id'],target['reply_message_id'],number)).fetchone()
                 if not comment: raise ValueError()
                 repo=comment[0]
@@ -627,6 +652,9 @@ class RulesPendingStore:
     def __init__(self, store):
         self.store = store
         with store._lock, store.connection:
+            store.connection.execute("""CREATE INDEX IF NOT EXISTS idx_messages_recent_ticket_source
+                ON messages(chat_id, julianday(received_at), message_id)
+                WHERE issue_number IS NOT NULL""")
             store.connection.execute('''CREATE TABLE IF NOT EXISTS rules_topics (
                 topic_id TEXT PRIMARY KEY, source_chat_id INTEGER NOT NULL,
                 last_at TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -636,6 +664,8 @@ class RulesPendingStore:
                 topic_id TEXT NOT NULL, ref INTEGER NOT NULL, chat_id INTEGER NOT NULL,
                 message_id INTEGER NOT NULL, PRIMARY KEY(topic_id,ref),
                 UNIQUE(topic_id,chat_id,message_id))''')
+            store.connection.execute("""CREATE INDEX IF NOT EXISTS idx_rules_sources_message
+                ON rules_sources(chat_id,message_id)""")
             store.connection.execute('''CREATE TABLE IF NOT EXISTS rules_ops_replies (
                 chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, topic_id TEXT NOT NULL,
                 ref INTEGER NOT NULL, PRIMARY KEY(chat_id,message_id))''')
@@ -664,6 +694,8 @@ class RulesPendingStore:
             store.connection.execute('''CREATE TABLE IF NOT EXISTS rules_append_completions (
                 chat_id INTEGER NOT NULL,message_id INTEGER NOT NULL,topic_id TEXT NOT NULL,status TEXT NOT NULL,
                 PRIMARY KEY(chat_id,message_id))''')
+            store.connection.execute("""CREATE INDEX IF NOT EXISTS idx_rules_append_completions_topic
+                ON rules_append_completions(topic_id,chat_id)""")
             from .rules_analysis import init_store as init_analysis_store
             init_analysis_store(store.connection)
             store.connection.execute('''CREATE TABLE IF NOT EXISTS rules_readonly_notices (
@@ -706,6 +738,11 @@ class RulesPendingStore:
                     if status=='DONE':
                         row=store.connection.execute('SELECT plan FROM rules_batch_groups WHERE batch_id=? AND ordinal=?',(batch_id,ordinal)).fetchone()
                         plan=json.loads(row[0])
+                        if plan.get('state') == 'APPEND' and plan['targets'][0].get('basis') == 'recent':
+                            keys = plan['source_keys']
+                            topic = f'{keys[0][0]}:{min(key[1] for key in keys)}'
+                            store.connection.execute("UPDATE rules_topics SET status='CLOSED' WHERE topic_id=? AND status='OPEN'",
+                                                     (topic,))
                         if plan.get('state') in ('ANALYZE','STATUS'):
                             key=plan['source_keys'][0]
                             topic=plan.get('pending_topic') or f'{key[0]}:{key[1]}'

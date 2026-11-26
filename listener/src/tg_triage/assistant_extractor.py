@@ -83,9 +83,16 @@ def _decide_payload(data):
             if key not in ('images', 'image_paths', 'documents', 'read_context')}, ()
 
 
-def _decide_outcomes(result, sources, repo):
+def visible_recent_candidates(recent_targets):
+    return [{key: value for key, value in row.items() if key != 'authority_message_id'}
+            for row in recent_targets.values()]
+
+
+def _decide_outcomes(result, sources, repo, recent_targets):
     groups = result.decisions or ()
     violations = result.violations or ()
+    recent = [{key: row[key] for key in ('number', 'source_message_id', 'received_at', 'evidence')}
+              for row in recent_targets.values()]
     projected = []
     for index, group in enumerate(groups):
         projected.append(dict(
@@ -93,6 +100,7 @@ def _decide_outcomes(result, sources, repo):
             rule_text=group.rule_text, template=group.template,
             ticket_ref=(f"https://github.com/{repo}/issues/{group.target['number']}"
                         if group.target and group.targets and group.state in ('APPEND', 'APPEND_CLOSED')
+                        and group.target['basis'] != 'recent'
                         and result.outcome == 'ok' else None),
             confidence=group.confidence, reasoning_summary=redact(group.reasoning_summary),
             violations=[dict(guard=v.guard, detail=redact(v.detail)) for v in violations
@@ -102,11 +110,18 @@ def _decide_outcomes(result, sources, repo):
                 ([group.target['number']] if group.target and group.targets and group.relation
                  and group.state not in ('APPEND', 'APPEND_CLOSED') else []))),
             question_block=group.question['block_id'] if group.question else None))
-    if not groups and violations:
+        if recent:
+            projected[-1]['recent_ticket_candidates'] = recent
+            projected[-1]['target'] = dict(group.target) if group.target else None
+            if group.question_candidate_numbers:
+                projected[-1]['question_candidate_numbers'] = list(group.question_candidate_numbers)
+    if not groups and (violations or recent):
         projected.append(dict(message_ids=[m.message_id for m in sources], state='HOLD',
             rule=None, rule_text=None, template=None, ticket_ref=None,
             confidence=None, reasoning_summary=None, related=[], question_block=None,
             violations=[dict(guard=v.guard, detail=redact(v.detail)) for v in violations]))
+        if recent:
+            projected[-1]['recent_ticket_candidates'] = recent
     return classification_log._json(projected)
 
 
@@ -714,7 +729,8 @@ class AssistantExtractor:
                     write_repo=guard_ctx.gh_repo, append_confidence=guard_ctx.append_confidence,
                     question_block_ids=sorted(guard_ctx.question_block_ids),
                     reply_targets=[dict(message_id=mid, number=number, state=state)
-                                   for mid, (number, state) in sorted(guard_ctx.reply_targets.items())])
+                                   for mid, (number, state) in sorted(guard_ctx.reply_targets.items())],
+                    recent_ticket_candidates=visible_recent_candidates(guard_ctx.recent_targets))
             # Documents and historical context remain explicitly untrusted source data.
             if payload:
                 payload[0] = dict(payload[0], batch_context={k: v for k, v in packet.items()
@@ -761,7 +777,8 @@ class AssistantExtractor:
             projected = {}
             if deciding:
                 states = result.decisions if result.outcome == 'ok' else []
-                projected['outcomes_json'] = _decide_outcomes(result, sources, guard_ctx.gh_repo)
+                projected['outcomes_json'] = _decide_outcomes(
+                    result, sources, guard_ctx.gh_repo, guard_ctx.recent_targets)
                 template = states[0].template if len(states) == 1 else None
                 if template:
                     template += '.md'

@@ -98,6 +98,22 @@ class TicketTemplatesTests(unittest.TestCase):
             path.write_text(original.replace('Chưa tạo GitHub issue', value, 1), encoding='utf-8')
             with self.subTest(value=value), self.assertRaises(TemplateError): validate(self.directory)
 
+    def test_recent_ticket_question_renders_only_validated_issue_numbers(self):
+        from types import SimpleNamespace
+        from tg_triage.rules_intake import _question
+        from tg_triage.rules_pending_store import RulesHalt
+
+        pipeline = SimpleNamespace(config=config('live'))
+        decision = SimpleNamespace(questions=('question.recent_ticket',), asked_fields=())
+        with patch('tg_triage.rules_intake._send_ops') as send:
+            _question(pipeline, None, 'topic', decision, candidate_numbers=[42, 17])
+            self.assertIn('#42, #17', send.call_args.args[4])
+            send.reset_mock()
+            for numbers in ([], ['#42'], [True], [0], [1, 2, 3, 4]):
+                with self.subTest(numbers=numbers), self.assertRaises(RulesHalt):
+                    _question(pipeline, None, 'topic', decision, candidate_numbers=numbers)
+            send.assert_not_called()
+
     def test_template_edit_changes_rendered_order(self):
         baseline = validate(self.directory)
         self.change('bug.md', '**Mong đợi:** {{expected|(chưa có thông tin)}}\n**Thực tế:** {{actual|(chưa có thông tin)}}',

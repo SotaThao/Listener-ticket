@@ -27,6 +27,9 @@ Em chưa phân tích được phạm vi tin này lúc này nên chưa gộp vào
 {{#block question.fallback}}
 Anh/Chị muốn team xử lý gì, ở màn hình/chức năng nào và kết quả mong muốn là gì?
 {{/block}}
+{{#block question.recent_ticket}}
+Thông tin này thuộc ticket nào ({{ticket_numbers}}), hay là sự cố mới? Nếu bổ sung, Anh/Chị vui lòng Reply tin gốc của ticket trong nhóm nguồn, kèm nội dung hoặc ảnh. Nếu là sự cố mới, vui lòng Reply tại đây và nêu điểm khác biệt.
+{{/block}}
 {{#block question.legacy_pending}}
 Anh/Chị muốn xử lý phần nào trong nội dung này và kết quả mong muốn là gì?
 {{/block}}
