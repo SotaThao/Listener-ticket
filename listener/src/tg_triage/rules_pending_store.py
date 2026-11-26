@@ -13,6 +13,167 @@ class RulesHalt(RuntimeError):
     """An unresolved side effect requires Owner inspection before restart."""
 
 
+PARENT_PULL_CLAIM = 'rules_parent_pull_claimed'
+PARENT_PULL_AMBIGUOUS = 'rules_parent_pull_ambiguous'
+
+
+def _parent_pull_before_post(connection, plan):
+    """Prove the claim owns an intact topic and no issue reservation exists."""
+    if plan.get('pull_claimed') is not True or plan.get('state') != 'READY' or plan.get('pending_topic'):
+        return None
+    originals = plan.get('source_keys', [])
+    pulled = plan.get('pulled_keys', [])
+    if (not isinstance(originals, list) or not originals or not isinstance(pulled, list) or not pulled
+            or any(not isinstance(key, list) or len(key) != 2 or any(type(value) is not int for value in key)
+                   for key in originals + pulled)):
+        return None
+    chat = originals[0][0]
+    original_keys = set(map(tuple, originals))
+    pulled_keys = set(map(tuple, pulled))
+    keys = original_keys | pulled_keys
+    if len(keys) != len(originals) + len(pulled) or any(key[0] != chat for key in keys):
+        return None
+    anchor = min(mid for _, mid in originals)
+    topic = f'{chat}:{anchor}'
+    root = connection.execute("""SELECT t.status,t.source_chat_id,s.message_id FROM rules_topics t
+        JOIN rules_sources s ON s.topic_id=t.topic_id AND s.ref=1 AND s.chat_id=t.source_chat_id
+        WHERE t.topic_id=?""", (topic,)).fetchone()
+    if root is None or tuple(root) != ('OPEN', chat, anchor):
+        return None
+    sources = connection.execute('SELECT chat_id,message_id FROM rules_sources WHERE topic_id=?', (topic,))
+    if {tuple(row) for row in sources} != keys:
+        return None
+    if connection.execute('SELECT 1 FROM rules_notices WHERE topic_id=? LIMIT 1', (topic,)).fetchone():
+        return None
+    if connection.execute("""SELECT 1 FROM attachments WHERE case_key=? AND status IN ('uploading','ambiguous') LIMIT 1""",
+                          (topic,)).fetchone():
+        return None
+    bound = set()
+    for key in keys:
+        row = connection.execute("""SELECT decision,reason,case_key,group_key,github_called_at,issue_number,issue_url
+            FROM messages WHERE chat_id=? AND message_id=?""", key).fetchone()
+        if row is None or any(value is not None for value in row[4:]):
+            return None
+        if key in pulled_keys:
+            if tuple(row[:4]) != ('chat', PARENT_PULL_CLAIM, None, None):
+                return None
+        else:
+            if row[0] not in ('pending_review', 'classifying', 'in_case'):
+                return None
+            if tuple(row[2:4]) == (topic, topic):
+                bound.add(key)
+            elif tuple(row[2:4]) != (None, None):
+                return None
+    if bound and bound != original_keys:
+        return None
+    if connection.execute('SELECT 1 FROM followup_roots WHERE case_key=? LIMIT 1', (topic,)).fetchone():
+        return None
+    case = connection.execute("""SELECT chat_id,first_message_id,status,github_called_at,issue_number,issue_url
+        FROM cases WHERE case_key=?""", (topic,)).fetchone()
+    groups = connection.execute("""SELECT chat_id,first_message_id,status,github_called_at,issue_number,issue_url,group_key
+        FROM groups WHERE case_key=? OR group_key=?""", (topic, topic)).fetchall()
+    if not bound:
+        return topic if case is None and not groups else None
+    assigned = connection.execute('SELECT chat_id,message_id FROM messages WHERE case_key=? OR group_key=?',
+                                  (topic, topic))
+    if (case is None or tuple(case) != (chat, anchor, 'analyzing', None, None, None)
+            or [tuple(row) for row in groups] != [(chat, anchor, 'planned', None, None, None, topic)]
+            or {tuple(row) for row in assigned} != bound):
+        return None
+    return topic
+
+
+def release_parent_pull_rows(connection, topic, keys):
+    """Detach historical sources without changing historical topics or accounting."""
+    for chat, mid in keys:
+        changed = connection.execute("""UPDATE messages SET reason='F2'
+            WHERE chat_id=? AND message_id=? AND decision='chat' AND reason=?
+                AND case_key IS NULL AND group_key IS NULL AND github_called_at IS NULL
+                AND issue_number IS NULL AND issue_url IS NULL""", (chat, mid, PARENT_PULL_CLAIM))
+        if changed.rowcount != 1:
+            raise RulesHalt('parent pull claim changed; Owner inspection required')
+        connection.execute('DELETE FROM rules_sources WHERE topic_id=? AND chat_id=? AND message_id=?',
+                           (topic, chat, mid))
+
+
+def retain_ambiguous_parent_pull(connection, keys):
+    """A reserved POST may have created an issue. Keep its historical sources quarantined."""
+    for chat, mid in keys:
+        changed = connection.execute("""UPDATE messages SET reason=?
+            WHERE chat_id=? AND message_id=? AND decision='chat' AND reason=?""",
+            (PARENT_PULL_AMBIGUOUS, chat, mid, PARENT_PULL_CLAIM))
+        if changed.rowcount != 1:
+            raise RulesHalt('parent pull claim changed; Owner inspection required')
+
+
+def restore_unposted_parent_pull(store, batch_id, ordinal):
+    """Recover a provably pre-POST claim and leave the original group replayable."""
+    with store._lock, store.connection:
+        connection = store.connection
+        row = connection.execute("""SELECT plan FROM rules_batch_groups
+            WHERE batch_id=? AND ordinal=? AND status='RESERVED'""", (batch_id, ordinal)).fetchone()
+        if row is None:
+            return False
+        plan = json.loads(row[0])
+        topic = _parent_pull_before_post(connection, plan)
+        if topic is None:
+            return False
+        release_parent_pull_rows(connection, topic, plan['pulled_keys'])
+        for key in plan['source_keys']:
+            connection.execute("""UPDATE messages SET decision='pending_review',reason='rules_extract_pending',
+                case_key=NULL,group_key=NULL WHERE chat_id=? AND message_id=?""", key)
+        connection.execute('DELETE FROM groups WHERE case_key=?', (topic,))
+        connection.execute('DELETE FROM cases WHERE case_key=?', (topic,))
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='triage_topics'").fetchone():
+            from .topic_store import project_chat
+            project_chat(connection, plan['source_keys'][0][0], store.clock().isoformat(), topic)
+        plan.pop('pull_claimed')
+        connection.execute("""UPDATE rules_batch_groups SET plan=?,status='PLANNED'
+            WHERE batch_id=? AND ordinal=? AND status='RESERVED'""",
+            (json.dumps(plan, ensure_ascii=False, separators=(',', ':')), batch_id, ordinal))
+        connection.execute('UPDATE rules_topics SET attempt_reserved=0 WHERE topic_id=?', (batch_id,))
+        return True
+
+
+def recover_parent_pulls(store):
+    """Called by Store before generic case and queue recovery."""
+    connection = store.connection
+    if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rules_batch_groups'").fetchone():
+        return
+    if not connection.execute("SELECT 1 FROM messages WHERE reason=? LIMIT 1", (PARENT_PULL_CLAIM,)).fetchone():
+        return
+    rows = connection.execute("""SELECT batch_id,ordinal FROM rules_batch_groups
+        WHERE status='RESERVED' AND plan LIKE '%"pull_claimed":true%'""").fetchall()
+    for batch_id, ordinal in rows:
+        restore_unposted_parent_pull(store, batch_id, ordinal)
+
+
+def _remove_unposted_pull_topic(connection, keys, fingerprint):
+    """Remove only the transient group topic created by a claim, not the old F2 topic."""
+    chat, anchor = min(keys, key=lambda key: key[1])
+    topic = f'{chat}:{anchor}'
+    row = connection.execute("""SELECT status,phase,attempts,attempt_reserved,asked,fallback_asked
+        FROM rules_topics WHERE topic_id=? AND source_chat_id=?""", (topic, chat)).fetchone()
+    if row is None:
+        return
+    refs = {ref[0]: tuple(ref[1:]) for ref in connection.execute(
+        'SELECT ref,chat_id,message_id FROM rules_sources WHERE topic_id=?', (topic,))}
+    if (tuple(row) != ('OPEN', 'NEW', 0, 0, '{}', 0) or refs.get(1) != (chat, anchor)
+            or not set(refs.values()) <= keys
+            or connection.execute('SELECT 1 FROM rules_notices WHERE topic_id=? LIMIT 1', (topic,)).fetchone()
+            or connection.execute('SELECT 1 FROM rules_inflight_topics WHERE topic_id=?', (topic,)).fetchone()
+            or connection.execute('SELECT 1 FROM rules_ops_replies WHERE topic_id=? LIMIT 1', (topic,)).fetchone()
+            or connection.execute('SELECT 1 FROM rules_deferred_ops WHERE topic_id=? LIMIT 1', (topic,)).fetchone()
+            or connection.execute("SELECT 1 FROM rules_decisions WHERE topic_id=? AND (state!='READY' OR fingerprint!=?)",
+                                  (topic, fingerprint)).fetchone()
+            or connection.execute('SELECT 1 FROM cases WHERE case_key=?', (topic,)).fetchone()
+            or connection.execute('SELECT 1 FROM groups WHERE group_key=? OR case_key=?', (topic, topic)).fetchone()):
+        raise RulesHalt('parent pull staging topic is not safe to reset; Owner inspection required')
+    connection.execute('DELETE FROM rules_decisions WHERE topic_id=?', (topic,))
+    connection.execute('DELETE FROM rules_sources WHERE topic_id=?', (topic,))
+    connection.execute('DELETE FROM rules_topics WHERE topic_id=?', (topic,))
+
+
 def readonly_plan_id(batch_id, ordinal, fingerprint, plan):
     payload=json.dumps([batch_id,ordinal,fingerprint,plan],sort_keys=True,ensure_ascii=False,separators=(',',':'))
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
@@ -31,7 +192,7 @@ def _unmarked_open_comment(connection,tables):
         WHERE c.status='done' AND t.status='OPEN' """+marker+" LIMIT 1").fetchone())
 
 
-def _recoverable_batch_groups(connection):
+def _recoverable_batch_groups(connection, *, parent_claims=None):
     """Classify only checkpoints whose completed work can be proved from ledgers."""
     rows=connection.execute("SELECT batch_id,ordinal,plan,status FROM rules_batch_groups WHERE status IN ('RESERVED','AMBIGUOUS')").fetchall()
     recover=[]
@@ -190,6 +351,11 @@ def _recoverable_batch_groups(connection):
                     recover.append((batch_id,ordinal,'PLANNED')); continue
                 raise ValueError()
             if state == 'READY':
+                if _parent_pull_before_post(connection, plan):
+                    if parent_claims is not None:
+                        parent_claims.update(map(tuple, plan['pulled_keys']))
+                    recover.append((batch_id,ordinal,'PLANNED'))
+                    continue
                 root=connection.execute('SELECT chat_id,message_id FROM rules_sources WHERE topic_id=? AND ref=1',(topic,)).fetchone()
                 if not root: raise ValueError()
                 issue=connection.execute("SELECT 1 FROM messages WHERE chat_id=? AND message_id=? AND decision='issue' AND github_called_at IS NOT NULL AND issue_number>0 AND issue_url IS NOT NULL",root).fetchone()
@@ -328,6 +494,10 @@ def check_connection_before_recovery(connection,*,binding_limit=None):
         assessment=_category(connection,table,spec,None)
         if assessment['schema']!='SUPPORTED' or not assessment['validation_complete']:
             raise RulesHalt('unknown schema, identifier, state or record; Owner inspection required')
+    if 'messages' in tables and connection.execute('SELECT 1 FROM messages WHERE reason=? LIMIT 1',
+                                                    (PARENT_PULL_AMBIGUOUS,)).fetchone():
+        raise RulesHalt('unresolved ambiguous operation (parent pull); Owner inspection required. '
+                        'See listener/README.md#owner-runbook-for-ambiguous-parent-pulls')
     followup_blocker=_source_followup_blocker(connection,tables,before_recovery=True)
     if followup_blocker: raise RulesHalt(followup_blocker)
     for table in ('messages','cases','groups'):
@@ -438,10 +608,15 @@ def check_connection_before_recovery(connection,*,binding_limit=None):
               if 'chat_id' in columns else "a.case_key=s.topic_id AND a.message_id=s.message_id")
         if connection.execute("SELECT 1 FROM attachments a JOIN rules_sources s ON " + join + " WHERE a.status IN ('uploading','ambiguous') LIMIT 1").fetchone():
             raise RulesHalt('unresolved ambiguous operation; Owner inspection required')
+    parent_claims = set()
     if 'rules_batch_groups' in tables:
         rows=connection.execute("SELECT length(CAST(plan AS BLOB)) FROM rules_batch_groups WHERE status IN ('RESERVED','AMBIGUOUS') LIMIT 1001").fetchall()
         if len(rows)>1000 or sum(row[0] or 0 for row in rows)>8*1024*1024 or any(row[0] is None or row[0]>262144 for row in rows):raise RulesHalt('checkpoint validation incomplete; Owner inspection required')
-        _recoverable_batch_groups(connection)
+        _recoverable_batch_groups(connection, parent_claims=parent_claims)
+    if 'messages' in tables:
+        marked = connection.execute('SELECT chat_id,message_id FROM messages WHERE reason=?', (PARENT_PULL_CLAIM,))
+        if {tuple(row) for row in marked} != parent_claims:
+            raise RulesHalt('unowned parent pull claim; Owner inspection required')
     if {'rules_sources','messages'} <= tables and connection.execute("""SELECT 1 FROM rules_sources s
         JOIN messages m ON m.chat_id=s.chat_id AND m.message_id=s.message_id
         WHERE m.github_called_at IS NOT NULL AND m.decision IN ('pending','error') LIMIT 1""").fetchone():
@@ -526,6 +701,8 @@ class RulesPendingStore:
                 recoverable=None
             if recoverable is not None:
                 for batch_id,ordinal,status in recoverable:
+                    if status == 'PLANNED' and restore_unposted_parent_pull(store, batch_id, ordinal):
+                        continue
                     if status=='DONE':
                         row=store.connection.execute('SELECT plan FROM rules_batch_groups WHERE batch_id=? AND ordinal=?',(batch_id,ordinal)).fetchone()
                         plan=json.loads(row[0])
@@ -851,6 +1028,93 @@ class RulesPendingStore:
             if header is None: return None
             rows=self.store.connection.execute('SELECT ordinal,plan,status FROM rules_batch_groups WHERE batch_id=? ORDER BY ordinal',(batch_id,)).fetchall()
             return header['fingerprint'], [(r['ordinal'],json.loads(r['plan']),r['status']) for r in rows]
+
+    def restart_parent_pull_batch(self, batch_id, original_keys, fingerprint, *, fallback_suffix):
+        """Discard unexecuted decide plans, but never replay a completed or uncertain effect."""
+        from .classification_log import supersede_parent_pull
+
+        store = self.store
+        with store._lock:
+            cached = self.batch(batch_id)
+            if cached is None:
+                return None
+            for ordinal, plan, status in cached[1]:
+                if status == 'RESERVED' and plan.get('pull_claimed'):
+                    if not restore_unposted_parent_pull(store, batch_id, ordinal):
+                        raise RulesHalt('parent pull has an unresolved reservation; Owner inspection required')
+                elif status not in ('PLANNED', 'DONE', 'BLOCKED'):
+                    raise RulesHalt('parent pull has an unsettled batch group; Owner inspection required')
+            old_fingerprint, groups = self.batch(batch_id)
+            if any(status == 'BLOCKED' for _, _, status in groups):
+                # Keep the guard checkpoint and let intake reject it as in decide.
+                return old_fingerprint, groups
+            planned = [(ordinal, plan) for ordinal, plan, status in groups if status == 'PLANNED']
+            if not planned:
+                return self.batch(batch_id)
+            all_keys = [tuple(key) for _, plan, _ in groups for key in plan['source_keys']]
+            if (len(all_keys) != len(set(all_keys)) or set(all_keys) != original_keys
+                    or set(self.sources(batch_id).values()) != original_keys):
+                raise RulesHalt('parent pull batch membership changed; Owner inspection required')
+            connection = store.connection
+            with connection:
+                children = {}
+                discarded = {}
+                for ordinal, plan in planned:
+                    keys = set(map(tuple, plan['source_keys']))
+                    child = plan.get('pull_fallback_batch')
+                    if child:
+                        if child != f'{batch_id}{fallback_suffix}{ordinal}':
+                            raise RulesHalt('parent pull retry binding changed; Owner inspection required')
+                        state = connection.execute('SELECT status,phase,attempt_reserved FROM rules_topics WHERE topic_id=?',
+                                                   (child,)).fetchone()
+                        if state is not None:
+                            if connection.execute("""SELECT 1 FROM rules_batch_groups
+                                    WHERE batch_id=? AND status IN ('RESERVED', 'AMBIGUOUS') LIMIT 1""", (child,)).fetchone():
+                                raise RulesHalt('parent pull retry has an unsettled effect; Owner inspection required')
+                            child_keys = set(self.sources(child).values())
+                            delegated = state['status'] != 'OPEN' or tuple(state[1:]) == ('HOLD', 0)
+                            if not child_keys <= keys or (delegated and child_keys != keys):
+                                raise RulesHalt('parent pull retry membership changed; Owner inspection required')
+                            children[ordinal] = delegated
+                    if ordinal not in children or not children[ordinal]:
+                        for key in keys:
+                            row = connection.execute("""SELECT decision,case_key,group_key,github_called_at,issue_number,issue_url
+                                FROM messages WHERE chat_id=? AND message_id=?""", key).fetchone()
+                            if (row is None or row[0] not in ('pending_review', 'queued', 'classifying')
+                                    or any(item is not None for item in row[1:])):
+                                raise RulesHalt('parent pull source is not safe to retry; Owner inspection required')
+                    if keys and plan.get('pulled_keys'):
+                        _remove_unposted_pull_topic(connection, keys, old_fingerprint)
+                    if plan.get('run_id') is not None and keys:
+                        mids = discarded.setdefault(plan['run_id'], set())
+                        mids.update(mid for _, mid in keys)
+                        mids.update(mid for _, mid in plan.get('pulled_keys', ()))
+
+                # A batch with no completed effects or separately owned retry can use
+                # its original grouping path, including regrouping across old ordinals.
+                finished = any(status == 'DONE' and plan['source_keys'] for _, plan, status in groups)
+                if not finished and not children:
+                    supersede_parent_pull(connection, discarded)
+                    connection.execute('DELETE FROM rules_batch_groups WHERE batch_id=?', (batch_id,))
+                    connection.execute('DELETE FROM rules_batches WHERE batch_id=?', (batch_id,))
+                    connection.execute("""UPDATE rules_topics SET phase='HOLD',attempts=0,attempt_reserved=0
+                        WHERE topic_id=? AND status='OPEN'""", (batch_id,))
+                    return None
+
+                # Preserve completed ordinals. A durable child already owns its
+                # sources and will be swept independently, so don't dispatch it twice.
+                for run_id, mids in discarded.items():
+                    supersede_parent_pull(connection, [run_id], discarded_ids=mids)
+                for ordinal, plan in planned:
+                    replacement = dict(source_keys=plan['source_keys'], state=plan['state'], authority='decide')
+                    status = 'DONE' if children.get(ordinal) or not plan['source_keys'] else 'PLANNED'
+                    if plan['source_keys']:
+                        replacement['pull_fallback_batch'] = f'{batch_id}{fallback_suffix}{ordinal}'
+                    connection.execute('UPDATE rules_batch_groups SET plan=?,status=? WHERE batch_id=? AND ordinal=?',
+                                       (json.dumps(replacement, separators=(',', ':')), status, batch_id, ordinal))
+                connection.execute('UPDATE rules_batches SET fingerprint=? WHERE batch_id=?',
+                                   (fingerprint, batch_id))
+            return self.batch(batch_id)
 
     def claim_topic(self, topic_id, snapshot):
         with self.store._lock, self.store.connection:

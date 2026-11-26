@@ -106,10 +106,10 @@ Code áp theo **đúng thứ tự** sau, bước đầu tiên khớp thì dừng
 
 | ID | Rule | Thực thi |
 |---|---|---|
-| TG-05.1 [A] | Gom: đợi **30s yên lặng** sau tin cuối, tối đa **60s** từ đầu đợt. Tin mới cùng chat kéo dài tới trần 60s. Group khác có hạn riêng. | `pacing.py` |
+| TG-05.1 [A] | Gom: đợi **60 giây yên lặng** sau tin cuối, tối đa **120 giây** từ đầu đợt. Tin mới cùng chat kéo dài tới trần 120 giây. Group khác có hạn riêng. | `pacing.py` |
 | TG-05.2 [L] | Gom: reply nối vào case của tin được reply; nếu không, cùng sender trong `window_minutes`. Command không chờ. | `store.py:assign_case` |
 | TG-05.3 | Một lượt đọc tối đa **20 tin mới** và **6 candidate** đã được host xác minh. | `thinking.py` |
-| TG-05.4 | Hết 60s **không** làm context hết hạn: tin sau vẫn phải đối chiếu pending, ticket, reply chain, câu hỏi đã gửi. | `autonomous.py` |
+| TG-05.4 | Chạm trần 120 giây **không** làm context hết hạn: tin sau vẫn phải đối chiếu pending, ticket, reply chain, câu hỏi đã gửi. | `autonomous.py` |
 | TG-05.5 | **Gộp** khi các tin cùng mô tả một incident: ảnh lỗi + triệu chứng + tác động + câu cảm thán đi kèm. | prompt |
 | TG-05.6 | **Tách** khi là việc độc lập, kể cả cùng người, cùng phút. | prompt |
 | TG-05.7 | MUST NOT gộp/tách **chỉ vì** cùng sender, gần thời gian, nằm kề nhau, giống keyword. Ngoại lệ rules mode cho tin đơn không Reply: `questions.md` · `source_followup` chọn đúng một OPEN NEED_INFO/MEDIA_ONLY topic cùng group/cùng sender còn dưới 30 phút, loại batch/LEGACY_REVIEW/HOLD/inflight/document; chỉ nối sau model xác nhận một nhóm đủ mọi nguồn và đã nhận pixel mọi ảnh trần. Split/lỗi/quá budget/thiếu pixel hoặc STATUS/ANALYZE/lifecycle giữ nguyên topic cũ và đi đường cũ. Source_followup: đo khoảng received_at nguồn cuối đến tin mới; team mention T3–T4 đi đường cũ, không confirmation (mặc định chờ Owner xác nhận). | prompt + `pipeline.py:validate_partition`, `rules_intake.py:process` |

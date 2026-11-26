@@ -673,6 +673,7 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
         for kind in ('image','document'):
             with self.subTest(kind=kind):
                 path=Path(self.temp.name)/(kind+'-upload.sqlite3'); store=Store(path)
+                self.addCleanup(store.close)
                 settings=replace(config(),mode='live',gh_repo='sandbox/triage',autonomous_enabled=True,decision_rules_enabled=True,telegram=replace(config().telegram,ops_chat_id=-1009876543210))
                 uploader=Uploader(); github=FakeGitHub(); notices=[]
                 def download(chat_id,message_id,directory):
@@ -684,7 +685,9 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
                     queue=asyncio.Queue(); store.enqueue(a);store.enqueue(b);queue.put_nowait(a);queue.put_nowait(b); clock=[0]
                     async def receive(q,stop,timeout):
                         if not q.empty(): return await q.get()
-                        if clock[0]==0: clock[0]=31; return _TICK
+                        if clock[0] == 0:
+                            clock[0] = settings.context_quiet_seconds + 1
+                            return _TICK
                         await asyncio.sleep(60)
                     with self.assertRaisesRegex(RulesHalt,'attachment outcome'):
                         await asyncio.wait_for(worker(queue,pipeline,_clock=lambda:clock[0],_receive=receive),5)
@@ -797,7 +800,9 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
             clock=[0]
             async def receive(q,stop,timeout):
                 if not q.empty(): return await q.get()
-                if clock[0]==0: clock[0]=31; return _TICK
+                if clock[0] == 0:
+                    clock[0] = settings.context_quiet_seconds + 1
+                    return _TICK
                 await asyncio.sleep(60)
             with self.assertRaisesRegex(RulesHalt,'Owner inspection'):
                 await asyncio.wait_for(worker(queue,pipeline,_clock=lambda:clock[0],_receive=receive),5)
@@ -1039,7 +1044,9 @@ class RulesIntakeFactsTests(RulesBootstrapTests):
             clock=[0]; seen=[]; done=asyncio.Event()
             async def receive(q,stop,timeout):
                 if not q.empty(): return await q.get()
-                if clock[0]==0: clock[0]=31; return _TICK
+                if clock[0] == 0:
+                    clock[0] = settings.context_quiet_seconds + 1
+                    return _TICK
                 await asyncio.sleep(60)
             async def react(chat,mid,emoji):
                 seen.append((chat,mid,emoji))
@@ -1702,6 +1709,42 @@ class RulesTeamRequestTests(RulesBootstrapTests):
         self.assertEqual((1,[],[]),(calls,github,notices))
         self.assertEqual({('chat','F2')},rows)
 
+    def test_propose_only_quotes_the_original_untagged_request(self):
+        parent = message(7132, self.ASSIGN, **self.PLAIN)
+        child = message(7134, 'Cần sửa lỗi sidebar trên trang khách', reply_to_id=7132, sender_id=32,
+                        mentions_listener=False)
+        requests = []
+        raw = self.task([7134], [7134], [7134])
+
+        class Provider:
+            settings = SimpleNamespace(model='test')
+            think = supports_vision = False
+
+            def _ask(self, body, parse, attempts):
+                requests.append(json.loads(body['messages'][1]['content']))
+                return parse(raw)
+
+        from tg_triage.__main__ import _load_decision_rules
+        from tg_triage.models import Decision
+        store = Store(':memory:')
+        self.addCleanup(store.close)
+        settings = replace(config('live'), autonomous_enabled=True, decision_rules_enabled=True,
+                           telegram=replace(config().telegram, ops_chat_id=-1009876543210))
+        pipeline = Pipeline(settings, store, Provider(), FakeGitHub(),
+                            rules_snapshot=_load_decision_rules(), notice_sender=lambda *_: 77)
+        store.enqueue(parent)
+        store.finish(parent, Decision('chat', 'rule', reason='F2'))
+        before = dict(store.get(parent.chat_id, parent.message_id))
+
+        result = pipeline.process(child)
+        self.assertEqual((42, 'R10'), (result.issue_number, result.reason))
+        self.assertEqual([[7134]], [request['source_ids'] for request in requests])
+        self.assertNotIn('parent_pull', requests[0])
+        self.assertEqual(1, len(pipeline.github.calls))
+        self.assertNotIn(parent.text, pipeline.github.calls[0].body.replace('\u200b', ''))
+        self.assertEqual(before, dict(store.get(parent.chat_id, parent.message_id)))
+        self.assertEqual(((child.chat_id, 7134),), result.reaction_targets)
+
     def test_teammate_tag_outside_the_cited_message_keeps_the_ticket(self):
         # Review B4: a requester's untagged message grouped with a PM's "@dev nhận nha" stays a ticket.
         sources=[message(41,text='báo cáo doanh thu cần thêm cột phí giao dịch',**self.PLAIN),
@@ -2176,18 +2219,26 @@ class RulesReplyChatAndImageSplitTests(RulesBootstrapTests):
     """Owner 2026-11-10 (live #121-#123): "Làm sửa 1 và 2"."""
     REPLY = 'lát họp xong nói qua v3 này nha anh Mến'
 
-    def history(self):
-        return [message(10, text='@vomaingoc community v3 html xong chưa em', sender_id=201, mentions_listener=False)]
+    def history(self, age_hours=25):
+        return [message(10, text='@vomaingoc community v3 html xong chưa em', sender_id=201,
+                        mentions_listener=False, received_at=message().received_at - timedelta(hours=age_hours))]
 
-    def live(self, text, *, settled=True, **extra):
+    def live(self, text, *, settled=True, age_hours=25, **extra):
         extra.setdefault('mentions_listener', False)
         extra.setdefault('sender_id', 202)
         extra.setdefault('reply_to_id', 10)
-        return RulesPrefilterTests.run_live(self, text, extensions=True, facts=RulesPrefilterTests.TASK_FACTS, history=self.history(),
+        return RulesPrefilterTests.run_live(self, text, extensions=True, facts=RulesPrefilterTests.TASK_FACTS, history=self.history(age_hours),
                                             settled_chat=(10,) if settled else (), **extra)
 
     def test_reply_to_a_chat_message_is_chat_f6_without_model_ticket_or_notice(self):
         result, provider, github, notices, row = self.live(self.REPLY)
+        self.assertEqual(('chat', 'F6'), (result.decision, result.reason))
+        self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
+        self.assertEqual(('CHAT', 'F6', 'prefilter'), tuple(row))
+
+    def test_propose_reply_to_recent_f2_parent_keeps_local_f6(self):
+        # Live #121: extracting a task from this acknowledgement would create a false ticket.
+        result, provider, github, notices, row = self.live(self.REPLY, age_hours=1)
         self.assertEqual(('chat', 'F6'), (result.decision, result.reason))
         self.assertEqual((0, [], []), (provider.calls, github.calls, notices))
         self.assertEqual(('CHAT', 'F6', 'prefilter'), tuple(row))
@@ -2289,7 +2340,8 @@ class RulesReplyGaveUpTests(RulesBootstrapTests):
 
     def test_reply_to_an_f2_message_without_an_at_name_is_not_settled(self):
         # Review round 2: a topic's other messages are also stored chat/F2; only the message that carries the @name settles replies.
-        history = [message(10, text='báo cáo doanh thu cần thêm cột phí giao dịch', sender_id=201, mentions_listener=False)]
+        history = [message(10, text='báo cáo doanh thu cần thêm cột phí giao dịch', sender_id=201,
+                           mentions_listener=False, received_at=message().received_at - timedelta(hours=25))]
         _, provider, _, _, _ = RulesPrefilterTests.run_live(self, 'bên kế toán cũng cần cột này gấp', extensions=True, facts=RulesPrefilterTests.TASK_FACTS,
                                                          history=history, settled_chat=(10,), sender_id=202, reply_to_id=10, mentions_listener=False)
         self.assertEqual(1, provider.calls)

@@ -58,6 +58,7 @@ REQUIRED = {
         "banter_only": ["#", "Bước"],
         "banter_signals": ["Loại", "Dấu"],
         "reply_chat": ["#", "Bước"],
+        "parent_pull": ["#", "Bước"],
         "image_split": ["#", "Bước"],
         "intent_resolve": ["#", "command", "intent (model)", "cần CÓ", "intent dùng"],
         "decision": [
@@ -93,6 +94,8 @@ REQUIRED = {
         "chat_cases": ["#", "Tin", "Kết quả"],
         "banter_cases": ["#", "Tin", "Bối cảnh", "Kết quả"],
         "reply_chat_cases": ["#", "Tin", "Reply vào", "Kết quả"],
+        "parent_pull_cases": ["#", "Tin", "Luật cha", "Tuổi (giây)", "Forward", "Đã gắn",
+                              "Chủ đề mở", "Lọc ứng viên", "Lọc Reply", "Authority", "Trạng thái nhóm", "Kết quả"],
         "image_split_cases": ["#", "Nhóm", "Kết quả"],
         "normalize_cases": ["#", "Trường", "Giá trị", "Chung chung"],
         "source_followup_cases": ["#", "Tin", "Bối cảnh", "Kết quả", "Luật"],
@@ -179,6 +182,16 @@ def normalize(value):
 
 
 class RulesMarkdown(unittest.TestCase):
+    def test_parent_pull_is_ordered_and_has_eleven_code_only_cases(self):
+        readiness = self.tables['readiness']
+        position = list(readiness).index('parent_pull')
+        self.assertEqual(['reply_chat', 'parent_pull', 'image_split'], list(readiness)[position - 1:position + 2])
+        self.assertEqual([f'J{i}' for i in range(1, 7)],
+                         [row['#'] for row in records(readiness['parent_pull'])])
+        cases = records(self.tables['examples']['parent_pull_cases'])
+        self.assertEqual([f'PP{i}' for i in range(1, 25)], [row['#'] for row in cases])
+        self.assertTrue(all(row['#'].startswith('X') for row in records(self.tables['examples']['examples'])))
+
     @classmethod
     def setUpClass(cls):
         cls.files = {}

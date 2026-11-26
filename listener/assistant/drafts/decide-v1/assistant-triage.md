@@ -1,12 +1,12 @@
 <!-- assistant-triage pack v1
-pack_fingerprint: 9a33670ad43fa678b014ac143b38cdc9f4a0002673ed77602d04d404be0f2b61
+pack_fingerprint: f63e1a50ecaa586649d3ecbed1230c1f16f2fc60c95fe57d11793ca8a2b55758
 source principles.md sha256 0a35acb71ce898d30863de6176ce59e2e330786bddccc9bc2634533c72df7595
 source states.md sha256 9ca16a2562c1d08cbe95653124c191f7504cfd30a85ec438e5c0a491da5ce458
 source facts.md sha256 6aaf256a86f6050664bd855c45970832fbbc6a94edbabca15070797afa796182
-source readiness.md sha256 38598013a81fa2ad7967c26f249f4da5af200c7a64942a88e65de12ffc81bd8d
+source readiness.md sha256 82feceab6c01da7a4ef507e6aea1915c8aed184fa09c051de2f1f98e66a98a9f
 source questions.md sha256 7b1e1bd94b12184fa1c210d0033c1eb744dcf34114a759c5873b82fd0738e38a
 source channels.md sha256 bc21ed66d7b57f515c16b15590aadc8b9cbddb1c2d5d90c7c48f5b726846f6ff
-source examples.md sha256 a2117a2b037e54b5cc6579f60a8fec4139539eb1f8de95ccbadd210834e71828
+source examples.md sha256 c33e6ae813aa80beb443544e1cf18351ea6e869a9d8333858b0b66f82050b3a0
 source lifecycle.md sha256 6a20e1a60247ed43909cb1374825f50f094b5db7be0f65d57ce428ae7706a154
 source analysis-status.md sha256 7ed57f1a5cbba92ada10934a857b20874209b3a7cf453cfe824acb47cad75485
 -->
@@ -234,7 +234,7 @@ Chỉ gửi model khi code đếm được nhóm đang đùa (`readiness.md` · 
 
 <!-- end-source: facts.md -->
 <!-- source: readiness.md -->
-<!-- rule-file: readiness · version 17 · status ACTIVE · audience: code -->
+<!-- rule-file: readiness · version 24 · status ACTIVE · audience: code -->
 # "Đủ rõ" — bảng quyết định (TG-08)
 
 Owner 2026-11-20: "có 'merge' là đã liệt vào Chat cần bỏ qua"
@@ -503,6 +503,17 @@ Lọc local, cùng phạm vi với các lọc trước model. Khớp ⇒ `CHAT` 
 | K3 | Tin không có từ nào loại `vấn đề` của bảng `banter_signals` (bỏ `@tên`, chữ thường, tách từ như B2) |
 | K4 | Khớp K1–K3 ⇒ `CHAT` (luật `F6`), không ticket, không hỏi; tin đơn không gọi model. Nhóm nhiều tin chỉ thành `CHAT` khi mọi tin khớp. Reply vào tin đã tạo ticket không thuộc luật này (R5, R6); Reply vào câu hỏi của bot ở group xử lý không đi qua đây |
 
+## Bảng: parent_pull
+
+| # | Bước |
+|---|---|
+| J1 | Chỉ áp dụng khi `authority = "decide"`. `propose` không kéo và giữ nguyên luồng gốc. Xét trước F6 với Reply không forward, không lệnh, khi lô chưa khớp F7, F1, F3, F4 hoặc F5. Reply có link GitHub PR/issue theo P1 (kể cả có chữ khác) hoặc tự khớp F7/F3 không kích hoạt kéo, kể cả có đính kèm. |
+| J2 | Tin cha đã lưu trong cùng nhóm, còn `CHAT/F2`, không forward, chưa gắn ticket hoặc case, không thuộc chủ đề `OPEN` và được gửi trong vòng 24 giờ trước tin Reply. |
+| J3 | Kiểm tra trực tiếp nội dung từng ứng viên theo F7, F1, F3 và F4, kể cả tin đang lưu F2, là Reply hoặc có đính kèm. Tin cha tự khớp bộ lọc thì không kéo gì cho Reply đó. Nếu có đúng một chủ đề đã đóng chứa tin cha và quyết định cuối `CHAT/F2`, xét thêm các tin còn đủ điều kiện do cùng người gửi với tin cha. Nếu không, chỉ xét tin cha. Không lần tiếp Reply. Nếu lô vượt giới hạn số tin, giữ lô gốc. |
+| J4 | Đưa tin kéo vào nguồn trước khi chuẩn bị ảnh và gọi model. `batch_context.parent_pull` ánh xạ ID Reply đến các ID tin kéo. Giữ tin đích của các Reply gốc không giới hạn tuổi. Chỉ áp giới hạn 24 giờ với ngữ cảnh bổ sung giữa cha và Reply. Nếu không giữ được `group_mood` hoặc tin đích Reply gốc trong giới hạn byte, chạy lại lô gốc. Không thêm `mood_examples`. «Tin kéo là yêu cầu gốc, chỉ để hiểu ngữ cảnh. Chỉ ra READY khi các tin Reply mới chốt việc cần làm hoặc cách làm (vd người giao: "sửa cho đồng bộ đi Mai cùng ý nghĩa"). Lời nhận việc, hứa làm, báo đã xong, hỏi lại hoặc nhờ review PR của người được giao KHÔNG biến tin kéo thành việc mới — khi đó giữ CHAT/F2. Trợ lý quyết cuối.» |
+| J5 | Chỉ nhận tin kéo cùng nhóm với tin Reply đã kéo nó khi nhóm ra `READY` và tạo được ticket. Dùng ID nhỏ nhất trong `source_keys` của nhóm (không gồm tin kéo) làm khóa chủ đề, marker và đích reaction. Khi chuyển sang `propose`, bỏ checkpoint kéo chưa thực thi và chạy lại tin gốc chưa xử lý, không phát lại tác động đã hoàn tất hoặc chưa rõ kết quả. Lỗi kích thước, thiếu ID hoặc tách sai nhóm thì lưu quyết định xử lý lại lô gốc, kể cả khi lần chạy lại bị giữ chờ. Nếu trợ lý không nhận lô có Reply vốn khớp F6, xử lý lại lô gốc trước khi ghi giữ chờ hoặc báo leo thang. Nếu đã đặt chỗ gọi GitHub mà chưa biết kết quả, giữ tin kéo bằng dấu riêng để không kéo lại. Bot chỉ tự trả về `CHAT/F2` khi chưa đặt chỗ gọi GitHub. |
+| J6 | Nếu nhóm không ra `READY`, tin được xét kéo giữ `CHAT/F2` và Reply vốn khớp F6 ở chế độ `decide` đi theo F6 như trước. Giao việc thuần (không ai Reply rồi chốt thành việc) vẫn là `CHAT/F2`. Phân nhóm các tin vốn cùng lô vẫn theo quyết định thông thường. |
+
 ## Bảng: image_split
 
 Chỉnh phân nhóm sau model, không đổi bảng `decision`. Lý do (live #121): ảnh chụp lỗi timeout của Ngọc bị model dán vào tin trả lời về v3 của Mai Vo, hai tin không có Reply nối và khác người gửi.
@@ -517,6 +528,8 @@ Chỉnh phân nhóm sau model, không đổi bảng `decision`. Lý do (live #12
 ## Bảng: team_request
 
 Xét **sau model**, sau bảng `intent_resolve`, **trước** bảng `decision`. Chỉ dựa vào dữ kiện code tính và `intent`; model không biết luật này. Khớp ⇒ `CHAT` với luật `F2`: không ticket, không hỏi. Không khớp ⇒ đi tiếp bảng `decision` như cũ.
+
+Trong `decide`, nếu có `batch_context.parent_pull`, áp dụng J4. «Tin kéo là yêu cầu gốc, chỉ để hiểu ngữ cảnh. Chỉ ra READY khi các tin Reply mới chốt việc cần làm hoặc cách làm (vd người giao: "sửa cho đồng bộ đi Mai cùng ý nghĩa"). Lời nhận việc, hứa làm, báo đã xong, hỏi lại hoặc nhờ review PR của người được giao KHÔNG biến tin kéo thành việc mới — khi đó giữ CHAT/F2. Trợ lý quyết cuối.»
 
 | # | Bước |
 |---|---|
@@ -737,7 +750,7 @@ Danh mục mọi khối template rules dùng. `có` = đã có trong file templa
 
 <!-- end-source: channels.md -->
 <!-- source: examples.md -->
-<!-- rule-file: examples · version 22 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 29 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 ## Bảng: source_followup_cases
@@ -992,6 +1005,42 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`).
 | RC18 | a merge rồi nha, thêm nút export giúp em | `CHAT-F1` | `không` |
 | RC19 | a merge rồi nha | `CHAT-F1-issue` | `không` |
 | RC20 | /task a merge rồi nha | `CHAT-F1` | `không` |
+
+## Bảng: parent_pull_cases
+
+| # | Tin | Luật cha | Tuổi (giây) | Forward | Đã gắn | Chủ đề mở | Lọc ứng viên | Lọc Reply | Authority | Trạng thái nhóm | Kết quả |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| PP1 | Ca báo sửa icon sau khi đồng nghiệp gửi ảnh minh họa | `F2` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `kéo` |
+| PP2 | Reply vào tin nhờ review PR | `F1` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP3 | Nhóm chỉ giải thích thêm | `F2` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `CHAT` | `không` |
+| PP4 | Nhóm vẫn cần hỏi thêm | `F2` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `NEED_INFO` | `không` |
+| PP5 | Tin cha là tin chuyển tiếp | `F2` | 46 | `có` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP6 | Tin cha đã quá 24 giờ | `F2` | 86401 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP7 | Tin cha đã gắn ticket | `F2` | 46 | `không` | `có` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP8 | Tin cha trong chủ đề đang mở | `F2` | 46 | `không` | `không` | `có` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP9 | Tin nhờ review PR cùng người gửi bị lưu F2 trong chủ đề có yêu cầu đổi icon | `F2` | 46 | `không` | `không` | `không` | `F1` | `∅` | `decide` | `READY` | `không` |
+| PP10 | Reply vốn khớp F6, người giao chốt việc cần làm hoặc cách làm qua Reply mới, không phải lời hứa làm của người được giao | `F2` | 46 | `không` | `không` | `không` | `∅` | `F6` | `decide` | `READY` | `kéo` |
+| PP11 | Reply vốn khớp F6 và nhóm chỉ là trò chuyện | `F2` | 46 | `không` | `không` | `không` | `∅` | `F6` | `decide` | `CHAT` | `không` |
+| PP12 | Tin cha là Reply nhờ review PR bị lưu F2, có tin anh em cùng chủ đề | `F2` | 46 | `không` | `không` | `không` | `F1` | `F6` | `decide` | `READY` | `không` |
+| PP13 | Lời xác nhận khớp F6 và Reply vào tin F2 mới gửi | `F2` | 46 | `không` | `không` | `không` | `∅` | `F6` | `propose` | `READY` | `không` |
+| PP14 | Tự Reply vào tin giao việc rồi giao thêm việc đổi icon footer cho cùng đồng nghiệp | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `CHAT` | `không` |
+| PP15 | Đồng nghiệp khác Reply và giao người trong team sửa lỗi font của icon menu | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `CHAT` | `không` |
+| PP16 | Reply nhờ review PR, không nhắc tên | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F1` | `decide` | `READY` | `không` |
+| PP17 | Reply có nhắc tên người được nhờ review PR | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F1` | `decide` | `READY` | `không` |
+| PP18 | Reply xác nhận merge rồi | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F7` | `decide` | `READY` | `không` |
+| PP19 | Reply chỉ có link PR | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F3` | `decide` | `READY` | `không` |
+| PP20 | Reply xã giao khớp F6, trợ lý không nhận lô nên xử lý lại lô gốc | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F6` | `decide` | `CHAT` | `không` |
+| PP21 | Đáp lời nhận việc vào yêu cầu có @tên, không khớp F6 | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `READY` | `không` |
+| PP22 | Reply xác nhận vào ảnh trần trong chủ đề F2 | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `READY` | `không` |
+| PP23 | Reply nói đã sửa lỗi và nhờ review, có link GitHub PR hoặc issue theo P1 | `F2` | 1800 | `không` | `không` | `không` | `∅` | `P1` | `decide` | `READY` | `không` |
+| PP24 | Người được giao chỉ đáp dạ em nhận nha anh, không chốt việc hay cách làm | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `CHAT` | `không` |
+
+PP1: một người gửi yêu cầu đổi icon cùng ảnh menu. Người khác Reply vào ảnh để làm rõ vị trí và nhóm chốt việc. Tin nhờ review PR trước đó thuộc F1.
+
+Ca tích hợp J4 (không thêm vào bảng ví dụ trích dữ kiện):
+
+- Hai người vừa cười. Gói có tin cha dài chỉ vừa giới hạn byte nếu bỏ `group_mood`. Bot không gửi gói này và chạy lại lô gốc.
+- Một tin gốc khác Reply vào tin 30 giờ trước. Tin đích vẫn là ngữ cảnh chỉ đọc. Nếu gói kéo không đủ chỗ cho tin đích, bot chạy lại lô gốc.
 
 ## Bảng: image_split_cases
 

@@ -125,7 +125,7 @@ class AssistantDecideTurnTests(unittest.TestCase):
         full = assistant.decide_system(pack.text)
         core = assistant.decide_system(pack.text, core_pack=pack.core)
         self.assertEqual(hashlib.sha256(full.encode()).hexdigest(),
-                         '667b166870f86adb64949e6a564eccfac6fb3e41d6d25d8bea8e876c4722d68e')
+                         '5aa02988ce346e5bb3cc1a8f5eee05bb9a6e303b7b20638d61dddb0e03ab1afe')
         self.assertLessEqual(2 * len(core.encode()), len(full.encode()))
         for number in range(1, 14):
             self.assertIn(f'| R{number} |', core)

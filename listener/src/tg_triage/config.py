@@ -187,8 +187,8 @@ class Config:
     thinking_enabled: bool = True
     topic_memory_enabled: bool = False
     autonomous_enabled: bool = False
-    context_quiet_seconds: int = 30
-    context_max_wait_seconds: int = 60
+    context_quiet_seconds: int = 60
+    context_max_wait_seconds: int = 120
     decision_rules_enabled: bool = False
     assistant: AssistantConfig = field(default_factory=AssistantConfig)
     admin: AdminConfig | None = field(default=None, repr=False)
@@ -506,10 +506,10 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         raise ConfigError('thinking.decision_rules_enabled requires thinking.enabled and autonomous_enabled')
     if decision_rules_enabled and (ops_chat_id is None or ops_chat_id in chats):
         raise ConfigError('telegram.ops_chat_id: required and must differ from source groups')
-    context_quiet_seconds=_integer(thinking_table.get('context_quiet_seconds',30),'thinking.context_quiet_seconds',30)
-    context_max_wait_seconds=_integer(thinking_table.get('context_max_wait_seconds',60),'thinking.context_max_wait_seconds',30)
-    if not context_quiet_seconds<=context_max_wait_seconds<=60:
-        raise ConfigError('thinking: expected 30 <= context_quiet_seconds <= context_max_wait_seconds <= 60')
+    context_quiet_seconds=_integer(thinking_table.get('context_quiet_seconds',60),'thinking.context_quiet_seconds',30)
+    context_max_wait_seconds=_integer(thinking_table.get('context_max_wait_seconds',120),'thinking.context_max_wait_seconds',30)
+    if not context_quiet_seconds<=context_max_wait_seconds<=120:
+        raise ConfigError('thinking: expected 30 <= context_quiet_seconds <= context_max_wait_seconds <= 120')
     assistant_table = _optional_table(data, 'assistant')
     retention_days = _integer(assistant_table.get('retention_days', 90), 'assistant.retention_days')
     if retention_days > 3650:

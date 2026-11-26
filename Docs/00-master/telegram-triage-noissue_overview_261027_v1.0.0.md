@@ -63,7 +63,7 @@ flowchart TD
 | Đường | Bật khi | Gom tin | Định tuyến chủ đề |
 |---|---|---|---|
 | **Legacy** | `[thinking] autonomous_enabled = false` (mặc định trong source) | Cửa sổ `window_minutes` (mặc định 2 phút); reply nối vào case của tin được reply, nếu không thì cùng sender trong cửa sổ | Model chia topic trong cửa sổ; không chắc ⇒ `needs_human` tạo ticket theo dõi và hỏi |
-| **Autonomous** | `autonomous_enabled = true` và `[thinking] enabled = true` | Đợi 30s yên lặng, tối đa 60s | NEW/CONTINUE/CLARIFY/CHAT; không chắc ⇒ giữ pending và hỏi, **không** tạo ticket |
+| **Autonomous** | `autonomous_enabled = true` và `[thinking] enabled = true` | Đợi 60 giây yên lặng, tối đa 120 giây | NEW/CONTINUE/CLARIFY/CHAT; không chắc ⇒ giữ pending và hỏi, **không** tạo ticket |
 
 `[thinking] enabled` mặc định `true`; đặt `false` + restart để quay về semantic path cũ. Trạng thái thật trên máy chạy (THINKPAD) **phải đọc từ config đang cài**, không suy từ file mẫu hay tài liệu.
 
@@ -132,7 +132,7 @@ Giá trị mặc định lấy từ [listener.example.toml](../../config/listene
 | `github.max_issues_per_hour` | 20 | Quota tạo issue, tính cả sibling và outcome không rõ |
 | `aggregation.window_minutes` | 2 | Cửa sổ gom (legacy) |
 | `aggregation.max_messages_per_case` / `_per_window` | 20 / 40 | Trần tin mỗi case / cửa sổ |
-| `thinking.context_quiet_seconds` / `_max_wait_seconds` | 30 / 60 | Nhịp gom (autonomous) |
+| `thinking.context_quiet_seconds` / `_max_wait_seconds` | 60 / 120 giây | Mặc định gom autonomous (yên lặng / trần) |
 | Budget model | 2 attempt / 40s, mỗi request ≤ 20s | TG-30 |
 | Packet text | ≤ 8000 byte UTF-8; 20 tin mới; 6 candidate. Rules mode: ≤ 24000 byte mỗi lần gọi cloud, chỉ tách khi quá byte, tối đa 4 phần; Ollama giữ 8000 (Owner 2026-11-05) | TG-05, TG-30 |
 | `attachments.max_bytes` | 10 MB | Mỗi file |

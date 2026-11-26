@@ -342,16 +342,17 @@ class EvalAssistantP8Tests(unittest.TestCase):
             store = Store(str(source))
             try:
                 older, latest = helpers.message(10), helpers.message(11, text='xin chào', reply_to_id=10)
-                for message in older, latest:
+                discarded = helpers.message(12, text='speculative parent pull')
+                for message, state in ((older, 'APPEND'), (latest, 'APPEND'), (discarded, 'SUPERSEDED')):
                     store.enqueue(message)
                     with store.connection:
                         store.connection.execute(
                             """INSERT INTO classification_runs
                                (created_at, turn_key, phase, batch_fingerprint, chat_id, message_ids,
                                 id_space, rules_fingerprint, final_state, ticket_ref)
-                               VALUES (0, 'test', 'extract', 'batch', ?, ?, 'message', 'rules', 'APPEND', ?)""",
-                            (message.chat_id, json.dumps([message.message_id]),
-                             'https://github.com/sandbox/triage/issues/42'))
+                               VALUES (0, 'test', 'extract', 'batch', ?, ?, 'message', 'rules', ?, ?)""",
+                            (message.chat_id, json.dumps([message.message_id]), state,
+                             'https://github.com/sandbox/triage/issues/42' if state == 'APPEND' else None))
             finally:
                 store.close()
             original = source.read_bytes(), source.stat().st_mtime_ns
@@ -361,19 +362,23 @@ class EvalAssistantP8Tests(unittest.TestCase):
                   contextlib.redirect_stdout(report)):
                 with patch.object(replay, 'run_replay',
                                   side_effect=lambda **options: run_replay(**options, runtime_factory=factory)):
-                    self.assertEqual(replay.main(['--db', str(source), '--config', 'unused.toml', '--limit', '1',
+                    self.assertEqual(replay.main(['--db', str(source), '--config', 'unused.toml', '--limit', '2',
                                                   '--out', str(output), '--pack-mode', 'core']), 0)
-                row = json.loads(output.read_text(encoding='utf-8'))
+                skipped, row = map(json.loads, output.read_text(encoding='utf-8').splitlines())
                 with self.assertRaises(replay.ReplayInputError):
                     replay.run_replay(db=source, config='unused.toml', out=source, runtime_factory=factory)
             self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), original)
             self.assertEqual({item.name for item in source.parent.iterdir()}, {source.name, output.name})
-            self.assertEqual(json.loads(output.read_text(encoding='utf-8')), row)
+            self.assertEqual(list(map(json.loads, output.read_text(encoding='utf-8').splitlines())), [skipped, row])
         self.assertEqual(requested, [(11,)])
+        self.assertEqual(('SUPERSEDED', 'superseded', False),
+                         (skipped['expected_state'], skipped['skipped'], skipped['comparable']))
         self.assertTrue(row['passed'])
         self.assertTrue(row['ticket_ref_agrees'])
         self.assertTrue(row['creation_agrees'])
         self.assertIn('APPEND\t1', report.getvalue())
+        self.assertIn('Superseded batches 1/2', report.getvalue())
+        self.assertNotIn('SUPERSEDED\t', report.getvalue())
 
     def test_probe_repeats_each_link_and_never_prints_key_even_on_error(self):
         probe = self.module('probe-prompt-cache.py')

@@ -247,6 +247,47 @@ def set_thread(store, run_id, thread_id):
         _failed(error)
 
 
+def parent_pull_checkpoint(connection):
+    return connection.execute('SELECT COALESCE(MAX(run_id),0) FROM classification_runs').fetchone()[0]
+
+
+def parent_pull_runs(connection, batch_id, after):
+    """Identify this batch's speculative runs, without matching an earlier retry."""
+    return [row[0] for row in connection.execute(
+        'SELECT run_id FROM classification_runs WHERE run_id>? AND topic_id=?', (after, batch_id))]
+
+
+def supersede_parent_pull(connection, run_ids, *, discarded_ids=None):
+    """Mark discarded decisions without losing their original states or guard evidence."""
+    for run_id in run_ids:
+        row = connection.execute('SELECT final_state,outcomes_json,message_ids FROM classification_runs WHERE run_id=?',
+                                 (run_id,)).fetchone()
+        if row is None:
+            continue
+        state, raw_outcomes, message_ids = row
+        try:
+            outcomes = json.loads(raw_outcomes) if raw_outcomes else []
+            run_ids_in_scope = set(json.loads(message_ids))
+        except (TypeError, ValueError):
+            outcomes, run_ids_in_scope = [], set()
+        discarded = 0
+        for outcome in outcomes:
+            if discarded_ids is not None and not discarded_ids.intersection(outcome.get('message_ids', ())):
+                continue
+            key = 'state' if 'state' in outcome else 'final_state'
+            outcome.setdefault('superseded_state', outcome.get(key))
+            outcome[key] = 'SUPERSEDED'
+            discarded += 1
+        if discarded_ids is None or (outcomes and discarded == len(outcomes)) or (not outcomes and run_ids_in_scope and run_ids_in_scope <= discarded_ids):
+            if not outcomes:
+                outcomes = [{'state': 'SUPERSEDED', 'superseded_state': state}]
+            connection.execute("""UPDATE classification_runs SET final_state='SUPERSEDED',
+                outcomes_json=?,error='rules_parent_pull_superseded' WHERE run_id=?""", (_json(outcomes), run_id))
+        elif discarded:
+            connection.execute('UPDATE classification_runs SET outcomes_json=? WHERE run_id=?',
+                               (_json(outcomes), run_id))
+
+
 def flush(store):
     """Commit queued runs FIFO only outside a caller transaction; never raise.
 

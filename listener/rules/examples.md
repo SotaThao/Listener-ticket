@@ -1,4 +1,4 @@
-<!-- rule-file: examples · version 22 · status ACTIVE · audience: code -->
+<!-- rule-file: examples · version 29 · status ACTIVE · audience: code -->
 # Ví dụ chuẩn
 
 ## Bảng: source_followup_cases
@@ -253,6 +253,42 @@ Bot chạy bảng này mỗi lần nạp rules (`readiness.md` · `reply_chat`).
 | RC18 | a merge rồi nha, thêm nút export giúp em | `CHAT-F1` | `không` |
 | RC19 | a merge rồi nha | `CHAT-F1-issue` | `không` |
 | RC20 | /task a merge rồi nha | `CHAT-F1` | `không` |
+
+## Bảng: parent_pull_cases
+
+| # | Tin | Luật cha | Tuổi (giây) | Forward | Đã gắn | Chủ đề mở | Lọc ứng viên | Lọc Reply | Authority | Trạng thái nhóm | Kết quả |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| PP1 | Ca báo sửa icon sau khi đồng nghiệp gửi ảnh minh họa | `F2` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `kéo` |
+| PP2 | Reply vào tin nhờ review PR | `F1` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP3 | Nhóm chỉ giải thích thêm | `F2` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `CHAT` | `không` |
+| PP4 | Nhóm vẫn cần hỏi thêm | `F2` | 46 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `NEED_INFO` | `không` |
+| PP5 | Tin cha là tin chuyển tiếp | `F2` | 46 | `có` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP6 | Tin cha đã quá 24 giờ | `F2` | 86401 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP7 | Tin cha đã gắn ticket | `F2` | 46 | `không` | `có` | `không` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP8 | Tin cha trong chủ đề đang mở | `F2` | 46 | `không` | `không` | `có` | `∅` | `∅` | `decide` | `READY` | `không` |
+| PP9 | Tin nhờ review PR cùng người gửi bị lưu F2 trong chủ đề có yêu cầu đổi icon | `F2` | 46 | `không` | `không` | `không` | `F1` | `∅` | `decide` | `READY` | `không` |
+| PP10 | Reply vốn khớp F6, người giao chốt việc cần làm hoặc cách làm qua Reply mới, không phải lời hứa làm của người được giao | `F2` | 46 | `không` | `không` | `không` | `∅` | `F6` | `decide` | `READY` | `kéo` |
+| PP11 | Reply vốn khớp F6 và nhóm chỉ là trò chuyện | `F2` | 46 | `không` | `không` | `không` | `∅` | `F6` | `decide` | `CHAT` | `không` |
+| PP12 | Tin cha là Reply nhờ review PR bị lưu F2, có tin anh em cùng chủ đề | `F2` | 46 | `không` | `không` | `không` | `F1` | `F6` | `decide` | `READY` | `không` |
+| PP13 | Lời xác nhận khớp F6 và Reply vào tin F2 mới gửi | `F2` | 46 | `không` | `không` | `không` | `∅` | `F6` | `propose` | `READY` | `không` |
+| PP14 | Tự Reply vào tin giao việc rồi giao thêm việc đổi icon footer cho cùng đồng nghiệp | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `CHAT` | `không` |
+| PP15 | Đồng nghiệp khác Reply và giao người trong team sửa lỗi font của icon menu | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `CHAT` | `không` |
+| PP16 | Reply nhờ review PR, không nhắc tên | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F1` | `decide` | `READY` | `không` |
+| PP17 | Reply có nhắc tên người được nhờ review PR | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F1` | `decide` | `READY` | `không` |
+| PP18 | Reply xác nhận merge rồi | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F7` | `decide` | `READY` | `không` |
+| PP19 | Reply chỉ có link PR | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F3` | `decide` | `READY` | `không` |
+| PP20 | Reply xã giao khớp F6, trợ lý không nhận lô nên xử lý lại lô gốc | `F2` | 1800 | `không` | `không` | `không` | `∅` | `F6` | `decide` | `CHAT` | `không` |
+| PP21 | Đáp lời nhận việc vào yêu cầu có @tên, không khớp F6 | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `READY` | `không` |
+| PP22 | Reply xác nhận vào ảnh trần trong chủ đề F2 | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `propose` | `READY` | `không` |
+| PP23 | Reply nói đã sửa lỗi và nhờ review, có link GitHub PR hoặc issue theo P1 | `F2` | 1800 | `không` | `không` | `không` | `∅` | `P1` | `decide` | `READY` | `không` |
+| PP24 | Người được giao chỉ đáp dạ em nhận nha anh, không chốt việc hay cách làm | `F2` | 1800 | `không` | `không` | `không` | `∅` | `∅` | `decide` | `CHAT` | `không` |
+
+PP1: một người gửi yêu cầu đổi icon cùng ảnh menu. Người khác Reply vào ảnh để làm rõ vị trí và nhóm chốt việc. Tin nhờ review PR trước đó thuộc F1.
+
+Ca tích hợp J4 (không thêm vào bảng ví dụ trích dữ kiện):
+
+- Hai người vừa cười. Gói có tin cha dài chỉ vừa giới hạn byte nếu bỏ `group_mood`. Bot không gửi gói này và chạy lại lô gốc.
+- Một tin gốc khác Reply vào tin 30 giờ trước. Tin đích vẫn là ngữ cảnh chỉ đọc. Nếu gói kéo không đủ chỗ cho tin đích, bot chạy lại lô gốc.
 
 ## Bảng: image_split_cases
 

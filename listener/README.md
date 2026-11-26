@@ -165,6 +165,44 @@ An attachment release/upload with an unknown outcome halts immediately and requi
 Owner inspection; an internal batch checkpoint alone may be reconciled only when
 the write ledgers prove either no effect or a completed effect and sent notice.
 
+The 24-hour limit on extra context covers only messages added between the pulled
+parent and the reply. Original reply targets keep the normal history rules, with no
+age limit. If the expanded batch cannot retain `group_mood` or an original reply
+target within the request budget, the bot runs the original batch without pulling.
+
+### Owner runbook for ambiguous parent pulls
+
+Keep the worker stopped. Back up SQLite and inspect the copy in read-only mode.
+Find the affected batch group in `rules_batch_groups` and its `pulled_keys` and
+`source_keys` in the saved plan. Cross-check those keys against the new source messages, the new topic's
+`rules_sources`, and the historical rows marked
+`rules_parent_pull_ambiguous`. A crash may leave those rows marked
+`rules_parent_pull_claimed` instead. Check the configured GitHub repository for
+the exact `<!-- tg:<chat_id>:<anchor_id> -->` marker. The anchor is the smallest
+message ID in the group's `source_keys` (excluding `pulled_keys`), so the topic
+is `<chat_id>:<anchor_id>`. For example, if 7133 was pulled and `source_keys`
+contains 7134 and 7135, the marker uses 7134 even when 7135 is the Reply to 7133.
+Verify the outcome of the anchor's reservation. If the result cannot be established,
+leave the halt in place. An intact pre-POST checkpoint is different. On switching
+to propose, the worker releases the temporary claim and retries only the original
+sources with no completed effect.
+
+- **Issue exists:** reconcile the anchor and its case/group against the
+  verified issue first. For each pulled row, set `decision='issue'` and copy
+  `issue_number`, `issue_url`, `case_key`, `group_key` and the settled classification
+  metadata, including `reason`, from the anchor. Keep `github_called_at`
+  on the original anchor only. Keep the new topic's source refs and reconcile the
+  case/group membership counts. Never restore these rows to F2 if the issue exists.
+- **No issue was created:** set the pulled rows to `decision='chat', reason='F2'`.
+  Leave their unassigned `case_key`, `group_key`, `issue_number`, `issue_url` and
+  `github_called_at` as NULL. Delete only their `rules_sources` refs from the new
+  topic. Keep the old F2 topic and its refs intact.
+
+Apply the Owner-reviewed reconciliation as one transaction, including the original
+reservation and batch checkpoint based on the verified outcome. Recheck the
+read-only startup gate on a reconciled copy before restarting. Do not clear a
+reservation just to pass the gate or replay a POST or notice whose outcome is unknown.
+
 ## Provider configuration and telemetry
 
 Business/consent/reasoning boundaries: [TG-30..TG-32](../Docs/01-product/telegram-triage-noissue_business_261015_v1.0.0.md#tg-30--provider-và-privacy-reasoning). Provider fields below are technical examples, not the installed production profile.
@@ -396,11 +434,11 @@ The Owner approved retaining DeepSeek after the isolated Gemini Free-tier trial.
 
 Gemini 3.8 Flash access was available, but the project returned HTTP 429 for its daily Free-tier request quota. Gemini 3.7 Flash returned HTTP 503 under load; one successful response through the existing JSON-object path also had the wrong top-level structure and was rejected. An isolated JSON Schema experiment passed one grouping case, but the complete seven-case experiment did not pass. These results do not establish Gemini's semantic accuracy, and the experimental transport is not part of this release. A future provider switch requires complete context regressions against the actual proposed transport and installed verification first. Never interpret a listed model or one successful probe as release readiness.
 
-The DeepSeek baseline for unchanged runtime `416390d` passed all seven configured-model scenarios: three messages to one ticket, three independent tickets, image/caption #46, POS evidence #47, closed-ticket recurrence, login with competing history, and a pending reply after 90 seconds. Test side effects were isolated from GitHub, Telegram and the live database. Each subsequent deployment must record its own commit-bound package and installed health evidence; the provider decision does not change the 30/60-second collection contract or late-context rules.
+The DeepSeek baseline for unchanged runtime `416390d` passed all seven configured-model scenarios: three messages to one ticket, three independent tickets, image/caption #46, POS evidence #47, closed-ticket recurrence, login with competing history, and a pending reply after 90 seconds. Test side effects were isolated from GitHub, Telegram and the live database. Each subsequent deployment must record its own commit-bound package and installed health evidence; the provider decision is separate from the collection window and late-context rules.
 
 ### Autonomous operations
 
-Enable `[thinking] enabled=true`, `topic_memory_enabled=true`, `autonomous_enabled=true` only on a tested installed release. Semantic ingress processes bounded same-chat queued sources and trusted candidates after per-chat30s quiet /60s collection cap; the cap is not a total processing SLA. Shared turn budget is two model attempts/40 seconds/six reads. One followup batch carries all new captions/images in one USER packet. Trace exposes immutable routes, cached plans, current partition, batch membership and recurrence episodes; see the canonical policy for lifecycle and recovery rules.
+Enable `[thinking] enabled=true`, `topic_memory_enabled=true`, `autonomous_enabled=true` only on a tested installed release. Semantic ingress processes bounded same-chat queued sources and trusted candidates after 60 seconds of quiet per chat, with a 120-second collection cap by default; the cap is not a total processing SLA. Shared turn budget is two model attempts/40 seconds/six reads. One followup batch carries all new captions/images in one USER packet. Trace exposes immutable routes, cached plans, current partition, batch membership and recurrence episodes; see the canonical policy for lifecycle and recovery rules.
 
 Configured-model isolated regression (fake GitHub/Telegram, in-memory SQLite, supplied reviewed image fixtures):
 
@@ -412,7 +450,7 @@ This uses the actual startup provider and configured consent; it does not open t
 
 ### Conversation pacing
 
-In autonomous mode, `[thinking] context_quiet_seconds=30` and `context_max_wait_seconds=60` are defaults; allowed integers satisfy30 <= quiet <= max <=60. Each chat collects independently, then processes sealed batches sequentially. No early model/clarification for each arriving message. Context retrieval still applies to messages arriving after60 seconds; the collection deadline does not expire stored topic/reply/question history. Pending clarification reservations suppress normalized repeats across restart. See canonical Business DOCS for late-context and technical fallback behavior.
+In autonomous mode, `[thinking] context_quiet_seconds=60` and `context_max_wait_seconds=120` are defaults; allowed integers satisfy `30 <= quiet <= max <= 120`. Each chat collects independently, then processes sealed batches sequentially. No early model/clarification for each arriving message. Context retrieval still applies to messages arriving after the batch closes; the collection deadline does not expire stored topic/reply/question history. Pending clarification reservations suppress normalized repeats across restart. See canonical Business DOCS for late-context and technical fallback behavior.
 
 Each fresh invalid batch may send one technical notice at its persisted host anchor, even while an earlier chat outage remains open. Same-anchor reserved/failed/unknown deliveries and restarts remain at-most-once. This changes neither semantic topic membership nor authorization to replay old plans. Technical feedback confirms storage/failure briefly without asking the user to describe the same report again.
 

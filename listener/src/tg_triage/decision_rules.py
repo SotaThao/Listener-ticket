@@ -13,10 +13,10 @@ FILES = ("states", "facts", "readiness", "questions", "channels", "examples")
 SCHEMA = {
     "states": {"states": "Mã|Nghĩa|Ticket|Group gốc|Group xử lý|Pending|Rule nghiệp vụ", "pending_states": "Từ|Sự kiện|Sang", "limits": "Khóa|Giá trị|Nghĩa"},
     "facts": {"group_mood": "Khóa|Giá trị", "fields": "Trường|Kiểu|Ý nghĩa|Ví dụ", "code_facts": "Trường|Giá trị|Cách tính", "command_intent": "Command|intent", "field_valid": "#|Điều kiện", "normalize": "#|Bước", "generic_values": "Trường|Cụm", "limits": "Khóa|Giá trị|Nghĩa"},
-    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "merge_word": "#|Bước", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "reply_chat": "#|Bước", "image_split": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
+    "readiness": {"prefilter": "#|Bước", "prefilter_words": "Loại|Từ", "merge_word": "#|Bước", "team_request": "#|Bước", "link_only": "#|Bước", "chat_only": "#|Bước", "chat_words": "Nhóm|Từ", "banter_only": "#|Bước", "banter_signals": "Loại|Dấu", "reply_chat": "#|Bước", "parent_pull": "#|Bước", "image_split": "#|Bước", "intent_resolve": "#|command|intent (model)|cần CÓ|intent dùng", "decision": "#|command|command_payload|text|media|extraction_ok|reply_target|intent|cần CÓ tất cả|cần CÓ ít nhất một|Kết quả|Ghi chú", "never_blocks": "Thứ không chặn", "unseen_media": "#|Quy tắc", "confidence": "#|Quy tắc"},
     "questions": {"ask_order": "Thứ tự|intent|Trường thiếu|Khối template", "fallback": "Khi|Khối template", "answer_link": "#|Kênh|Là Reply vào|Pending|Kết quả", "limits": "Khóa|Giá trị|Nghĩa", "source_followup": "#|Bước"},
     "channels": {"channels": "Kênh|Là gì|Config|Bot được gửi", "outputs": "Trạng thái|Group gốc|Group xử lý|Khối template", "ops_message_fields": "Trường|Nguồn", "blocks": "Khối template|File|Có sẵn"},
-    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "merge_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung", "source_followup_cases": "#|Tin|Bối cảnh|Kết quả|Luật"},
+    "examples": {"examples": "#|Tin (rút gọn)|command|command_payload|text|media_seen|media_unseen|extraction_ok|reply_target|intent (model)|Dữ kiện|Kết quả|Luật|Hỏi", "prefilter_cases": "#|Tin|Kết quả", "merge_cases": "#|Tin|Kết quả", "team_cases": "#|Tin|tag bot|intent (model)|Luật", "link_cases": "#|Tin|Kết quả", "chat_cases": "#|Tin|Kết quả", "banter_cases": "#|Tin|Bối cảnh|Kết quả", "reply_chat_cases": "#|Tin|Reply vào|Kết quả", "parent_pull_cases": "#|Tin|Luật cha|Tuổi (giây)|Forward|Đã gắn|Chủ đề mở|Lọc ứng viên|Lọc Reply|Authority|Trạng thái nhóm|Kết quả", "image_split_cases": "#|Nhóm|Kết quả", "normalize_cases": "#|Trường|Giá trị|Chung chung", "source_followup_cases": "#|Tin|Bối cảnh|Kết quả|Luật"},
 }
 PREFILTER_RULE = "F1"
 PREFILTER_SHA256 = "2233c9f83d201a0e901d7136ffa17d786e20af01b476faf21679e1d2dd46de73"
@@ -69,6 +69,8 @@ _MERGE_ACKNOWLEDGEMENT = re.compile(
     r"(?:[ \t]+(?:nha|nhé|nhe|nhá|ạ))?[.!]?"
 )
 REPLY_CHAT_SHA256 = "89617f02b1b6b3961e15d94d8f98af0aed125a03726dbe659ab6049f7134e1a1"
+PARENT_PULL_SHA256 = "fce8603c5b5e33b580e650cef6d545043d79a1a60e3dd7dbb4d0b4ef69c4f0a7"
+PARENT_PULL_WINDOW_SECONDS = 24 * 60 * 60
 IMAGE_SPLIT_SHA256 = "bc2dd348b00b28a519acb3bfb657b5072eae2fe981d34caa3375bd52f957ed08"
 HEADER = re.compile(r"^<!-- rule-file: ([a-z_]+) · version ([1-9][0-9]*) · status (DRAFT|ACTIVE) · audience: (code|model \+ code|người \+ agent) -->$")
 TABLE = re.compile(r"^## Bảng: ([a-z_]+)$")
@@ -78,6 +80,24 @@ EDGE = ".,!?;:…\"'“”‘’()[]-"
 
 class RulesError(ValueError):
     """Rule file error, including source location."""
+
+
+def parent_pull_filter_allowed(local_rule):
+    """J1. After the decide-only gate, only F6 can be deferred."""
+    return local_rule in (None, REPLY_CHAT_RULE)
+
+
+def parent_pull_eligible(decision, reason, age_seconds, *, forwarded, assigned, open_topic):
+    """readiness.md · parent_pull J2, for a stored parent in the reply's chat."""
+    return (decision == 'chat' and reason == TEAM_RULE and not (forwarded or assigned or open_topic)
+            and 0 <= age_seconds <= PARENT_PULL_WINDOW_SECONDS)
+
+
+def parent_pull_ready_ids(state, group_ids, reply_pulls):
+    """J5 permits only pulls whose originating reply shares a READY group."""
+    if state != 'READY':
+        return set()
+    return {mid for reply_id in group_ids for mid in reply_pulls.get(reply_id, ()) if mid in group_ids}
 
 
 # facts.md · normalize N6 (Owner 2026-11-06 "Duyệt cả ba"): trailing particles that never change what is asked.
@@ -208,6 +228,11 @@ def has_team_mention(text) -> bool:
     value = unicodedata.normalize('NFC', _INVISIBLE.sub('', text))
     value = _SLASH_RUN.sub(' ', _CODE_SPAN.sub(' ', value))
     return bool(_TEAM_MENTION.search(value))
+
+
+def has_github_pr_or_issue_link(text) -> bool:
+    """P1 link recognition without requiring the surrounding F1 review words."""
+    return isinstance(text, str) and _GITHUB_REF.search(unicodedata.normalize('NFC', _INVISIBLE.sub('', text))) is not None
 
 
 def is_link_only(text) -> bool:
@@ -439,6 +464,7 @@ class RulesSnapshot:
         self.banter_problem = frozenset(signals['vấn đề'])
         for table, codes, digest, label in (('merge_word', ['M1', 'M2', 'M3'], MERGE_SHA256, 'merge_word'),
                                             ('reply_chat', ['K1', 'K2', 'K3', 'K4'], REPLY_CHAT_SHA256, 'reply_chat'),
+                                            ('parent_pull', [f'J{i}' for i in range(1, 7)], PARENT_PULL_SHA256, 'parent_pull'),
                                             ('image_split', ['S1', 'S2', 'S3', 'S4'], IMAGE_SPLIT_SHA256, 'image_split')):
             steps = t['readiness'][table]
             if [r.cells['#'] for r in steps] != codes: steps[0].fail('unsupported %s sequence' % label)
@@ -803,6 +829,29 @@ class RulesSnapshot:
             if got != expected: row.fail('image_split self-check failed')
             outcomes.add(expected == 'không')
         if outcomes != {True, False}: self.tables['examples']['image_split_cases'][0].fail('image_split cases need both outcomes')
+        pull_cases = self.tables['examples']['parent_pull_cases']
+        if [row.cells['#'] for row in pull_cases] != [f'PP{i}' for i in range(1, 25)]:
+            pull_cases[0].fail('parent_pull cases must cover PP1–PP24')
+        valid_states = {row.one('Mã') for row in self.tables['states']['states']}
+        local_rules = {'∅', MERGE_RULE, PREFILTER_RULE, LINK_RULE, CHAT_RULE, BANTER_RULE, REPLY_CHAT_RULE}
+        for row in pull_cases:
+            flags = [row.one(key) for key in ('Forward', 'Đã gắn', 'Chủ đề mở')]
+            state, reason, expected = (row.one(key) for key in ('Trạng thái nhóm', 'Luật cha', 'Kết quả'))
+            candidate_rule, reply_rule, authority = (row.one(key) for key in ('Lọc ứng viên', 'Lọc Reply', 'Authority'))
+            age = row.cells['Tuổi (giây)']
+            if (set(flags) - {'có', 'không'} or state not in valid_states or reason not in {TEAM_RULE, PREFILTER_RULE}
+                    or candidate_rule not in local_rules or reply_rule not in local_rules | {'P1'}
+                    or authority not in {'decide', 'propose'}
+                    or expected not in {'kéo', 'không'} or not re.fullmatch(r'[0-9]{1,9}', age)):
+                row.fail('invalid parent_pull case')
+            forwarded, assigned, open_topic = (value == 'có' for value in flags)
+            eligible = parent_pull_eligible('chat', reason, int(age), forwarded=forwarded,
+                                            assigned=assigned, open_topic=open_topic)
+            pulls = {2: (1,)} if (authority == 'decide' and eligible
+                and candidate_rule == '∅'
+                and parent_pull_filter_allowed(None if reply_rule == '∅' else reply_rule)) else {}
+            if bool(parent_pull_ready_ids(state, {1, 2}, pulls)) != (expected == 'kéo'):
+                row.fail('parent_pull self-check failed')
         for row in self.tables['examples']['normalize_cases']:
             field, value, expected = row.one('Trường'), row.one('Giá trị'), row.one('Chung chung')
             if field not in self.text_fields or expected not in {'có','không'} or (normalize(value) in self.generic[field]) != (expected == 'có'): row.fail('normalization self-check failed')

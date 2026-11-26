@@ -55,6 +55,23 @@ class DecisionRulesTest(unittest.TestCase):
         self.mutate('readiness', '| T2 | `intent` sau bảng', '| T2 | `intent` (bất kỳ) sau bảng')
         with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported team_request definition'): self.load()
 
+    def test_parent_pull_definition_is_hash_locked(self):
+        self.mutate('readiness', 'trong vòng 24 giờ trước tin Reply', 'trong vòng 25 giờ trước tin Reply')
+        with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported parent_pull definition'):
+            self.load()
+
+    def test_parent_pull_cases_execute_on_load(self):
+        for row in self.load().tables['examples']['parent_pull_cases']:
+            expected = row.one('Kết quả')
+            other = 'không' if expected == 'kéo' else 'kéo'
+            line = '| ' + ' | '.join(row.cells.values()) + ' |'
+            changed = line.removesuffix(f'`{expected}` |') + f'`{other}` |'
+            with self.subTest(case=row.cells['#']):
+                self.mutate('examples', line, changed)
+                with self.assertRaisesRegex(RulesError, r'examples.md:\d+:.*parent_pull self-check failed'):
+                    self.load()
+                self.mutate('examples', changed, line)
+
     def test_chat_only_definition_is_hash_locked(self):
         self.mutate('readiness', '| C4 | Khớp C1–C3', '| C4 | Khớp C1–C2')
         with self.assertRaisesRegex(RulesError, r'readiness.md:\d+:.*unsupported chat_only definition'): self.load()

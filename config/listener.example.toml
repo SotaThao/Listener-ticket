@@ -106,8 +106,8 @@ autonomous_enabled = false
 # Six decision rules and eight wordings are Owner-approved; keep off until preflight and GO.
 decision_rules_enabled = false
 # Live autonomous Telegram: wait for conversation context, then classify by meaning.
-context_quiet_seconds = 30
-context_max_wait_seconds = 60
+context_quiet_seconds = 60
+context_max_wait_seconds = 120
 
 [assistant]
 # pack_mode = "full" # "core" requires authority = "decide"

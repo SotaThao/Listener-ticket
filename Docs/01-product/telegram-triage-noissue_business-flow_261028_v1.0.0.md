@@ -79,7 +79,7 @@ listener/
 | Bước nghiệp vụ | File | Việc chính |
 | :--- | :--- | :--- |
 | Khởi động, kiểm cấu hình | `__main__.py`, `config.py`, `runtime.py`, `receipt.py` | Đọc config, nạp và kiểm template (hỏng ⇒ exit 2), bảo vệ thư mục/tiến trình, xác nhận bản đã nạp |
-| Nhận tin, gom tin | `telegram_io.py`, `pacing.py` | Nghe group, chờ 30–60s (autonomous) hoặc cửa sổ 2 phút (legacy) |
+| Nhận tin, gom tin | `telegram_io.py`, `pacing.py` | Nghe group, 60 giây yên lặng, tối đa 120 giây (autonomous mặc định) hoặc cửa sổ 2 phút (legacy) |
 | Lưu và chống trùng | `store.py`, `followup_store.py`, `autonomy_store.py`, `topic_store.py` | SQLite, sổ ghi thao tác, bộ nhớ chủ đề |
 | Lọc lệnh, noise | `rules.py` | Lệnh `/bug /task /feedback…`, tin rỗng |
 | Hiểu hội thoại (model) | `thinking.py`, `thinking_transport.py`, `provider.py`, `classifier.py`, `ingress_model.py`, `followup_model.py`; `ai_transport.py` và `model_lock.py` từ `agentfleet-common` (AgentBuilder `common/`) | Đóng gói context ≤ 8 KB, gọi model, kiểm output |
@@ -119,7 +119,7 @@ listener/
 | :--- | :--- | :--- | :--- | :--- |
 | 1 | Người gửi | Gửi tin, ảnh, caption | Lưu tin trước mọi xử lý; chống xử lý trùng | TG-01, TG-02 |
 | 2 | Bot | Lọc lệnh và tin rỗng | Lệnh `/bug /task /feedback` có nội dung ép loại; tin không chữ là noise | TG-03, TG-04 |
-| 3 | Bot | Gom tin theo nhịp hội thoại | Legacy: cửa sổ 2 phút. Autonomous: chờ 30s yên lặng, tối đa 60s | TG-05 |
+| 3 | Bot | Gom tin theo nhịp hội thoại | Legacy: cửa sổ 2 phút. Autonomous: mặc định chờ 60 giây yên lặng, tối đa 120 giây | TG-05 |
 | 4 | Bot + model | Chia chủ đề, đề xuất loại | Model chỉ đề xuất; code kiểm schema, quyền Reply, ngưỡng 0.7, safety | TG-06 → TG-10 |
 | 5 | Bot | Quyết định | Chat/câu hỏi: bỏ qua. Chưa rõ: hỏi (legacy tạo ticket needs-human). Đủ rõ: tạo issue | TG-08, TG-09, TG-12 |
 | 6 | Bot | **Dựng nội dung từ template** | Chuẩn bị dữ liệu đã sanitize/redact → chọn template theo loại → render form → ghép marker, title, nhãn | **TG-33** (thay đổi của PR #81) |
@@ -180,11 +180,11 @@ sequenceDiagram
 | Bước | Việc | Ai làm | Dựa vào file |
 | :--- | :--- | :--- | :--- |
 | 0 | Nạp + kiểm quy tắc, template, prompt; tính fingerprint (sai ⇒ không khởi động) | Code | `rules/*.md`, `templates/`, `prompts/` |
-| 1 | Gom tin theo nhịp hội thoại (30s yên lặng, tối đa 60s) | Code | config |
+| 1 | Gom tin theo nhịp hội thoại (mặc định 60 giây yên lặng, tối đa 120 giây) | Code | config |
 | 2 | Lọc local trước model: `F1` nhờ review/merge PR có link GitHub; `F3` tin chỉ có link; `F4` tin chỉ có từ xã giao; `F5` tin đùa (có dấu cười) giữa lúc nhóm đang cười; `F6` tin Reply, do người khác gửi, vào một tin đã quyết `CHAT` bằng F2/F4/F5 mà không có từ báo lỗi, hoặc câu xác nhận đã merge theo K2(b) vào tin F1 kèm link PR. Mọi tin trong nhóm khớp ⇒ `CHAT`, không gọi model | Code | `readiness.md` · `prefilter`, `link_only`, `chat_only` + `chat_words`, `banter_only` + `banter_signals`, `reply_chat` |
 | 3 | Chia chủ đề + trích dữ kiện kèm `source_ids` (không kết luận). Nhóm đang đùa: gói tin có thêm `group_mood`, `laugh`, `min_ago` và 2 ví dụ đối chiếu | Model | `facts.md` · `fields`, `group_mood`, 9 ví dụ cố định |
 | 4 | Tính trường CÓ (chuẩn hóa N1–N6 bỏ chữ đệm cuối; bỏ cụm chung chung như "check giúp", "báo giùm em") rồi `intent_resolve` I1–I3 | Code | `facts.md` · `normalize`, `generic_values`, `readiness.md` |
-| 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `work` có `@tên`, không forward, không tag bot ⇒ `CHAT` | Code | `readiness.md` · `team_request` |
+| 5 | `F2`: task giao/hỏi đồng nghiệp — mọi tin nguồn của `work` có `@tên`, không forward, không tag bot ⇒ `CHAT`. `parent_pull` chỉ chạy ở `decide`. Theo J4, trợ lý chỉ ra `READY` khi Reply mới chốt việc hoặc cách làm. Lời nhận việc không biến tin kéo thành việc mới. Chỉ khi tạo ticket thành công mới lưu tin kéo. `propose` không kéo và giữ nguyên F2/F6. | Code | `readiness.md` · `team_request`, `parent_pull` |
 | 6 | Bảng `decision` R1–R13 ⇒ `READY` / `NEED_INFO` / `MEDIA_ONLY` / `CHAT` / `HOLD` / `APPEND` | Code | `readiness.md` · `decision` |
 | 7 | `READY`: chọn template, tạo issue một lần, đọc lại; `NEED_INFO`: hỏi trường thiếu | Code | `templates/`, `questions.md` |
 | 8 | Báo vào group xử lý (link ticket hoặc câu hỏi) | Code | `channels.md`, `group-replies.md` |
@@ -203,7 +203,7 @@ sequenceDiagram
     R-->>Bot: Hợp lệ + fingerprint (sai thì không chạy)
 
     TG->>Bot: Tin, ảnh, caption
-    Note over Bot: 1. Gom tin (30s yên lặng, tối đa 60s)
+    Note over Bot: 1. Gom tin (mặc định 60 giây yên lặng, tối đa 120 giây)
 
     Note over Bot,R: 2. Lọc local trước model
     alt Mọi tin là nhờ review PR (F1), chỉ có link (F3), chỉ từ xã giao (F4) hoặc đùa giữa nhóm đang cười (F5)
