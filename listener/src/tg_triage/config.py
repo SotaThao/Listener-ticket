@@ -443,9 +443,8 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False,
         gh_token = read("gh-token") or ""
         proxy_secret = read("tg-proxy-secret") or ""
         router_key = read("router-key") if config.assistant.enabled else None
+        # Owner decision 2026-11-27: the read-only assistant token may equal gh-token.
         assistant_token = read("assistant-github-token")
-        if assistant_token and assistant_token == gh_token:
-            raise secrets.SecretError("assistant-github-token", "bad_format")
         if "model-key.json" in config.required_secrets:
             read("model-key.json", secrets.model_scope(config.model))
         if config.admin is not None:

@@ -372,7 +372,6 @@ def _secrets_command(args):
                 print(f"{name}: {_verify_value(name, value, config)}")
         with store.writer() as audit:
             if action == "set":
-                store.check_distinct_github(name, value)
                 snapshot = store.set(name, candidate, actor=actor, expires_at=expiry)
                 length = candidate.length
             else:

@@ -253,7 +253,7 @@ flowchart LR
 | Migrate thiếu hoặc đặt sai quyền làm bot dừng; vì bỏ đọc env ngay nên không còn đường dự phòng | Cao | Migrate bằng code mới **trước** khi deploy; `check-config` của bản mới phải sạch; deploy tự rollback; giữ dòng env cũ cho code cũ; làm theo quy trình precheck trước deploy trên gw-01 |
 | Key lọt ra log hoặc response | Cao | Assert trong test; chỉ log tên key và độ dài |
 | Lỗi ở helper root (GĐ2) mở đường leo quyền | Cao | Helper tối giản: allowlist tên key và unit, không chạy lệnh shell; có review độc lập (GATE 0b) |
-| Lẫn lộn hai token GitHub (tạo issue và chỉ-đọc) | Trung bình | Hai tên riêng trên UI. Thêm kiểm tra mới: token chỉ-đọc không được trùng token tạo issue. Hiện quy tắc này mới chỉ là ghi chú trong `listener.example.toml`, code chưa chặn |
+| Lẫn lộn hai token GitHub (tạo issue và chỉ-đọc) | Trung bình | Hai tên riêng trên UI. Ban đầu code chặn hai token trùng nhau; ngày 27/11/2026 Owner quyết định **cho phép dùng chung** vì production đang dùng một token cho cả hai (deploy `f931c03` bị precheck chặn đúng ở điểm này). Khuyến nghị vẫn là token chỉ-đọc riêng: nếu dùng chung, trợ lý cầm token có quyền ghi issue |
 | Ai có mật khẩu admin cũng thay được key (GĐ2) | Trung bình | Owner chấp nhận. Giới hạn bằng: nhập lại mật khẩu mỗi lần, nhật ký, báo Telegram ops, mật khẩu admin chỉ đổi local |
 
 ## 8. Quyết định của Owner (26/11/2026)
@@ -265,6 +265,7 @@ flowchart LR
 | 3 | `secrets verify` có được gọi ra dịch vụ ngoài? | Có |
 | 4 | Nhắc hết hạn key? | Có: trước 7 ngày, chỉ trên dashboard admin |
 | 5 | Khi nào bỏ đọc key từ env? | Ngay trong bản phát hành GĐ1 |
+| 6 | (27/11/2026) Token chỉ-đọc của trợ lý có được trùng `gh-token`? | Có. Bỏ kiểm tra trùng ở lúc khởi động, `set`, `rollback` và `migrate` |
 
 ## 9. Task và ước lượng
 
