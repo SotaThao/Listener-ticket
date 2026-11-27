@@ -32,6 +32,16 @@ class SecretFixture(unittest.TestCase):
         self.source = EXAMPLE.read_text(encoding="utf-8")
         self.enterContext(patch.object(secrets, "PLATFORM", secrets.Platform(unix=False, euid=lambda: 0)))
         self.enterContext(patch.object(secrets, "DEFAULT_ENV_FILE", self.env_file))
+        if os.name == "posix":
+            # Platform(unix=False) leaves test files in the runner's own group, while the real
+            # readers (agentfleet_common read_key, config._assistant_token) still resolve
+            # "tglistener" on POSIX. Map that name to the runner's group so the suite behaves
+            # the same on a host that has a real tglistener group (gw-01) and one that has none.
+            import grp
+
+            real_getgrnam = grp.getgrnam
+            self.enterContext(patch("grp.getgrnam", lambda name: SimpleNamespace(gr_gid=os.getegid())
+                                    if name == "tglistener" else real_getgrnam(name)))
         self.store = secrets.SecretsStore(secrets.SecretPaths(self.directory, self.audit))
         self.configure()
 
