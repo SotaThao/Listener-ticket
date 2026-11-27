@@ -26,6 +26,7 @@ from tg_triage.pipeline import Pipeline
 from tg_triage.rules import evaluate
 from tg_triage.store import Store
 from tg_triage import telegram_io
+from tests.helpers import FAKE_TG_SECRETS, load_with_test_secrets, put_test_secret, write_test_config
 from tests.helpers import EXAMPLE, FAKE_HASH, FAKE_TOKEN, FakeClassifier, FakeGitHub, FakeHTTP, NOW, ROOT, classification, config, message
 from tests.test_telegram_io import event
 
@@ -192,28 +193,27 @@ class ReviewFixTests(unittest.TestCase):
     def test_f7_proxy_secret_environment_only(self):
         source = EXAMPLE.read_text(encoding="utf-8").replace('host = ""', 'host = "proxy.example.invalid"')
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "proxy.toml"
-            path.write_text(source, encoding="utf-8")
-            env = {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH, "TG_PROXY_SECRET": "TEST_PROXY"}
-            value = load_config(path, env)
+            path = write_test_config(Path(directory) / "proxy.toml", source)
+            secret = put_test_secret(path.parent / "secrets", "tg-proxy-secret", "TEST_PROXY")
+            value = load_config(path, {})
             self.assertEqual(value.telegram.proxy.secret, "TEST_PROXY")
-            env.pop("TG_PROXY_SECRET")
-            with self.assertRaisesRegex(ValueError, "TG_PROXY_SECRET"):
-                load_config(path, env)
+            secret.unlink()
+            with self.assertRaisesRegex(ValueError, "tg-proxy-secret: missing"):
+                load_config(path, {"TG_PROXY_SECRET": "TEST_PROXY"})
         self.assertNotIn("secret", tomllib.loads(EXAMPLE.read_text())["telegram"]["proxy"])
 
     def test_f7_toml_secret_is_rejected_and_proxy_redaction_uses_length(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
             source = EXAMPLE.read_text().replace("port = 443", 'port = 443\nsecret = "TEST_PROXY"')
-            path.write_text(source, encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "TG_PROXY_SECRET"):
-                load_config(path, {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH})
-        value = load_config(EXAMPLE, {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH, "TG_PROXY_SECRET": "TEST_PROXY"})
+            write_test_config(path, source)
+            with self.assertRaisesRegex(ValueError, "telegram.proxy.secret"):
+                load_config(path, {})
+        value = load_with_test_secrets(EXAMPLE, credentials={**FAKE_TG_SECRETS, "tg-proxy-secret": "TEST_PROXY"})
         self.assertEqual(value.redacted()["telegram"]["proxy"]["secret"], {"length": 10})
 
     def test_f8_blank_mode_error_classes_and_unit_restart_policy(self):
-        value = load_config(EXAMPLE, {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH, "TG_TRIAGE_MODE": ""})
+        value = load_with_test_secrets(EXAMPLE, {"TG_TRIAGE_MODE": ""})
         self.assertEqual(value.mode, "dry-run")
         with patch("tg_triage.__main__.load_config", return_value=config()), \
                 patch("tg_triage.__main__.validate_data_directories"), \

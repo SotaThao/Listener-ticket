@@ -52,15 +52,51 @@ then check that the unit is active.
 
 Use `config/listener.example.toml` as the TOML template. Store deployment config
 at `/etc/tg-triage/listener.toml`, root:root mode 644. Do not place it inside the
-root-only `/etc/agentfleet` directory. Supply `TG_API_ID`, `TG_API_HASH` through
-the environment; live mode additionally requires `GH_TOKEN` and `GH_REPO`.
-`TG_TRIAGE_MODE`, if non-empty, overrides TOML; an empty value is ignored.
-MTProxy credentials come only from `TG_PROXY_SECRET`, required when proxy host
-is configured. A proxy secret key in TOML is rejected. The CLI does not load dotenv.
-`check-config` prints only the lengths of credential fields.
+root-only `/etc/agentfleet` directory. `GH_REPO` and `TG_TRIAGE_MODE` stay in the
+service's EnvironmentFile `/etc/agentfleet/tg-triage.env`. A non-empty mode
+overrides TOML. `check-config` reports credential lengths and warns about
+ignored legacy declarations. Use `--env-file` to check a staged config against
+the unit's env file without exporting variables into your shell.
+
+### Quản lý key
+
+Các key chỉ được đọc từ `[secrets] dir` (mặc định `/etc/tg-triage/secrets`).
+Admin → **Key & cấu hình** xem trạng thái và nhắc hết hạn trong 7 ngày. Đổi key
+qua CLI trên máy chạy. Các lệnh ghi cần `sudo` và hỏi giá trị hai lần, không hiện ký tự.
+Nhóm lệnh `secrets` ưu tiên `GH_REPO` và `TG_TRIAGE_MODE` trong môi trường tiến
+trình. Nếu thiếu, lệnh tự đọc đúng hai biến này từ file env của dịch vụ.
+Dùng `--env-file PATH` nếu file nằm ở chỗ khác.
+
+~~~sh
+sudo tg-triage secrets status
+sudo tg-triage secrets set gh-token --restart
+sudo tg-triage secrets set model-key.json --expires YYYY-MM-DD --restart
+sudo tg-triage secrets set admin-password --restart
+sudo tg-triage secrets rollback gh-token --restart
+~~~
+
+- `tg-api-id` và `tg-api-hash` luôn cần. `gh-token` cần ở live, `tg-proxy-secret`
+  cần khi có proxy, `model-key.json` cần khi bật model cloud, `router-key` cần
+  ở assistant live, và `admin-password` cần khi bật Admin. Không dùng chung
+  `assistant-github-token` với `gh-token`.
+- Model chỉ nhập giá trị key, CLI tạo scope từ `[model]`. Mật khẩu Admin chỉ
+  đổi qua CLI. Phiên Telegram vẫn đăng nhập tương tác bằng `tg-triage login`
+  dưới user `tglistener`.
+- `--stdin` nhận một dòng. Chỉ `secrets verify NAME` hoặc `set … --verify` gọi
+  dịch vụ ngoài. GitHub không tạo issue thử. Scope ghi không xác nhận được qua
+  kiểm tra chỉ đọc sẽ được báo riêng.
+- `status` cần `sudo` hoặc quyền đọc secrets qua nhóm `tglistener`. Dùng `sudo`
+  nếu thiếu biến cấu hình trong shell và file env chỉ root đọc được.
+- `--restart` kiểm config, dừng hẳn unit rồi khởi động lại và kiểm journal của
+  PID mới. Nếu kiểm tra lỗi, CLI thử khôi phục key cũ. Nếu báo chưa khôi phục
+  hoàn chỉnh, Owner cần xử lý thủ công. Mỗi key giữ một bản trong `.prev/`. Audit nằm ở
+  `/var/log/tg-triage/secrets-audit.log` hoặc `[secrets] audit_log`.
+  Vì `--restart` luôn khởi động lại unit kể cả khi bot đang dừng có chủ đích
+  (halt H1–H7 hoặc chưa có phiếu GO), khi đó hãy thay key KHÔNG kèm `--restart`.
+- Khi nâng cấp từ release cũ, Owner làm theo [thứ tự cut-over](../deploy/README.md#listener-key-cut-over-giai-đoạn-1).
 
 ```text
-python -m tg_triage check-config --config /etc/tg-triage/listener.toml
+sudo tg-triage check-config --config /etc/tg-triage/listener.toml --env-file /etc/agentfleet/tg-triage.env
 python -m tg_triage login --config /etc/tg-triage/listener.toml
 python -m tg_triage run --config /etc/tg-triage/listener.toml
 python -m tg_triage export-csv --config /etc/tg-triage/listener.toml --out /var/lib/agentfleet/tg/review.csv

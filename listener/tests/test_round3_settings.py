@@ -17,9 +17,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import tests
 from tg_triage import classifier, rules, telegram_io
 from agentfleet_common import model_lock
-from tg_triage.config import ConfigError, load_config
+from tg_triage.config import ConfigError
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
+from tests.helpers import load_with_test_secrets
 from tests.helpers import EXAMPLE, FAKE_HASH, FakeClassifier, FakeGitHub, FakeHTTP, config
 from tests.test_telegram_io import event
 
@@ -29,16 +30,15 @@ class PrefixConfigTests(unittest.TestCase):
         return re.sub(r'^ignored_command_prefixes.*\r?\n','',EXAMPLE.read_text(encoding='utf-8'),flags=re.M)
 
     def test_default_empty_and_valid_example_and_immutable_roundtrips(self):
-        env={'TG_API_ID':'123','TG_API_HASH':FAKE_HASH}
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory)/'cfg.toml';p.write_text(self.source(),encoding='utf-8')
-            self.assertEqual(load_config(p,env).telegram.ignored_command_prefixes,())
+            self.assertEqual(load_with_test_secrets(p).telegram.ignored_command_prefixes,())
             p.write_text(self.source().replace('[telegram]','[telegram]\nignored_command_prefixes=["/Aux","/Else"]'),encoding='utf-8')
-            value=load_config(p,env)
+            value=load_with_test_secrets(p)
             self.assertEqual(value.telegram.ignored_command_prefixes,('/Aux','/Else'))
             self.assertEqual(copy.deepcopy(value),value);self.assertEqual(pickle.loads(pickle.dumps(value)),value)
             self.assertEqual(dataclasses.asdict(value)['telegram']['ignored_command_prefixes'],('/Aux','/Else'))
-        self.assertEqual(load_config(EXAMPLE,env).telegram.ignored_command_prefixes,('/nailhub',))
+        self.assertEqual(load_with_test_secrets(EXAMPLE).telegram.ignored_command_prefixes,('/nailhub',))
 
     def test_invalid_prefix_setting_fails_without_echoing_input(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -46,7 +46,7 @@ class PrefixConfigTests(unittest.TestCase):
             for raw in ('"/Aux"','[1]','[true]','[""]','["PRIVATE"]','[" /Aux"]','["/Aux\\nPRIVATE"]'):
                 p.write_text(self.source().replace('[telegram]','[telegram]\nignored_command_prefixes='+raw),encoding='utf-8')
                 with self.subTest(raw=raw),self.assertRaises(ConfigError) as caught:
-                    load_config(p,{'TG_API_ID':'123','TG_API_HASH':FAKE_HASH})
+                    load_with_test_secrets(p)
                 self.assertIn('ignored_command_prefixes',str(caught.exception));self.assertNotIn('PRIVATE',str(caught.exception))
 
 
@@ -56,7 +56,7 @@ class PrefixConfigTests(unittest.TestCase):
                 p=Path(directory)/'cfg.toml'
                 p.write_text(self.source().replace('[telegram]','[telegram]\nignored_command_prefixes='+json.dumps(prefixes)),encoding='utf-8')
                 with self.assertRaises(ConfigError) as caught:
-                    load_config(p,{'TG_API_ID':'123','TG_API_HASH':FAKE_HASH})
+                    load_with_test_secrets(p)
                 for prefix in prefixes:self.assertNotIn(prefix,str(caught.exception))
 
     def test_all_owned_commands_and_their_prefixes_are_rejected_from_canonical_rule(self):
@@ -66,7 +66,7 @@ class PrefixConfigTests(unittest.TestCase):
                 with self.subTest(command=command,size=size),tempfile.TemporaryDirectory() as directory:
                     p=Path(directory)/'cfg.toml'
                     p.write_text(self.source().replace('[telegram]','[telegram]\nignored_command_prefixes='+json.dumps(['/'+command[:size]])),encoding='utf-8')
-                    with self.assertRaises(ConfigError):load_config(p,{'TG_API_ID':'123','TG_API_HASH':FAKE_HASH})
+                    with self.assertRaises(ConfigError):load_with_test_secrets(p)
 
 class PrefixTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_prefix_skips_before_db_reaction_metadata_and_model(self):

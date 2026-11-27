@@ -10,10 +10,11 @@ from unittest.mock import AsyncMock
 from tg_triage import telegram_io
 from tg_triage.attachments import (DENIED_EXTENSIONS, DOCUMENT_EXTENSIONS, DOCUMENT_MIME,
                                    document_extension)
-from tg_triage.config import AttachmentsConfig, ConfigError, load_config
+from tg_triage.config import AttachmentsConfig, ConfigError
 from tg_triage.issue_format import document_label
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store, _to_message
+from tests.helpers import load_with_test_secrets
 from tests.helpers import (ASSET_BASE, EXAMPLE, FAKE_HASH, FAKE_TOKEN, JPG, NOW, Clock, FakeCaseModel,
                            FakeDownloader, FakeGitHub, FakeUploader, config, message, ticket)
 
@@ -416,17 +417,16 @@ class DocumentPersistenceTests(unittest.TestCase):
 
 
 class DocumentConfigTests(unittest.TestCase):
-    ENV = {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH}
 
     def load(self, extra=""):
         source = EXAMPLE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
             path.write_text(source + extra, encoding="utf-8")
-            return load_config(path, self.ENV)
+            return load_with_test_secrets(path)
 
     def test_example_and_defaults_are_five_documents_per_case(self):
-        self.assertEqual(load_config(EXAMPLE, self.ENV).attachments.max_documents_per_case, 5)
+        self.assertEqual(load_with_test_secrets(EXAMPLE).attachments.max_documents_per_case, 5)
         self.assertEqual(AttachmentsConfig().max_documents_per_case, 5)
 
     def test_value_is_read_and_zero_means_off_but_negative_or_wrong_type_is_an_error(self):
@@ -436,16 +436,16 @@ class DocumentConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
             path.write_text(source, encoding="utf-8")
-            self.assertEqual(load_config(path, self.ENV).attachments.max_documents_per_case, 3)
+            self.assertEqual(load_with_test_secrets(path).attachments.max_documents_per_case, 3)
             for value, ok in (("0", True), ("-1", False), ('"5"', False), ("1.5", False)):
                 path.write_text(source.replace("max_documents_per_case = 3",
                                                f"max_documents_per_case = {value}"), encoding="utf-8")
                 with self.subTest(value=value):
                     if ok:
-                        self.assertEqual(load_config(path, self.ENV).attachments.max_documents_per_case, 0)
+                        self.assertEqual(load_with_test_secrets(path).attachments.max_documents_per_case, 0)
                     else:
                         with self.assertRaisesRegex(ConfigError, "attachments.max_documents_per_case"):
-                            load_config(path, self.ENV)
+                            load_with_test_secrets(path)
 
 
 def event(**extra):

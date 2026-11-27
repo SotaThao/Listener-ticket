@@ -10,12 +10,13 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tg_triage.classifier import Classifier
-from tg_triage.config import ConfigError,load_config
+from tg_triage.config import ConfigError
 from tg_triage.models import CaseAnalysis
 from tg_triage.pacing import ChatCollector
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
 from tg_triage import telegram_io
+from tests.helpers import load_with_test_secrets
 from tests.helpers import config,message,classification,FakeHTTP,FakeGitHub,FakeDownloader,FakeUploader,JPG,EXAMPLE,FAKE_HASH
 
 
@@ -115,17 +116,17 @@ class SchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.toml'
             path.write_text(text, encoding='utf-8')
-            parsed = load_config(path, {'TG_API_ID': '123', 'TG_API_HASH': FAKE_HASH})
+            parsed = load_with_test_secrets(path)
             self.assertEqual((60, 120), (parsed.context_quiet_seconds, parsed.context_max_wait_seconds))
         for quiet,maximum,valid in ((30,60,True),(60,120,True),(120,120,True),(29,60,False),(30,121,False),(61,60,False),(True,60,False),(30.5,60,False)):
             extra=f'context_quiet_seconds = {str(quiet).lower()}\ncontext_max_wait_seconds = {maximum}\n'
             with self.subTest(quiet=quiet,maximum=maximum),tempfile.TemporaryDirectory() as directory:
                 path=Path(directory)/'config.toml'; path.write_text(text.replace('[thinking]','[thinking]\n'+extra),encoding='utf-8')
                 if valid:
-                    parsed=load_config(path,{'TG_API_ID':'123','TG_API_HASH':FAKE_HASH})
+                    parsed=load_with_test_secrets(path)
                     self.assertEqual((quiet,maximum),(parsed.context_quiet_seconds,parsed.context_max_wait_seconds))
                 else:
-                    with self.assertRaises(ConfigError): load_config(path,{'TG_API_ID':'123','TG_API_HASH':FAKE_HASH})
+                    with self.assertRaises(ConfigError): load_with_test_secrets(path)
 
     def test_default_window_collects_four_messages_with_27_46_24_second_gaps(self):
         collector = ChatCollector()

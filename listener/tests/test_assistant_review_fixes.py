@@ -18,6 +18,7 @@ from tg_triage.router_transport import RouterError
 from tg_triage.rules_intake import _evaluate_batch, evaluate_batch
 from tg_triage.store import Store
 from tg_triage.thinking import decision_turn
+from tests.helpers import write_test_config
 from tests.helpers import config, message, EXAMPLE, FAKE_HASH
 from tests.test_assistant_integration import Clock, Provider, reply, proposal
 
@@ -224,12 +225,12 @@ class AssistantReviewFixTests(unittest.TestCase):
         missing = json.dumps(str(self.root / 'private-key-path'))
         text = EXAMPLE.read_text(encoding='utf8')
         for mode in ('shadow', 'live'):
-            path.write_text(text + '\nenabled = true\nmode = "' + mode + '"\nrouter_key_file = ' + missing, encoding='utf8')
+            write_test_config(path, text + '\nenabled = true\nmode = "' + mode + '"\nrouter_key_file = ' + missing)
             if mode == 'shadow':
-                self.assertIsNone(load_config(path, {'TG_API_ID':'1', 'TG_API_HASH':FAKE_HASH}).assistant.router_key)
+                self.assertIsNone(load_config(path, {}).assistant.router_key)
             else:
-                with self.assertRaisesRegex(ConfigError, '^assistant: live mode requires a configured router key$'):
-                    load_config(path, {'TG_API_ID':'1', 'TG_API_HASH':FAKE_HASH})
+                with self.assertRaisesRegex(ConfigError, '^router-key: missing'):
+                    load_config(path, {})
 
 
 if __name__ == '__main__': unittest.main()

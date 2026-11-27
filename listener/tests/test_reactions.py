@@ -12,10 +12,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from tg_triage import reactions, rules, telegram_io
-from tg_triage.config import ConfigError, load_config
+from tg_triage.config import ConfigError
 from tg_triage.models import Decision
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
+from tests.helpers import load_with_test_secrets
 from tests.helpers import (EXAMPLE, FAKE_HASH, NOW, Clock, FakeClassifier, FakeGitHub,
                            FakeTopicModel, NumberedGitHub, at, classification, config, message,
                            topic)
@@ -469,10 +470,10 @@ class ListenAllGroupsConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "c.toml"
             path.write_text(text, encoding="utf-8")
-            return load_config(path, {"TG_API_ID": "1", "TG_API_HASH": FAKE_HASH})
+            return load_with_test_secrets(path)
 
     def test_default_is_false_and_example_loads(self):
-        value = load_config(EXAMPLE, {"TG_API_ID": "1", "TG_API_HASH": FAKE_HASH})
+        value = load_with_test_secrets(EXAMPLE)
         self.assertFalse(value.telegram.listen_all_groups)
 
     def test_all_groups_with_empty_or_absent_chat_ids_is_valid(self):
@@ -582,7 +583,7 @@ class SourceReactionsSwitchTests(unittest.IsolatedAsyncioTestCase):
         return ListenAllGroupsConfigTests.load(self, "chat_ids = [-1001234567890]\n" + telegram_lines)
 
     def test_default_on_example_on_and_false_loads(self):
-        self.assertTrue(load_config(EXAMPLE, {"TG_API_ID": "1", "TG_API_HASH": FAKE_HASH}).telegram.source_reactions)
+        self.assertTrue(load_with_test_secrets(EXAMPLE).telegram.source_reactions)
         self.assertTrue(self.load("").telegram.source_reactions)
         self.assertFalse(self.load("source_reactions = false").telegram.source_reactions)
 

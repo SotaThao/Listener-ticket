@@ -25,6 +25,7 @@
     <nav id="view-nav" class="view-nav" aria-label="Chế độ theo dõi" hidden>
       <a id="batch-view-link" href="#batches">Theo dõi batch</a>
       <a id="run-view-link" href="#runs">Nhật ký lượt</a>
+      <a id="secrets-view-link" href="#secrets">Key &amp; cấu hình</a>
     </nav>
     <nav id="filters" class="filters" aria-label="Lọc lượt" hidden>
       <button type="button" class="chip" data-filter="" aria-pressed="true">Tất cả</button>
@@ -35,6 +36,10 @@
       <button id="chat-filter" type="button" class="chip" aria-haspopup="dialog" aria-pressed="false">Chat ▾</button>
       <button id="follow-button" type="button" class="chip" aria-pressed="true">Theo lượt mới nhất</button>
     </nav>
+    <aside id="expiry-banner" class="expiry-banner" aria-label="Hạn dùng key" hidden>
+      <span id="expiry-message" role="status"></span>
+      <a href="#secrets">Xem Key &amp; cấu hình</a>
+    </aside>
   </header>
 
   <p id="startup-status" class="status-text" role="status">Đang kiểm tra phiên đăng nhập…</p>
@@ -139,6 +144,20 @@
         </section>
       </div>
     </section>
+  </main>
+
+  <main id="secrets-dashboard" aria-labelledby="secrets-title" hidden>
+    <div class="secrets-content">
+      <h2 id="secrets-title">Key &amp; cấu hình</h2>
+      <p class="batch-note">Đổi key bằng lệnh <code>sudo</code> trên máy chạy. Lệnh tự dùng biến cấu hình từ file env của dịch vụ khi cần. Nếu dùng file khác, thêm <code>--env-file PATH</code>.</p>
+      <p id="secrets-status" class="batch-note" role="status">Đang đọc trạng thái key…</p>
+      <p id="copy-status" class="sr" role="status"></p>
+      <ul id="secrets-list" class="secrets-list"></ul>
+      <section class="card" aria-labelledby="telegram-session-title">
+        <h3 id="telegram-session-title">Phiên Telegram</h3>
+        <div id="telegram-session" class="c"><p class="batch-note">Đang kiểm tra file phiên…</p></div>
+      </section>
+    </div>
   </main>
 
   <dialog id="filter-dialog" class="filter-dialog" aria-labelledby="filter-label">

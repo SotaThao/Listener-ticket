@@ -19,6 +19,7 @@ from tg_triage.__main__ import main
 from tg_triage.config import ConfigError, load_admin_config, load_config
 from tg_triage.store import Store
 from tg_triage.ticket_templates import load_templates
+from tests.helpers import write_test_config
 from tests.helpers import EXAMPLE, FAKE_HASH
 
 
@@ -539,11 +540,11 @@ class AdminCommandTests(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.config = self.root / "listener.toml"
         self.hash_file = self.root / "passwd"
-        self.enterContext(patch.dict(os.environ, {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH}, clear=True))
+        self.enterContext(patch.dict(os.environ, {}, clear=True))
         self.enterContext(patch("os.umask"))
 
     def write_config(self, text):
-        self.config.write_text(text, encoding="utf-8")
+        write_test_config(self.config, text)
 
     def run_cli(self, *args):
         out, err = io.StringIO(), io.StringIO()
@@ -559,7 +560,7 @@ class AdminCommandTests(unittest.TestCase):
         for host in ("127.0.0.1", "100.81.90.91"):
             self.write_config(f'[admin]\nbind = "{host}:8787"\nsession_hours = 72\n')
             self.assertEqual(load_admin_config(self.config).address, (host, 8787))
-        for field in ('password_hash_file = "relative"', 'session_hours = 73', 'session_hours = true'):
+        for field in ('session_hours = 73', 'session_hours = true'):
             self.write_config(f"[admin]\n{field}\n")
             with self.subTest(field=field), self.assertRaises(ConfigError):
                 load_admin_config(self.config)
@@ -568,7 +569,7 @@ class AdminCommandTests(unittest.TestCase):
         for section in ("", '[admin]\n', f'[admin]\npassword_hash_file = "{self.hash_file.as_posix()}"\n'):
             self.write_config('[storage]\ndb_path = "db.sqlite3"\n' + section)
             self.assertEqual(self.run_cli("admin", "--config", str(self.config)),
-                             (2, "", "ConfigError: admin: password hash unavailable\n"))
+                             (2, "", "ConfigError: admin-password: missing (run secrets migrate or secrets set)\n"))
 
     def test_check_config_unchanged_without_admin_and_reports_section_when_present(self):
         source = EXAMPLE.read_text(encoding="utf-8")
@@ -579,14 +580,16 @@ class AdminCommandTests(unittest.TestCase):
         status, out, err = self.run_cli("check-config", "--config", str(self.config))
         self.assertEqual((status, err), (0, ""))
         self.assertEqual(out, json.dumps(expected, ensure_ascii=False, indent=2) + "\n")
-        self.write_config(source + f'\n[admin]\npassword_hash_file = "{self.hash_file.as_posix()}"\n')
-        for configured in (False, True):
-            if configured:
-                _hash_file(self.hash_file)
-            status, out, err = self.run_cli("check-config", "--config", str(self.config))
-            self.assertEqual((status, err), (0, ""))
-            expected["admin"] = {"bind": "127.0.0.1:8787", "configured": configured}
-            self.assertEqual(json.loads(out), json.loads(json.dumps(expected)))
+        self.write_config(source + '\n[admin]\n')
+        args = ("check-config", "--config", str(self.config))
+        status, out, err = self.run_cli(*args)
+        self.assertEqual((status, out), (2, ""))
+        self.assertIn("admin-password: missing", err)
+        _hash_file(self.root / "secrets" / "admin-password")
+        status, out, err = self.run_cli(*args)
+        self.assertEqual((status, err), (0, ""))
+        expected["admin"] = {"bind": "127.0.0.1:8787", "configured": True}
+        self.assertEqual(json.loads(out), json.loads(json.dumps(expected)))
 
     def test_bot_run_ignores_admin_config_and_never_imports_admin(self):
         self.write_config(EXAMPLE.read_text(encoding="utf-8") + '\n[admin]\nbind = "invalid"\n')

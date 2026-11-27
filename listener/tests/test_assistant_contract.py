@@ -14,6 +14,7 @@ from tg_triage.config import AssistantConfig, ConfigError, load_config
 from tg_triage.pipeline import Pipeline
 from tg_triage.rules_pending_store import RulesPendingStore
 from tg_triage.store import Store
+from tests.helpers import FAKE_ROUTER_KEY, FAKE_TG_SECRETS, write_test_config
 from tests.helpers import EXAMPLE, FAKE_HASH, NOW, FakeGitHub, config, message
 from tests.test_assistant_integration import Provider
 
@@ -287,8 +288,9 @@ class ConfigTests(unittest.TestCase):
     def load(self, extra):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
-            path.write_text(EXAMPLE.read_text(encoding="utf-8") + "\n" + extra, encoding="utf-8")
-            return load_config(path, {"TG_API_ID": "1", "TG_API_HASH": FAKE_HASH})
+            write_test_config(path, EXAMPLE.read_text(encoding="utf-8") + "\n" + extra,
+                              credentials={**FAKE_TG_SECRETS, "router-key": FAKE_ROUTER_KEY})
+            return load_config(path, {})
 
     def test_config_defaults_and_check_config_dump(self):
         public = self.load("").redacted()["assistant"]
@@ -303,9 +305,8 @@ class ConfigTests(unittest.TestCase):
                 self.load(extra)
 
     def test_config_decide_chat_ids(self):
-        with patch('tg_triage.config._assistant_token', return_value='test'):
-            settings = self.load('authority = "decide"\nmode = "live"\nenabled = true\n'
-                                 'decide_chat_ids = [-1001, -1002]')
+        settings = self.load('authority = "decide"\nmode = "live"\nenabled = true\n'
+                             'decide_chat_ids = [-1001, -1002]')
         self.assertEqual(settings.assistant.authority, "decide")
         self.assertEqual(settings.assistant.decide_chat_ids, (-1001, -1002))
         self.assertEqual(settings.redacted()["assistant"]["decide_chat_ids"], [-1001, -1002])
@@ -326,21 +327,19 @@ class ConfigTests(unittest.TestCase):
         for mode in ('"core"', '"small"', 'true'):
             with self.subTest(mode=mode), self.assertRaisesRegex(ConfigError, "assistant.pack_mode"):
                 self.load(f"pack_mode = {mode}")
-        with patch('tg_triage.config._assistant_token', return_value='test'):
-            settings = self.load('enabled = true\nmode = "live"\nauthority = "decide"\npack_mode = "core"')
+        settings = self.load('enabled = true\nmode = "live"\nauthority = "decide"\npack_mode = "core"')
         self.assertEqual(settings.redacted()["assistant"]["pack_mode"], "core")
 
     def test_core_lookup_budget_defaults_and_validates_range(self):
         base = 'enabled = true\nmode = "live"\nauthority = "decide"\npack_mode = "core"\n'
         self.assertNotIn('max_rule_lookups', self.load('').redacted()['assistant'])
-        with patch('tg_triage.config._assistant_token', return_value='test'):
-            self.assertEqual(self.load(base).assistant.max_rule_lookups, 6)
-            for value in (0, 12):
-                public = self.load(base + f'max_rule_lookups = {value}').redacted()['assistant']
-                self.assertEqual(public['max_rule_lookups'], value)
-            for value in ('-1', '13', 'true', '1.5', '"6"'):
-                with self.subTest(value=value), self.assertRaisesRegex(ConfigError, 'assistant.max_rule_lookups'):
-                    self.load(base + f'max_rule_lookups = {value}')
+        self.assertEqual(self.load(base).assistant.max_rule_lookups, 6)
+        for value in (0, 12):
+            public = self.load(base + f'max_rule_lookups = {value}').redacted()['assistant']
+            self.assertEqual(public['max_rule_lookups'], value)
+        for value in ('-1', '13', 'true', '1.5', '"6"'):
+            with self.subTest(value=value), self.assertRaisesRegex(ConfigError, 'assistant.max_rule_lookups'):
+                self.load(base + f'max_rule_lookups = {value}')
 
 
 class ProposeCompatibilityTests(unittest.TestCase):

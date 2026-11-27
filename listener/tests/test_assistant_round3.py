@@ -18,6 +18,7 @@ from tg_triage.models import Decision
 from tg_triage.pipeline import Pipeline
 from tg_triage.router_transport import RouterError, ToolCall
 from tg_triage.store import Store
+from tests.helpers import put_test_secret, write_test_config
 from tests.helpers import config, message, NOW, EXAMPLE, FAKE_HASH
 from tests.test_assistant_integration import Clock, Provider, reply, proposal
 
@@ -197,16 +198,13 @@ class AssistantRound3Tests(unittest.TestCase):
     def test_disabled_ignores_bad_router_key_file_without_reading_it(self):
         if not EXAMPLE.is_file(): self.skipTest('config example absent in distribution')
         secret = 'do-not-print-router-secret'
-        bad = self.root / 'router-key'; bad.write_text(secret, encoding='utf8'); os.chmod(bad, 0o644)
         settings = self.root / 'settings.toml'
-        original = config_module._assistant_token
+        bad = put_test_secret(self.root / 'secrets', 'router-key', secret)
+        os.chmod(bad, 0o644)
         for path in (str(bad), str(self.root / 'absent'), 'relative-unreadable-key'):
-            settings.write_text(EXAMPLE.read_text(encoding='utf8') + '\nrouter_key_file = ' + json.dumps(path), encoding='utf8')
-            def read_token(value):
-                if value == path: raise AssertionError('disabled must not read router key')
-                return original(value)
-            with patch('tg_triage.config._assistant_token', side_effect=read_token):
-                loaded = load_config(settings, {'TG_API_ID':'1','TG_API_HASH':FAKE_HASH})
+            write_test_config(settings, EXAMPLE.read_text(encoding='utf8') + '\nrouter_key_file = ' + json.dumps(path))
+            with patch.object(config_module, '_assistant_token', side_effect=AssertionError('disabled must not read router key')):
+                loaded = load_config(settings, {})
             self.assertFalse(loaded.assistant.enabled)
             self.assertIsNone(loaded.assistant.router_key)
             public = json.dumps(loaded.redacted())

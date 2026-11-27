@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 from tg_triage import classification_log as log
 from tg_triage.__main__ import _load_decision_rules, main
-from tg_triage.config import AssistantConfig, ConfigError, load_config
+from tg_triage.config import AssistantConfig, ConfigError
 from tg_triage.decision_rules import RulesSnapshot
 from tg_triage.legacy_preflight import REGISTRY, inspect
 from tg_triage.pipeline import Pipeline
@@ -22,6 +22,7 @@ from tg_triage.rules_pending_store import RulesPendingStore, check_before_recove
 from tg_triage.store import Store
 from tg_triage.thinking import CURRENT, Turn
 from tests import test_usage_fallback as fallback
+from tests.helpers import load_with_test_secrets
 from tests.helpers import Clock, EXAMPLE, FakeGitHub, FakeHTTP, config, message
 
 
@@ -883,18 +884,17 @@ class ClassificationLogTests(fallback.ProviderBase):
             self.assertEqual(main(['usage-daily', '--db', str(path)]), 0)
         self.assertEqual(json.loads(out.getvalue())['tz'], '+07:00')
         self.assertEqual(before, path.read_bytes())
-        env = {'TG_API_ID': '1', 'TG_API_HASH': '0' * 32}
-        self.assertEqual(load_config(EXAMPLE, env).assistant.retention_days, 90)
+        self.assertEqual(load_with_test_secrets(EXAMPLE).assistant.retention_days, 90)
         text = EXAMPLE.read_text(encoding='utf-8')
         settings = Path(self.tmp.name) / 'listener.toml'
         settings.write_text(text.replace('[assistant]\n# Retention for classification runs and their tool-call metadata only.\nretention_days = 90', ''), encoding='utf-8')
-        self.assertEqual(load_config(settings, env).assistant.retention_days, 90)
+        self.assertEqual(load_with_test_secrets(settings).assistant.retention_days, 90)
         for value in ('0', '-1', '"x"', 'true', '3651'):
             settings.write_text(text.replace('retention_days = 90', 'retention_days = ' + value), encoding='utf-8')
             with self.subTest(value=value), self.assertRaises(ConfigError):
-                load_config(settings, env)
+                load_with_test_secrets(settings)
         settings.write_text(text.replace('retention_days = 90', 'retention_days = 30'), encoding='utf-8')
-        self.assertEqual(load_config(settings, env).assistant.retention_days, 30)
+        self.assertEqual(load_with_test_secrets(settings).assistant.retention_days, 30)
 
     def test_startup_gate_1001_runs_supported_and_tool_roundtrip(self):
         path = Path(self.tmp.name) / 'gate.sqlite3'

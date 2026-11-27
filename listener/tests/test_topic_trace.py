@@ -10,10 +10,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tg_triage.__main__ import main
-from tg_triage.config import ConfigError, load_config
+from tg_triage.config import ConfigError
 from tg_triage.models import Decision
 from tg_triage.store import Store
 from tg_triage.trace import trace
+from tests.helpers import load_with_test_secrets
 from tests.helpers import NOW, message, classification, EXAMPLE
 
 REPO='sandbox/triage'
@@ -201,16 +202,16 @@ class TopicTraceTests(unittest.TestCase):
     def test_config_topic_memory_strict_boolean_default_false(self):
         cfg=Path(self.temp.name)/'config.toml'
         base=EXAMPLE.read_text(encoding='utf-8')
-        env={'TG_API_ID':'1','TG_API_HASH':'0'*32,'GH_TOKEN':'fake','GH_REPO':REPO}
+        env={'GH_REPO': REPO}
         cfg.write_text(base,encoding='utf-8')
-        self.assertFalse(load_config(cfg,env).topic_memory_enabled)
+        self.assertFalse(load_with_test_secrets(cfg, env).topic_memory_enabled)
         # Example already has a thinking table; append the key inside it.
         for value,expected in (('true',True),('"true"',None)):
             cfg.write_text(base.replace('topic_memory_enabled = false','topic_memory_enabled = '+value) if 'topic_memory_enabled = false' in base else base.replace('[thinking]','[thinking]\ntopic_memory_enabled = '+value),encoding='utf-8')
             if expected is None:
-                with self.assertRaises(ConfigError):load_config(cfg,env)
+                with self.assertRaises(ConfigError):load_with_test_secrets(cfg, env)
             else:
-                self.assertTrue(load_config(cfg,env).topic_memory_enabled)
+                self.assertTrue(load_with_test_secrets(cfg, env).topic_memory_enabled)
 
     def test_malformed_snapshot_and_nested_metadata_never_leak_or_crash(self):
         case,msgs=self.case((448,));self.issue(msgs[0]);self.followup(case,msgs[0])

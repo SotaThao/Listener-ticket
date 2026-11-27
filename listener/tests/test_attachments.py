@@ -10,10 +10,11 @@ from unittest.mock import patch
 
 from tg_triage import attachments
 from tg_triage.attachments import GhCliUploader, UploadError, release_tag, sniff_extension
-from tg_triage.config import AttachmentsConfig, ConfigError, load_config
+from tg_triage.config import AttachmentsConfig, ConfigError
 from tg_triage.models import CaseAnalysis
 from tg_triage.pipeline import Pipeline
 from tg_triage.store import Store
+from tests.helpers import load_with_test_secrets
 from tests.helpers import (ASSET_BASE, EXAMPLE, FAKE_HASH, FAKE_TOKEN, JPG, NOW, PNG, WEBP, Clock,
                            FakeCaseModel, FakeDownloader, FakeGitHub, FakeUploader, config, message,
                            classification, ticket)
@@ -373,13 +374,12 @@ class GhCliUploaderTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
-    ENV = {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH}
 
     def load(self, text):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
             path.write_text(text, encoding="utf-8")
-            return load_config(path, self.ENV)
+            return load_with_test_secrets(path)
 
     def without_sections(self):
         source = EXAMPLE.read_text(encoding="utf-8")
@@ -387,7 +387,7 @@ class ConfigTests(unittest.TestCase):
         return head + "[storage]\ndb_path = \"/tmp/x.sqlite3\"\n"
 
     def test_example_sets_the_documented_values(self):
-        value = load_config(EXAMPLE, self.ENV)
+        value = load_with_test_secrets(EXAMPLE)
         self.assertEqual((value.aggregation.window_minutes, value.aggregation.max_messages_per_case), (2, 20))
         self.assertEqual((value.attachments.max_bytes, value.attachments.max_per_case,
                           value.attachments.max_per_hour), (10485760, 5, 60))
@@ -430,7 +430,7 @@ class ConfigTests(unittest.TestCase):
                 self.load(f"{name} = 5\n" + self.without_sections().replace("mode", "mode", 1))
 
     def test_max_messages_per_window_defaults_to_40_and_is_validated(self):
-        self.assertEqual(load_config(EXAMPLE, self.ENV).aggregation.max_messages_per_window, 40)
+        self.assertEqual(load_with_test_secrets(EXAMPLE).aggregation.max_messages_per_window, 40)
         self.assertEqual(self.load(self.without_sections()).aggregation.max_messages_per_window, 40)
         value = self.load(self.without_sections() + "[aggregation]\nmax_messages_per_window = 7\n")
         self.assertEqual(value.aggregation.max_messages_per_window, 7)
@@ -440,7 +440,7 @@ class ConfigTests(unittest.TestCase):
                     self.load(self.without_sections() + f"[aggregation]\nmax_messages_per_window = {bad}\n")
 
     def test_check_config_redaction_includes_the_new_sections(self):
-        redacted = load_config(EXAMPLE, self.ENV).redacted()
+        redacted = load_with_test_secrets(EXAMPLE).redacted()
         # 12.9 added `max_messages_per_window` (chunk size sent to the model) to this section.
         self.assertEqual(redacted["aggregation"], {
             "window_minutes": 2, "max_messages_per_case": 20, "max_messages_per_window": 40})

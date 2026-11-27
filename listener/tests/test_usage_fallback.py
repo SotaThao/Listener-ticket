@@ -16,14 +16,15 @@ from urllib.error import URLError
 
 from agentfleet_common import ai_transport
 from agentfleet_common.ai_transport import ProviderError, complete, usage_of
-from tg_triage.config import ConfigError, ModelConfig, PricingConfig, load_config
+from tg_triage.config import ConfigError, ModelConfig, PricingConfig
 from tg_triage.provider import build_provider
 from tg_triage.store import Store
 from tg_triage.usage import UsageRecorder, price
+from tests.helpers import FAKE_MODEL_KEY, FAKE_TG_SECRETS, load_with_test_secrets, put_test_secret
 from tests.helpers import EXAMPLE, JPG, PNG, WEBP, FakeHTTP, config, message
 
 REAL_COMPLETE = ai_transport.complete
-KEY_ENV = {"AGENTFLEET_KEY_SCOPE": "deepseek|https://api.deepseek.com", "AGENTFLEET_API_KEY": "test-key"}
+MODEL_SCOPE = "deepseek|https://api.deepseek.com"
 CASE = json.dumps({"verdict": "ticket", "type": "bug", "title": "Lỗi đăng nhập", "summary": "Không đăng nhập được.",
                    "priority": "high", "confidence": 0.9, "key_message_ids": [1]}, ensure_ascii=False)
 DEEPSEEK_USAGE = {"prompt_tokens": 3024, "completion_tokens": 1300, "prompt_cache_hit_tokens": 1000,
@@ -62,16 +63,18 @@ class ProviderBase(unittest.TestCase):
         self.store = Store(":memory:")
         self.addCleanup(self.store.close)
         self.now = datetime(2026, 10, 14, 12, 0).timestamp()
-        patch.dict(os.environ, KEY_ENV).start()
         self.addCleanup(patch.stopall)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.key = put_test_secret(Path(self.tmp.name), "model-key.json",
+                                   json.dumps({"scope": MODEL_SCOPE, "key": "test-key"}))
 
     def provider(self, upstream, http=None, **model):
         self.upstream = upstream
         self.http = http or FakeHTTP()
         patch("agentfleet_common.ai_transport.complete",
               lambda *a, **k: REAL_COMPLETE(*a, transport=upstream, **k)).start()
+        model.setdefault("key_file", str(self.key))
         settings = replace(config(), model=model_config(**model))
         self.recorder = UsageRecorder(self.store, settings, clock=lambda: self.now)
         return build_provider(settings, opener=self.http, prompt="P", case_prompt="CASE",
@@ -202,11 +205,10 @@ class FallbackTests(ProviderBase):
         self.assertEqual(self.rows()[0]["prompt"], 3024)   # tokens of a wasted call are still counted
 
     def test_missing_key_or_consent_goes_to_ollama(self):
-        with patch.dict(os.environ, {"AGENTFLEET_API_KEY": ""}):
-            provider = self.provider(Upstream(), FakeHTTP(OLLAMA_ENVELOPE))
-            self.assertEqual(self.ask(provider).verdict, "ticket")
-            self.assertEqual([(r["role"], r["outcome"]) for r in self.rows()],
-                             [("primary", "key_required"), ("fallback", "ok")])
+        provider = self.provider(Upstream(), FakeHTTP(OLLAMA_ENVELOPE), key_file="")
+        self.assertEqual(self.ask(provider).verdict, "ticket")
+        self.assertEqual([(r["role"], r["outcome"]) for r in self.rows()],
+                         [("primary", "key_required"), ("fallback", "ok")])
         provider = self.provider(Upstream(), FakeHTTP(OLLAMA_ENVELOPE), cloud_consent=False)
         self.assertEqual(self.ask(provider).verdict, "ticket")
         self.assertEqual(self.upstream.calls, [])
@@ -294,8 +296,6 @@ class PricingTests(unittest.TestCase):
 
 
 class RetentionAndConfigTests(unittest.TestCase):
-    ENV = {"TG_API_ID": "1", "TG_API_HASH": "0" * 32}
-
     def test_rows_older_than_90_days_are_pruned_and_the_table_is_additive(self):
         store = Store(":memory:")
         self.addCleanup(store.close)
@@ -316,10 +316,12 @@ class RetentionAndConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
             path.write_text(text, encoding="utf-8")
-            return load_config(path, self.ENV)
+            return load_with_test_secrets(path, credentials={
+                **FAKE_TG_SECRETS, "model-key.json": json.dumps({"scope": MODEL_SCOPE, "key": FAKE_MODEL_KEY}),
+            })
 
     def test_example_defaults(self):
-        model = load_config(EXAMPLE, self.ENV).model
+        model = load_with_test_secrets(EXAMPLE).model
         self.assertEqual((model.cloud_image_consent, model.fallback, model.fallback_model, model.fallback_think),
                          (False, "ollama", "qwen3.5:9b", True))
         self.assertEqual(model.pricing, PricingConfig("USD", 0.006, 0.3, 1.2, 0.5, ("01:00-04:00", "06:00-10:00")))
