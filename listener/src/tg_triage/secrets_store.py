@@ -486,9 +486,6 @@ class SecretsStore:
         previous = snapshot.previous
         if previous is None:
             raise SecretError(name, "missing")
-        if name in GITHUB_TOKENS:
-            value = _read_secret(self._directory(True) / name, name, None, self.platform)
-            self.check_distinct_github(name, value)
         metadata = previous.metadata or {}
         if "length" in metadata:
             length = metadata["length"]
@@ -518,12 +515,6 @@ class SecretsStore:
 
     def _timestamp(self):
         return self.now().astimezone(timezone.utc).isoformat(timespec="seconds")
-
-    def check_distinct_github(self, name, value):
-        if name in GITHUB_TOKENS:
-            other = next(token for token in GITHUB_TOKENS if token != name)
-            if self.read(other, required=False) == value:
-                raise SecretError(name, "bad_format")
 
 
 def sudo_actor(environ):
@@ -618,18 +609,8 @@ def migration_plan(data, env_file, store, scope, *, required):
 
 def apply_migration(store, items, audit, *, actor, scope):
     """Do not overwrite a key already installed by a previous migration or rotation."""
-    to_write = []
-    planned_tokens = {}
-    for item in items:
-        if store.read(item.name, scope, required=False) is not None:
-            continue
-        if item.name in GITHUB_TOKENS:
-            value = item.value.data.decode("utf-8").rstrip("\n")
-            store.check_distinct_github(item.name, value)
-            if value in planned_tokens.values():
-                raise SecretError(item.name, "bad_format")
-            planned_tokens[item.name] = value
-        to_write.append(item)
+    # gh-token and assistant-github-token may hold the same value (Owner decision 2026-11-27).
+    to_write = [item for item in items if store.read(item.name, scope, required=False) is None]
     for item in to_write:
         snapshot = store.set(item.name, item.value, actor=actor, source="migrate")
         try:

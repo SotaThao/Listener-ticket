@@ -133,7 +133,8 @@ retention_days = 90
 # max_calls_per_minute = 20
 # queue_max = 200
 # daily_cap = 0 # off; counts model calls, not batches
-# Set assistant-github-token in the secrets directory (optional and distinct from gh-token).
+# Set assistant-github-token in the secrets directory (optional). A separate read-only token is
+# recommended, but reusing the gh-token value is allowed (Owner decision 2026-11-27).
 # github_repos = ["owner/repository"]
 # max_tool_calls = 8 # 1..8; cannot raise the hard limit.
 

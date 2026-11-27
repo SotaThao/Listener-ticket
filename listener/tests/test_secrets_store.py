@@ -295,21 +295,40 @@ class StorageTests(SecretFixture):
             self.assertEqual(admin._scrypt(password.encode(), salt, n, r, p), digest)
             self.assertNotIn(password.encode(), path.read_bytes() + self.audit.read_bytes())
 
-    def test_rollback_cannot_reuse_the_other_github_token(self):
+    def test_rollback_may_restore_a_token_equal_to_the_other_github_token(self):
+        # Owner decision 2026-11-27: gh-token and assistant-github-token may share one value.
         self.assertEqual(self.install("gh-token", FAKE_SECRET_TOKEN)[0], 0)
         self.assertEqual(self.install("gh-token", NEXT)[0], 0)
         self.assertEqual(self.install("assistant-github-token", FAKE_SECRET_TOKEN)[0], 0)
-        self.assertEqual(self.invoke("secrets", "rollback", "gh-token"),
-                         (2, "", "ConfigError: gh-token: bad_format\n"))
-        self.assertEqual(self.store.read("gh-token"), NEXT)
+        rc, _, err = self.invoke("secrets", "rollback", "gh-token")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(self.store.read("gh-token"), FAKE_SECRET_TOKEN)
+        self.assertEqual(self.store.read("assistant-github-token"), FAKE_SECRET_TOKEN)
 
-    def test_github_tokens_must_be_distinct_and_invalid_shapes_are_rejected(self):
+    def test_migrate_copies_a_github_token_shared_by_env_and_assistant_file(self):
+        # gw-01 case 2026-11-27: GH_TOKEN and [assistant] github_token_file hold the same value.
+        env_path = self.root / "legacy.env"
+        env_path.write_text(f'GH_TOKEN="{FAKE_SECRET_TOKEN}"\n', encoding="utf-8")
+        old = put_test_secret(self.root / "legacy", "assistant-github-token", FAKE_SECRET_TOKEN)
+        source = self.source.replace("[assistant]\n", f"[assistant]\ngithub_token_file = {json.dumps(old.as_posix())}\n")
+        self.assertNotEqual(source, self.source)
+        for file in self.directory.iterdir():
+            file.unlink()
+        self.directory.rmdir()
+        self.configure(source, credentials={})
+        rc, _, err = self.invoke("secrets", "migrate", "--env-file", str(env_path), "--apply")
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(self.store.read("gh-token"), FAKE_SECRET_TOKEN)
+        self.assertEqual(self.store.read("assistant-github-token"), FAKE_SECRET_TOKEN)
+        self.assertEqual(old.read_text(encoding="utf-8").strip(), FAKE_SECRET_TOKEN)
+
+    def test_github_tokens_may_be_shared_and_invalid_shapes_are_rejected(self):
         self.put("gh-token", FAKE_SECRET_TOKEN)
-        self.assertEqual(self.install("assistant-github-token", FAKE_SECRET_TOKEN),
-                         (2, "", "ConfigError: assistant-github-token: bad_format\n"))
-        self.put("assistant-github-token", FAKE_SECRET_TOKEN)
-        with self.assertRaisesRegex(ConfigError, "^assistant-github-token: bad_format$"):
-            load_config(self.config, {})
+        rc, _, err = self.install("assistant-github-token", FAKE_SECRET_TOKEN)
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(self.store.read("assistant-github-token"), FAKE_SECRET_TOKEN)
+        config = load_config(self.config, {})
+        self.assertEqual(config.assistant.github_token, config.gh_token)
         for name, bad in (("gh-token", "NO"), ("assistant-github-token", "FAKE TOKEN WITH SPACES HERE"),
                           ("tg-api-id", "-1"), ("tg-api-id", "0"), ("tg-api-hash", "g" * 32),
                           ("tg-proxy-secret", "FAKE\tPROXY"), ("router-key", "\x00FAKE"),
