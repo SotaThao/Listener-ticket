@@ -12,11 +12,12 @@ from pathlib import Path
 
 from tg_triage.classifier import (CASE_SCHEMA, TOPIC_SCHEMA, Classifier, parse_case_analysis,
                                   parse_topic_groups, strip_thinking)
-from tg_triage.config import ConfigError, ModelConfig, load_config
+from tg_triage.config import ConfigError, ModelConfig
 from tg_triage.models import CaseAnalysis, Decision, clean_reason
 from tg_triage.pipeline import Pipeline
 from tg_triage.provider import ModelProvider, OllamaProvider, build_provider
 from tg_triage.store import COLUMNS, Store
+from tests.helpers import load_with_test_secrets
 from tests.helpers import (EXAMPLE, FAKE_HASH, NOW, FakeCaseModel, FakeGitHub, FakeHTTP, FakeTopicModel,
                            NumberedGitHub, classification, config, message, ticket, topic)
 from tests.test_cases import CHAT, CaseBase, msg
@@ -320,13 +321,12 @@ class MigrationTests(unittest.TestCase):
 
 
 class ProviderConfigTests(unittest.TestCase):
-    ENV = {"TG_API_ID": "123", "TG_API_HASH": FAKE_HASH}
 
     def load(self, text):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
             path.write_text(text, encoding="utf-8")
-            return load_config(path, self.ENV)
+            return load_with_test_secrets(path)
 
     @staticmethod
     def example(**replacements):
@@ -337,7 +337,7 @@ class ProviderConfigTests(unittest.TestCase):
         return text
 
     def test_the_example_declares_the_model_table(self):
-        value = load_config(EXAMPLE, self.ENV)
+        value = load_with_test_secrets(EXAMPLE)
         self.assertEqual(value.model, ModelConfig("ollama", "qwen3.5:9b", True, 600.0))
         self.assertEqual((value.ollama.model, value.ollama.timeout_seconds), ("qwen3.5:9b", 600.0))
 

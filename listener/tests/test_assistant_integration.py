@@ -17,6 +17,7 @@ from tg_triage.router_transport import RouterError, RouterReply, ToolCall
 from tg_triage.rules_extraction import split_and_extract
 from tg_triage.rules_intake import _evaluate_batch
 from tg_triage.store import Store
+from tests.helpers import write_test_config
 from tests.helpers import config, message, FakeDownloader, FakeGitHub, FakeUploader, EXAMPLE, FAKE_HASH, JPG, NOW
 
 
@@ -851,8 +852,8 @@ class AssistantConfigIntegrationTests(unittest.TestCase):
         if not EXAMPLE.is_file(): self.skipTest('config example absent in distribution')
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.toml'
-            path.write_text(EXAMPLE.read_text(encoding='utf8') + '\n' + extra, encoding='utf8')
-            return load_config(path, {'TG_API_ID': '1', 'TG_API_HASH': FAKE_HASH})
+            write_test_config(path, EXAMPLE.read_text(encoding='utf8') + '\n' + extra)
+            return load_config(path, {})
 
     def test_defaults_and_existing_fields_preserved_no_key_disclosure(self):
         settings = self.load('')
@@ -867,10 +868,10 @@ class AssistantConfigIntegrationTests(unittest.TestCase):
     def test_missing_key_is_unavailable_not_startup_error(self):
         with tempfile.TemporaryDirectory() as directory:
             value = json.dumps(str(Path(directory) / 'absent-key'))
-            self.assertIsNone(self.load('router_key_file = ' + value).assistant.router_key)
+            self.assertIsNone(self.load('enabled = true\nrouter_key_file = ' + value).assistant.router_key)
 
     def test_endpoint_models_bounds_and_types(self):
-        for extra in ('enabled = 1', 'mode = "typo"', 'enabled = true\nrouter_key_file = "relative"',
+        for extra in ('enabled = 1', 'mode = "typo"',
                       'router_base_url = "https://evil.invalid/v1"', 'max_calls_per_minute = 21',
                       'queue_max = 201', 'turn_deadline_s = 181', 'daily_cap = -1',
                       'models = ["oc/test", "cx/test"]', 'models = ["mmf/test", "cx/test"]',

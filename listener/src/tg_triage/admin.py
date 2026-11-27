@@ -12,6 +12,7 @@ import secrets
 import select
 import socket
 import sqlite3
+import stat
 import threading
 import time
 import warnings
@@ -26,6 +27,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .assistant_contract import PHASE_DECIDE
 from .config import ConfigError, _validate_admin_secret_stat
+from .secrets_store import SecretError, SecretsStore, STATUS_LABELS
 
 
 POLL_SECONDS = 1
@@ -82,15 +84,11 @@ def _scrypt(password, salt, n, r, p):
     return hashlib.scrypt(password, salt=salt, n=n, r=r, p=p, dklen=32, maxmem=128 * 1024**2)
 
 
-def _read_password_hash(path):
+def _parse_password_hash(encoded):
     try:
-        if path is None or not path.is_file():
-            raise ValueError()
-        with path.open("rb") as stream:
-            _validate_admin_secret_stat(os.fstat(stream.fileno()))
-            encoded = stream.read(1025).strip()
         if len(encoded) > 1024:
             raise ValueError()
+        encoded = encoded.strip()
         scheme, n, r, p, salt, digest = encoded.split(b"$")
         n, r, p = int(n), int(r), int(p)
         salt, digest = (base64.b64decode(value, validate=True) for value in (salt, digest))
@@ -100,8 +98,33 @@ def _read_password_hash(path):
                 or not 8 <= len(salt) <= 64 or len(digest) != 32):
             raise ValueError()
         return salt, n, r, p, digest
-    except (OSError, ValueError, KeyError):
-        raise ConfigError("admin: password hash unavailable") from None
+    except ValueError:
+        raise SecretError("admin-password", "bad_format") from None
+
+
+def _read_password_hash(path):
+    try:
+        if path is None:
+            raise SecretError("admin-password", "missing")
+        _validate_admin_secret_stat(path.stat(follow_symlinks=False))
+        with path.open("rb") as stream:
+            _validate_admin_secret_stat(os.fstat(stream.fileno()))
+            return _parse_password_hash(stream.read(1025))
+    except FileNotFoundError:
+        raise ConfigError(str(SecretError("admin-password", "missing"))) from None
+    except OSError:
+        raise ConfigError("admin-password: bad_mode") from None
+    except SecretError as error:
+        raise ConfigError(str(error)) from None
+
+
+def _encode_password_hash(password):
+    """Shared scrypt format. Only the old admin-passwd writer remains exclusive-create."""
+    salt = secrets.token_bytes(16)
+    n, r, p = 2**16, 8, 1
+    digest = _scrypt(password.encode("utf-8"), salt, n, r, p)
+    params = f"scrypt${n}${r}${p}".encode("ascii")
+    return b"$".join((params, base64.b64encode(salt), base64.b64encode(digest))) + b"\n"
 
 
 def write_password_hash(path):
@@ -114,11 +137,7 @@ def write_password_hash(path):
         raise ConfigError("admin-passwd: a private terminal is required") from None
     if not password or password != confirmation:
         raise ConfigError("admin-passwd: passwords must be non-empty and match")
-    salt = secrets.token_bytes(16)
-    n, r, p = 2**16, 8, 1
-    digest = _scrypt(password.encode("utf-8"), salt, n, r, p)
-    encoded = b"$".join((f"scrypt${n}${r}${p}".encode("ascii"), base64.b64encode(salt),
-                         base64.b64encode(digest))) + b"\n"
+    encoded = _encode_password_hash(password)
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
         try:
@@ -595,14 +614,37 @@ def _json_bytes(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
+def _secret_status(store, required, session_path, now):
+    rows = store.status(required, metadata_only=True, today=datetime.fromtimestamp(now).date())
+    session_state = "missing"
+    if session_path:
+        try:
+            session_state = "ok" if stat.S_ISREG(Path(session_path).stat().st_mode) else "bad_mode"
+        except FileNotFoundError:
+            pass
+        except OSError:
+            session_state = "bad_mode"
+    return {
+        "secrets": rows,
+        "telegram_session": {
+            "state": session_state, "status": STATUS_LABELS[session_state],
+            "command": "sudo -u tglistener tg-triage login",
+        },
+    }
+
+
 class AdminServer(ThreadingHTTPServer):
-    def __init__(self, address, db_path, password_hash_file, *, session_hours=12, clock=time.time):
+    def __init__(self, address, db_path, password_hash_file, *, session_hours=12, clock=time.time,
+                 secrets_store=None, required_secrets=frozenset(), telegram_session_path=""):
         host = ipaddress.IPv4Address(address[0])
         if not (host.is_loopback or host in ipaddress.IPv4Network("100.64.0.0/10")):
             raise ConfigError("admin.bind: expected a loopback or Tailscale IPv4 address and port")
         self.db_path = db_path
         self.clock = clock
         self.sessions = _Sessions(_read_password_hash(password_hash_file), session_hours * 3600, clock)
+        self.secret_store = secrets_store
+        self.required_secrets = required_secrets
+        self.telegram_session_path = telegram_session_path
         self.streams = threading.BoundedSemaphore(4)
         super().__init__(address, _Handler)
         port = self.server_address[1]
@@ -726,6 +768,13 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/me":
             self._json(200, {"ok": True, "server_time": self.server.clock(), "poll_ms": 1000})
+            return
+        if path == "/api/secrets":
+            if self.server.secret_store is None:
+                self._unavailable()
+            else:
+                self._json(200, _secret_status(self.server.secret_store, self.server.required_secrets,
+                                               self.server.telegram_session_path, self.server.clock()))
             return
         if path == "/api/stream":
             self._stream()
@@ -872,7 +921,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 def serve(config, db_path):
     if config is None:
-        raise ConfigError("admin: password hash unavailable")
+        raise ConfigError(str(SecretError("admin-password", "missing")))
     with AdminServer(config.address, db_path, config.password_hash_file,
-                     session_hours=config.session_hours) as server:
+                     session_hours=config.session_hours, secrets_store=SecretsStore(config.secrets),
+                     required_secrets=config.required_secrets,
+                     telegram_session_path=config.telegram_session_path) as server:
         server.serve_forever()

@@ -1,16 +1,19 @@
 """Load TOML settings and credentials without exposing input in errors."""
 
+from __future__ import annotations
+
 import ipaddress
 import math
 import os
 import re
 import stat
 import tomllib
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from . import rules
+from . import secrets_store as secrets
 
 
 class ConfigError(ValueError):
@@ -159,6 +162,9 @@ class AdminConfig:
     bind: str
     password_hash_file: Path | None
     session_hours: int
+    secrets: secrets.SecretPaths = field(default_factory=secrets.SecretPaths)
+    required_secrets: frozenset[str] = frozenset()
+    telegram_session_path: str = ""
 
     @property
     def address(self):
@@ -177,7 +183,7 @@ class Config:
     ollama: OllamaConfig
     max_issues_per_hour: int
     db_path: str
-    api_id: int
+    api_id: int = field(repr=False)
     api_hash: str = field(repr=False)
     gh_token: str = field(default="", repr=False)
     gh_repo: str = ""
@@ -192,12 +198,17 @@ class Config:
     decision_rules_enabled: bool = False
     assistant: AssistantConfig = field(default_factory=AssistantConfig)
     admin: AdminConfig | None = field(default=None, repr=False)
+    secrets: secrets.SecretPaths = field(default_factory=secrets.SecretPaths)
+    required_secrets: frozenset[str] = frozenset()
 
     def redacted(self) -> dict:
         result = asdict(self)
         result.pop("admin")
+        result.pop("required_secrets")
+        result["secrets"] = {"dir": str(self.secrets.dir), "audit_log": str(self.secrets.audit_log)}
         if self.admin is not None:
             result["admin"] = {"bind": self.admin.bind, "configured": self.admin.configured}
+        result["model"].pop("key_file")
         result['assistant'].pop('github_token')
         result['assistant'].pop('github_token_file')
         result['assistant'].pop('router_key')
@@ -214,6 +225,7 @@ class Config:
             result['assistant']['github_token_configured'] = bool(self.assistant.github_token)
         for key in ("api_hash", "gh_token"):
             result[key] = {"length": len(getattr(self, key))}
+        result["api_id"] = {"length": len(str(self.api_id))}
         result["telegram"]["proxy"]["secret"] = {
             "length": len(self.telegram.proxy.secret)
         }
@@ -311,23 +323,77 @@ def load_database_path(path):
     return _string(_table(_read_toml(path), "storage"), "db_path", "storage.db_path")
 
 
-def load_admin_config(path):
-    return _parse_admin_config(_read_toml(path))
-
-
-def _validate_admin_secret_stat(info):
+def _validate_admin_secret_stat(info, *, name="admin-password", platform=None):
+    platform = secrets.PLATFORM if platform is None else platform
     if not stat.S_ISREG(info.st_mode):
-        raise ValueError()
-    if os.name != "nt":
+        raise secrets.SecretError(name, "bad_mode")
+    if platform.unix:
         if info.st_mode & 0o027:
-            raise ValueError()
+            raise secrets.SecretError(name, "bad_mode")
         if info.st_mode & 0o040:
-            import grp
-            if info.st_gid != grp.getgrnam("tglistener").gr_gid:
-                raise ValueError()
+            try:
+                group = platform.group_id()
+            except (OSError, KeyError):
+                raise secrets.SecretError(name, "bad_owner") from None
+            if info.st_gid != group:
+                raise secrets.SecretError(name, "bad_owner")
 
 
-def _parse_admin_config(data):
+def _secrets_paths(data):
+    table = _optional_table(data, "secrets")
+
+    def absolute(key, default):
+        value = _string(table, key, f"secrets.{key}", default=default.as_posix())
+        target = Path(value)
+        # Unix deployment configs can still be parsed by a Windows preflight.
+        if not target.is_absolute() and not (os.name == "nt" and PurePosixPath(value).is_absolute()):
+            raise ConfigError(f"secrets.{key}: expected absolute path")
+        return target
+
+    return secrets.SecretPaths(absolute("dir", secrets.DEFAULT_DIR),
+                               absolute("audit_log", secrets.DEFAULT_AUDIT_LOG))
+
+
+def _mode(data, env, *, default=None):
+    mode = env.get("TG_TRIAGE_MODE") or data.get("mode", default)
+    if mode not in ("dry-run", "live"):
+        raise ConfigError("mode: expected dry-run or live")
+    return mode
+
+
+def _required_secrets(data, mode, *, include_admin):
+    telegram = _optional_table(data, "telegram")
+    proxy = _optional_table(telegram, "proxy")
+    model = _optional_table(data, "model")
+    assistant = _optional_table(data, "assistant")
+    return secrets.required_names(
+        mode, proxy=bool(proxy.get("host")),
+        hosted=model.get("provider", "ollama") != "ollama" and model.get("cloud_consent") is True,
+        router_live=assistant.get("enabled") is True and assistant.get("mode") == "live",
+        admin=include_admin and "admin" in data,
+    )
+
+
+def load_admin_config(path, environ=None):
+    data = _read_toml(path)
+    if "admin" not in data:
+        return None
+    env = os.environ if environ is None else environ
+    mode = _mode(data, env, default="dry-run")
+    paths = _secrets_paths(data)
+    config = _parse_admin_config(data, paths, _required_secrets(data, mode, include_admin=True))
+    try:
+        _validate_admin_secret_stat(config.password_hash_file.stat(follow_symlinks=False))
+    except FileNotFoundError:
+        pass  # Admin startup will fail closed if the hash was not provisioned.
+    except secrets.SecretError as error:
+        raise ConfigError(str(error)) from None
+    except OSError:
+        raise ConfigError("admin-password: bad_mode") from None
+    return config
+
+
+def _parse_admin_config(data, paths, required):
     if "admin" not in data:
         return None
     table = _optional_table(data, "admin")
@@ -340,51 +406,95 @@ def _parse_admin_config(data):
             raise ValueError()
     except ValueError:
         raise ConfigError("admin.bind: expected a loopback or Tailscale IPv4 address and port") from None
-    filename = _string(table, "password_hash_file", "admin.password_hash_file", empty=True, default="")
-    target = Path(filename) if filename else None
-    if target is not None:
-        if not target.is_absolute():
-            raise ConfigError("admin.password_hash_file: expected absolute path")
-        try:
-            _validate_admin_secret_stat(target.stat())
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError, KeyError):
-            raise ConfigError("admin.password_hash_file: credentials unavailable") from None
     hours = _integer(table.get("session_hours", 12), "admin.session_hours")
     if hours > 72:
         raise ConfigError("admin.session_hours: expected integer from 1 to 72")
-    return AdminConfig(bind, target, hours)
+    session = _string(_optional_table(data, "telegram"), "session_path",
+                      "telegram.session_path", empty=True, default="")
+    return AdminConfig(bind, paths.dir / "admin-password", hours, paths, required, session)
 
 
-def load_config(path, environ=None, *, validate_only=False, include_admin=False) -> Config:
-    env = dict(os.environ if environ is None else environ)
-    if validate_only:
-        # Validate persisted schema independently of private systemd EnvironmentFile credentials.
-        # Genuine credentials and requested mode are checked again by authenticated startup.
-        env = {'TG_API_ID':'1','TG_API_HASH':'0'*32,'GH_TOKEN':'schema-validation','GH_REPO':'schema/validation','TG_PROXY_SECRET':'schema-validation'}
+def load_secrets_setup(path, environ=None):
+    """Parse settings for local secret management without opening any credentials."""
     data = _read_toml(path)
-    mode = env.get("TG_TRIAGE_MODE") or data.get("mode")
-    if mode not in ("dry-run", "live"):
-        raise ConfigError("mode: expected dry-run or live")
+    env = os.environ if environ is None else environ
+    return _parse_config(data, env, include_admin=True), data
+
+
+def load_config(path, environ=None, *, validate_only=False, include_admin=False,
+                warn_legacy=None) -> Config:
+    env = os.environ if environ is None else environ
+    data = _read_toml(path)
+    if warn_legacy is not None:
+        for declaration in secrets.legacy_declarations(data, env):
+            warn_legacy(declaration)
+    if validate_only:
+        # Validate the persisted TOML without probing accounts, credentials or env overrides.
+        return _parse_config(data, {}, include_admin=include_admin)
+    config = _parse_config(data, env, include_admin=include_admin)
+    store = secrets.SecretsStore(config.secrets)
+
+    def read(name, scope=None):
+        return store.read(name, scope, required=name in config.required_secrets)
+
     try:
-        api_id = int(env.get("TG_API_ID", ""))
-    except (ValueError, TypeError):
-        raise ConfigError("TG_API_ID: required positive integer") from None
-    if api_id <= 0:
-        raise ConfigError("TG_API_ID: required positive integer")
-    api_hash_value = env.get("TG_API_HASH", "")
-    if not re.fullmatch(r"[0-9a-fA-F]{32}", api_hash_value):
-        raise ConfigError("TG_API_HASH: required 32 hexadecimal characters")
-    gh_token = env.get("GH_TOKEN", "")
-    gh_repo = env.get("GH_REPO", "")
-    if mode == "live" and not gh_token.strip():
-        raise ConfigError("GH_TOKEN: required in live mode")
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in gh_token):
-        raise ConfigError("GH_TOKEN: control characters are not allowed")
-    if (mode == "live" or gh_repo) and not re.fullmatch(
-            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", gh_repo):
+        api_id = int(read("tg-api-id"))
+        api_hash = read("tg-api-hash")
+        gh_token = read("gh-token") or ""
+        proxy_secret = read("tg-proxy-secret") or ""
+        router_key = read("router-key") if config.assistant.enabled else None
+        assistant_token = read("assistant-github-token")
+        if assistant_token and assistant_token == gh_token:
+            raise secrets.SecretError("assistant-github-token", "bad_format")
+        if "model-key.json" in config.required_secrets:
+            read("model-key.json", secrets.model_scope(config.model))
+        if config.admin is not None:
+            read("admin-password")
+    except secrets.SecretError as error:
+        raise ConfigError(str(error)) from None
+    if (config.mode == "live" or config.gh_repo) and not valid_gh_repo(config.gh_repo):
         raise ConfigError("GH_REPO: expected owner/repo")
+    return replace(config, api_id=api_id, api_hash=api_hash, gh_token=gh_token,
+                   telegram=replace(config.telegram, proxy=replace(config.telegram.proxy, secret=proxy_secret)),
+                   assistant=replace(config.assistant, router_key=router_key, github_token=assistant_token,
+                                     router_key_file=str(store.path("router-key")) if router_key else "",
+                                     github_token_file=str(store.path("assistant-github-token"))
+                                     if assistant_token else ""))
+
+
+def valid_gh_repo(repo):
+    return (isinstance(repo, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
+            and all(part not in (".", "..") for part in repo.split("/")))
+
+
+def _validate_model_base_url(provider, base_url):
+    from agentfleet_common.ai_transport import validate_endpoint, ProviderError
+
+    try:
+        if provider == "compatible":
+            # Schema validation is offline. The shared transport still resolves and pins
+            # a public address before it sends a credential to a compatible endpoint.
+            parsed = urlsplit(base_url)
+            if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+                    or parsed.password is not None or parsed.query or parsed.fragment
+                    or parsed.port not in (None, 443)
+                    or any(ord(c) < 33 or ord(c) == 127 for c in base_url)):
+                raise ValueError()
+            try:
+                literal = ipaddress.ip_address(parsed.hostname)
+            except ValueError:
+                literal = None
+            if parsed.hostname == "localhost" or (literal is not None and not literal.is_global):
+                raise ValueError()
+        else:
+            validate_endpoint(provider, base_url)
+    except (ProviderError, TypeError, ValueError, AttributeError):
+        raise ConfigError("model.base_url: invalid endpoint") from None
+
+
+def _parse_config(data, env, *, include_admin):
+    mode = _mode(data, env)
+    paths = _secrets_paths(data)
     tg = _table(data, "telegram")
     ignored_prefixes = tg.get("ignored_command_prefixes", [])
     # COMMAND's first capturing group is the canonical alternation of owned names.
@@ -421,8 +531,7 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
     if port > 65535:
         raise ConfigError("telegram.proxy.port: expected port <= 65535")
     if "secret" in proxy:
-        raise ConfigError("telegram.proxy.secret: forbidden in TOML; use TG_PROXY_SECRET")
-    secret = _string(env, "TG_PROXY_SECRET", "TG_PROXY_SECRET", empty=not bool(host), default="")
+        raise ConfigError("telegram.proxy.secret: forbidden in TOML; use secrets set tg-proxy-secret")
     ollama = _table(data, "ollama")
     url = _string(ollama, "url", "ollama.url")
     try:
@@ -449,16 +558,12 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         timeout = _number(ollama["timeout_seconds"], "ollama.timeout_seconds", 0.001)
     else:
         timeout = DEFAULT_MODEL_TIMEOUT_SECONDS
-    from agentfleet_common.ai_transport import validate_endpoint, ProviderError, ENDPOINTS
+    from agentfleet_common.ai_transport import ENDPOINTS
     base_url = model_table.get("base_url", ENDPOINTS.get(provider, url))
-    try:
-        validate_endpoint(provider, base_url)
-    except ProviderError:
-        raise ConfigError("model.base_url: invalid endpoint") from None
+    _validate_model_base_url(provider, base_url)
     max_output = _integer(model_table.get("num_predict", 2048), "model.num_predict", 256)
     consent = model_table.get("cloud_consent", False)
-    key_file = model_table.get("key_file", "")
-    if max_output > 8192 or type(consent) is not bool or not isinstance(key_file, str) or (key_file and not Path(key_file).is_absolute()) or (provider != "ollama" and think):
+    if max_output > 8192 or type(consent) is not bool or (provider != "ollama" and think):
         raise ConfigError("model: invalid capability or limits")
     image_consent = model_table.get("cloud_image_consent", False)
     fallback = model_table.get("fallback", "ollama")
@@ -514,9 +619,6 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
     retention_days = _integer(assistant_table.get('retention_days', 90), 'assistant.retention_days')
     if retention_days > 3650:
         raise ConfigError('assistant.retention_days: expected integer 1..3650')
-    token_file = _string(assistant_table, 'github_token_file', 'assistant.github_token_file', empty=True, default='')
-    if token_file and not Path(token_file).is_absolute():
-        raise ConfigError('assistant.github_token_file: expected absolute path')
     repos = assistant_table.get('github_repos', [])
     if (not isinstance(repos, list) or any(not isinstance(repo, str) or not re.fullmatch(
             r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_.-]+', repo)
@@ -525,7 +627,6 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
     max_calls = _integer(assistant_table.get('max_tool_calls', 8), 'assistant.max_tool_calls')
     if max_calls > 8:
         raise ConfigError('assistant.max_tool_calls: expected integer 1..8')
-    github_token = _assistant_token(token_file)
     enabled = assistant_table.get('enabled', False)
     assistant_mode = assistant_table.get('mode', 'shadow')
     if type(enabled) is not bool or assistant_mode not in ('shadow', 'live'):
@@ -554,20 +655,9 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         validate_base_url(router_url)
     except RouterError:
         raise ConfigError('assistant.router_base_url: invalid loopback endpoint') from None
-    router_file = _string(assistant_table, 'router_key_file', 'assistant.router_key_file', empty=True, default='')
-    if enabled and router_file and not Path(router_file).is_absolute():
-        raise ConfigError('assistant.router_key_file: expected absolute path')
-    router_key = None
-    if enabled:
-        try:
-            router_key = _assistant_token(router_file)
-        except ConfigError:
-            raise ConfigError('assistant.router_key_file: credentials unavailable') from None
-    if enabled and assistant_mode == 'live' and not router_key:
-        raise ConfigError('assistant: live mode requires a configured router key')
     models = assistant_models(assistant_table.get('models', list(AssistantConfig.models)))
     extra = dict(enabled=enabled, mode=assistant_mode, router_base_url=router_url,
-                 router_key_file=router_file, router_key=router_key, models=tuple(models),
+                 models=tuple(models),
                  authority=authority, decide_chat_ids=tuple(decide_chats),
                  append_confidence=append_confidence, pack_mode=pack_mode,
                  max_rule_lookups=max_rule_lookups if pack_mode == 'core' else AssistantConfig.max_rule_lookups)
@@ -578,12 +668,15 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         extra[name] = _integer(assistant_table.get(name, default), 'assistant.' + name, minimum)
         if name != 'daily_cap' and extra[name] > default:
             raise ConfigError('assistant.' + name + ': exceeds hard limit')
+    required = _required_secrets(data, mode, include_admin=include_admin)
+    # Preserve the path field used by the installed model consumers. It is never taken from TOML.
+    key_file = str(paths.dir / "model-key.json") if "model-key.json" in required else ""
     return Config(
         mode=mode,
         telegram=TelegramConfig(
             _string(tg, "session_path", "telegram.session_path"), tuple(chats),
             _integer(tg.get("min_text_length"), "telegram.min_text_length", 0),
-            ProxyConfig(host, port, secret), listen_all, tuple(ignored_prefixes), ops_chat_id,
+            ProxyConfig(host, port), listen_all, tuple(ignored_prefixes), ops_chat_id,
             source_reactions),
         ollama=OllamaConfig(
             (base_url if provider == "ollama" else url).rstrip("/"), model_name, timeout,
@@ -591,7 +684,7 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         max_issues_per_hour=_integer(
             _table(data, "github").get("max_issues_per_hour"), "github.max_issues_per_hour"),
         db_path=_string(_table(data, "storage"), "db_path", "storage.db_path"),
-        api_id=api_id, api_hash=api_hash_value, gh_token=gh_token, gh_repo=gh_repo,
+        api_id=1, api_hash="0" * 32, gh_repo=env.get("GH_REPO", ""),
         aggregation=aggregation, attachments=attachments,
         model=ModelConfig(provider, model_name, think, timeout, base_url, max_output, consent, key_file,
                          image_consent, fallback, fallback_model, fallback_think, pricing),
@@ -601,30 +694,33 @@ def load_config(path, environ=None, *, validate_only=False, include_admin=False)
         context_quiet_seconds=context_quiet_seconds,
         context_max_wait_seconds=context_max_wait_seconds,
         decision_rules_enabled=decision_rules_enabled,
-        assistant=AssistantConfig(retention_days, token_file, tuple(repos), max_calls, github_token, **extra),
-        admin=_parse_admin_config(data) if include_admin else None,
+        assistant=AssistantConfig(retention_days=retention_days, github_repos=tuple(repos),
+                                  max_tool_calls=max_calls, **extra),
+        admin=_parse_admin_config(data, paths, required) if include_admin else None,
+        secrets=paths, required_secrets=required,
     )
 
 
-def _assistant_token(path):
+def _assistant_token(path, *, name=None, platform=None):
     """Optional plain-text secret, with the same Unix access rules as model keys."""
     if not path:
         return None
+    label = name or "assistant-github-token"
     try:
         target = Path(path)
-        if os.name != 'nt':
-            info = target.stat()
-            if info.st_mode & 0o027:
-                raise ValueError()
-            if info.st_mode & 0o040:
-                import grp
-                if info.st_gid != grp.getgrnam('tglistener').gr_gid:
-                    raise ValueError()
-        token = target.read_text(encoding='utf-8').strip()
+        _validate_admin_secret_stat(target.stat(), name=label, platform=platform)
+        with target.open("rb") as stream:
+            _validate_admin_secret_stat(os.fstat(stream.fileno()), name=label, platform=platform)
+            value = stream.read().decode("utf-8")
+        token = value.rstrip("\r\n") if name else value.strip()
         if any(ord(ch) < 33 or ord(ch) == 127 for ch in token):
-            raise ValueError()
+            raise secrets.SecretError(label, "bad_format")
         return token or None
     except FileNotFoundError:
         return None
-    except (OSError, ValueError, KeyError):
-        raise ConfigError('assistant.github_token_file: credentials unavailable') from None
+    except (OSError, UnicodeError, secrets.SecretError) as error:
+        if name is None:
+            raise ConfigError('assistant.github_token_file: credentials unavailable') from None
+        if isinstance(error, secrets.SecretError):
+            raise
+        raise secrets.SecretError(label, "bad_mode" if isinstance(error, OSError) else "bad_format") from None

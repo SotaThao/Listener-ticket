@@ -2,11 +2,13 @@
 
 import io
 import json
+import re
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from tg_triage.config import (AggregationConfig, AttachmentsConfig, Config, OllamaConfig,
-                              ProxyConfig, TelegramConfig)
+                              ProxyConfig, TelegramConfig, load_config)
 from tg_triage.models import CaseAnalysis, Classification, IncomingMessage, TopicGroup
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +16,47 @@ EXAMPLE = ROOT / "config" / "listener.example.toml"
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
 FAKE_HASH = "0123" * 8
 FAKE_TOKEN = "ghp_TEST"
+
+FAKE_SECRET_TOKEN = "ghp_FAKE_FOR_TEST_ONLY_0000"
+FAKE_READ_TOKEN = "github_FAKE_READ_TEST_ONLY"
+FAKE_ROUTER_KEY = "ROUTER_FAKE_FOR_TEST_ONLY"
+FAKE_MODEL_KEY = "MODEL_FAKE_FOR_TEST_ONLY"
+FAKE_TG_SECRETS = {"tg-api-id": "123", "tg-api-hash": FAKE_HASH}
+
+
+def put_test_secret(directory, name, value):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_bytes(value if isinstance(value, bytes) else value.encode("utf-8") + b"\n")
+    path.chmod(0o600)
+    return path
+
+
+def write_test_config(path, text, *, credentials=None):
+    directory = path.parent / "secrets"
+    section = ("[secrets]\n"
+               f"dir = {json.dumps(directory.as_posix())}\n"
+               f"audit_log = {json.dumps((path.parent / 'logs/secrets-audit.log').as_posix())}\n\n")
+    old = re.search(r"(?ms)^\[secrets\][^\n]*\n.*?(?=^\[|\Z)", text)
+    if old:
+        text = text[:old.start()] + section + text[old.end():]
+    else:
+        first_table = re.search(r"(?m)^\[", text)
+        start = first_table.start() if first_table else len(text)
+        text = text[:start] + "\n" + section + text[start:]
+    path.write_text(text, encoding="utf-8")
+    for name, value in (FAKE_TG_SECRETS if credentials is None else credentials).items():
+        put_test_secret(directory, name, value)
+    return path
+
+
+def load_with_test_secrets(path, environ=None, *, credentials=None, **kwargs):
+    """Use for config assertions that do not keep a credential path after loading."""
+    with tempfile.TemporaryDirectory() as directory:
+        clone = write_test_config(Path(directory) / "listener.toml",
+                                  Path(path).read_text(encoding="utf-8"), credentials=credentials)
+        return load_config(clone, {} if environ is None else environ, **kwargs)
+
 
 
 def config(mode="dry-run", limit=20, *, window=0, max_messages=20, attachments=None, max_window=40):

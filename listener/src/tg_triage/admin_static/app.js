@@ -5,6 +5,7 @@
   const list = $("runs-list");
   const dashboard = $("dashboard");
   const batchDashboard = $("batch-dashboard");
+  const secretsDashboard = $("secrets-dashboard");
   const detail = $("run-detail");
   const roundTemplate = $("run-round").cloneNode(true);
   const dialog = $("filter-dialog");
@@ -83,6 +84,9 @@
   let connected = false;
   let everConnected = false;
   let lastUpdate = null;
+  let secretsRequest = null;
+  let secretsTimer;
+  let secretsSnapshot = null;
 
   function element(tag, className, value) {
     const node = document.createElement(tag);
@@ -809,6 +813,117 @@
     return response;
   }
 
+  function secretBadge(item) {
+    const badge = element("span", "badge secret-state", item.status);
+    badge.dataset.state = item.state;
+    return badge;
+  }
+
+  function secretCommand(command) {
+    const row = element("div", "secret-command");
+    const code = element("code", null, command);
+    const button = element("button", "action-btn", "Sao chép");
+    button.type = "button";
+    button.setAttribute("aria-label", "Sao chép lệnh " + command);
+    button.addEventListener("click", async () => {
+      let copied = false;
+      try {
+        if (navigator.clipboard) {
+          await navigator.clipboard.writeText(command);
+          copied = true;
+        }
+      } catch {
+        // Plain HTTP on the private network may not expose the Clipboard API.
+      }
+      if (!copied) {
+        const buffer = element("textarea", "secret-copy-buffer");
+        buffer.value = command;
+        buffer.readOnly = true;
+        buffer.tabIndex = -1;
+        document.body.append(buffer);
+        try {
+          buffer.select();
+          copied = document.execCommand("copy");
+        } catch {
+          // Leave the exact command selected for manual copy.
+        } finally {
+          buffer.remove();
+          button.focus({ preventScroll: true });
+        }
+      }
+      if (!copied) {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(code);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      button.textContent = copied ? "Đã chép" : "Chép thủ công";
+      setText($("copy-status"), copied ? "Đã sao chép lệnh." : "Đã chọn lệnh để sao chép thủ công.");
+    });
+    row.append(code, button);
+    return row;
+  }
+
+  function renderSecrets(payload) {
+    const expired = payload.secrets.filter(item => item.expiry_state === "expired").length;
+    const expiring = payload.secrets.filter(item => item.expiry_state === "expiring").length;
+    const banner = $("expiry-banner");
+    banner.hidden = !expired && !expiring;
+    banner.dataset.state = expired ? "expired" : "expiring";
+    setText($("expiry-message"), [expired && expired + " key đã hết hạn",
+      expiring && expiring + " key sắp hết hạn"].filter(Boolean).join(" · "));
+
+    const cards = payload.secrets.map(item => {
+      const card = element("li", "card");
+      const heading = element("h3");
+      heading.append(element("span", null, item.description), secretBadge(item));
+      const content = element("div", "c");
+      const metadata = element("dl", "secret-details");
+      for (const [label, value] of [
+        ["Bắt buộc", item.required ? "Có" : "Không"],
+        ["Thay lần cuối", item.updated_at?.slice(0, 10)],
+        ["Người thay", item.updated_by],
+        ["Hết hạn", item.expires_at],
+      ]) metadata.append(element("dt", null, label), element("dd", null, value || "—"));
+      content.append(element("code", null, item.name), metadata, secretCommand(item.command));
+      card.append(heading, content);
+      return card;
+    });
+    $("secrets-list").replaceChildren(...cards);
+    const telegram = payload.telegram_session;
+    $("telegram-session").replaceChildren(secretBadge(telegram),
+      element("p", "batch-note", "Đăng nhập lại bằng CLI khi cần nhập OTP hoặc 2FA."),
+      secretCommand(telegram.command));
+  }
+
+  async function refreshSecrets() {
+    if (!active || document.hidden || secretsRequest) return;
+    clearTimeout(secretsTimer);
+    const job = {};
+    secretsRequest = job;
+    try {
+      const response = await request("/api/secrets");
+      if (!response) return;
+      if (!response.ok) throw new Error();
+      const payload = await response.json();
+      if (secretsRequest !== job) return;
+      const signature = JSON.stringify(payload);
+      if (secretsSnapshot !== signature) {
+        renderSecrets(payload);
+        secretsSnapshot = signature;
+      }
+      setStatus($("secrets-status"), "");
+    } catch {
+      if (secretsRequest === job) setStatus($("secrets-status"), "Không đọc được trạng thái key. Đang thử lại…");
+    } finally {
+      if (secretsRequest === job) {
+        secretsRequest = null;
+        secretsTimer = setTimeout(refreshSecrets, 60000);
+      }
+    }
+  }
+
   async function selectRun(id, refresh = false) {
     const ticket = ++detailRequest;
     selectedId = id;
@@ -1063,7 +1178,8 @@
 
   function syncView() {
     const id = hashId();
-    const nextView = id !== null || location.hash === "#runs" ? "runs" : "batches";
+    const nextView = location.hash === "#secrets" ? "secrets"
+      : id !== null || location.hash === "#runs" ? "runs" : "batches";
     if (nextView === view) {
       if (view === "runs") {
         updatePhoneView();
@@ -1073,11 +1189,16 @@
     }
     view = nextView;
     const batchView = view === "batches";
-    dashboard.hidden = batchView;
+    const runView = view === "runs";
+    dashboard.hidden = !runView;
     batchDashboard.hidden = !batchView;
-    $("filters").hidden = batchView;
+    secretsDashboard.hidden = view !== "secrets";
+    $("filters").hidden = !runView;
+    $("live-status").hidden = view === "secrets";
+    $("pause-button").hidden = view === "secrets";
     $("batch-view-link").setAttribute("aria-current", String(batchView));
-    $("run-view-link").setAttribute("aria-current", String(!batchView));
+    $("run-view-link").setAttribute("aria-current", String(runView));
+    $("secrets-view-link").setAttribute("aria-current", String(view === "secrets"));
     document.body.classList.toggle("show-batch-list", batchListOnPhone);
     if (batchView) {
       stopRunUpdates();
@@ -1085,13 +1206,17 @@
       batchUnavailable = false;
       batchLastUpdate = null;
       refreshBatches();
-    } else {
+    } else if (runView) {
       stopBatchUpdates();
       updatePhoneView();
       selectRun(id);
       if (runs.size) loadPage({ reconcile: true });
       else loadPage();
       connect();
+    } else {
+      stopBatchUpdates();
+      stopRunUpdates();
+      refreshSecrets();
     }
     renderLive();
   }
@@ -1105,6 +1230,14 @@
     sessionCheck = null;
     dashboard.hidden = true;
     batchDashboard.hidden = true;
+    secretsDashboard.hidden = true;
+    secretsRequest = null;
+    secretsSnapshot = null;
+    clearTimeout(secretsTimer);
+    $("expiry-banner").hidden = true;
+    $("secrets-list").replaceChildren();
+    $("telegram-session").replaceChildren();
+    setStatus($("secrets-status"), "Đang đọc trạng thái key…");
     $("live-status").hidden = true;
     $("pause-button").hidden = true;
     $("view-nav").hidden = true;
@@ -1156,6 +1289,7 @@
     $("pause-button").hidden = false;
     $("view-nav").hidden = false;
     syncView();
+    refreshSecrets();
   }
 
   async function checkLogin() {
@@ -1265,6 +1399,7 @@
   $("batch-trace-jump").addEventListener("click", () => setBatchScope(null, true));
   $("batch-scope").addEventListener("change", event => setBatchScope(event.target.value || null));
   document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshSecrets();
     if (view !== "batches") return;
     if (document.hidden) stopBatchUpdates();
     else refreshBatches();

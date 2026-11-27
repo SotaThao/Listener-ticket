@@ -1,5 +1,10 @@
 mode = "dry-run"
 
+[secrets]
+dir = "/etc/tg-triage/secrets"
+# Optional override for the root CLI audit log:
+# audit_log = "/var/log/tg-triage/secrets-audit.log"
+
 [telegram]
 ignored_command_prefixes = ["/nailhub"] # Other service commands are ignored before storage/triage.
 session_path = "/var/lib/agentfleet/tg/gateway.session"
@@ -39,12 +44,13 @@ timeout_seconds = 600
 num_predict = 2048
 cloud_consent = false
 # base_url = "https://api.openai.com/v1" # Must match selected provider; custom uses public HTTPS only.
-# key_file = "/etc/tg-triage/private/model-key.json" # mode0600 JSON {"scope":"openai|https://api.openai.com/v1","key":"..."}; never put keys in TOML.
+# With a hosted provider and cloud consent, use the CLI to set model-key.json for this endpoint.
 # Images reach a hosted model (deepseek / openai / compatible) only when cloud_consent AND cloud_image_consent are
 # both true; otherwise a case with images is judged by local Ollama vision and no image leaves this host.
 # cloud_image_consent = false
 # Backup: when the hosted call fails (any provider error, broken JSON, unusable answer, missing key/consent) the same
 # request runs on local Ollama (the url and timeout of [ollama] / [model]). fallback = "ollama" | "none".
+# Startup checks the scoped model key when hosted calls are enabled.
 # fallback = "ollama"
 # fallback_model = "qwen3.5:9b"
 # fallback_think = true
@@ -118,8 +124,7 @@ retention_days = 90
 # enabled = false
 # mode = "shadow" # shadow | live
 # router_base_url = "http://127.0.0.1:20128/v1" # loopback HTTP only
-# router_key_file = "/etc/tg-triage/9router-key" # absolute, plain text; missing: shadow unavailable, live config error
-# Disabled assistant ignores the router key file entirely (no file read).
+# Set router-key in the secrets directory. Required in assistant live mode; optional in shadow.
 # models = ["ag/gemini-3.8-flash-medium", "cx/gpt-6.1-sol"]
 # gemini_timeout_s = 75
 # gpt_timeout_s = 65
@@ -128,15 +133,12 @@ retention_days = 90
 # max_calls_per_minute = 20
 # queue_max = 200
 # daily_cap = 0 # off; counts model calls, not batches
-# Optional plain-text read-only GitHub token; never reuse the issue-writing token.
-# Unix: private 0600, or 0640 with group tglistener, like model key files.
-# github_token_file = "/etc/tg-triage/assistant-github-token"
+# Set assistant-github-token in the secrets directory (optional and distinct from gh-token).
 # github_repos = ["owner/repository"]
 # max_tool_calls = 8 # 1..8; cannot raise the hard limit.
 
 # Optional Listener Admin UI. The bind address must be loopback or Tailscale IPv4.
-# Create the hash with: python -m tg_triage admin-passwd --out /etc/tg-triage/admin-password
+# Provision the password with: sudo tg-triage secrets set admin-password
 # [admin]
 # bind = "127.0.0.1:8787"
-# password_hash_file = "/etc/tg-triage/admin-password"
 # session_hours = 12 # 1..72

@@ -16,6 +16,26 @@ code includes repo-root config/systemd/.env.example fixtures used by the package
 from the same archive/commit as the package. Worktree edits are not production inputs.
 Use the offline dependency wheel cache at /var/cache/agentfleet/wheels.
 
+## Listener key cut-over (giai đoạn 1)
+
+Owner thực hiện trên gw-01 theo thứ tự này. Release mới không dùng lại giá trị
+key từ env hay đường dẫn cũ trong TOML.
+
+1. Cài release mới vào stage, chưa restart unit. Cài cấu hình tmpfiles mới để
+   tạo thư mục secrets và audit với đúng quyền.
+2. Dùng **code trong stage mới** chạy `sudo tg-triage secrets migrate`, kiểm kế hoạch,
+   rồi chạy `sudo tg-triage secrets migrate --apply` với đúng config. Mặc định
+   lệnh đọc `/etc/agentfleet/tg-triage.env`, có thể chỉ định `--env-file PATH`.
+3. Chạy `check-config --env-file /etc/agentfleet/tg-triage.env` bằng code trong
+   stage có quyền đọc file env. Lệnh lấy `GH_REPO` và `TG_TRIAGE_MODE` từ file
+   khi thiếu trong môi trường shell. Không tiếp tục khi thiếu key bắt buộc
+   hay kiểm tra lỗi. Cảnh báo về khai báo cũ là dự kiến khi giữ đường rollback.
+4. Sau đó mới chạy `agentfleet_deploy.py` theo hướng dẫn triển khai. Giữ nguyên
+   `EnvironmentFile=` để unit tiếp tục nhận hai biến cấu hình không bí mật.
+5. Giữ lại dòng env và file key cũ để code cũ vẫn chạy nếu deploy rollback.
+   Sau ít nhất 7 ngày release mới chạy ổn, Owner dọn theo danh sách `migrate`
+   đã in. Không xóa `GH_REPO`, `TG_TRIAGE_MODE` hoặc các file trong secrets dir mới.
+
 ## 1. Pause legacy NailHub and record the browser version
 
 The Owner sends /nailhub pause, then /nailhub status until paused=True and running=False.

@@ -11,14 +11,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from tg_triage.__main__ import _load_decision_rules, main
-from tg_triage.config import ConfigError, load_config
+from tg_triage.config import ConfigError
 from tg_triage.decision_rules import RulesSnapshot
-from tests.helpers import EXAMPLE, FAKE_HASH
+from tests.helpers import EXAMPLE, load_with_test_secrets, write_test_config
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('states', 'facts', 'readiness', 'questions', 'channels', 'examples')
 EXTENSION_FILES = ('lifecycle', 'analysis-status')
-ENV = {'TG_API_ID': '123', 'TG_API_HASH': FAKE_HASH}
 
 
 class RulesBootstrapTests(unittest.TestCase):
@@ -32,7 +31,7 @@ class RulesBootstrapTests(unittest.TestCase):
 
     def config(self, text):
         self.path.write_text(text, encoding='utf8')
-        return load_config(self.path, ENV)
+        return load_with_test_secrets(self.path)
 
     def snapshot(self):
         directory = self.root / 'rules'; directory.mkdir(exist_ok=True)
@@ -43,7 +42,8 @@ class RulesBootstrapTests(unittest.TestCase):
 
     def cli(self, command):
         out, err = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, ENV, clear=True), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        write_test_config(self.path, self.path.read_text(encoding='utf-8'))
+        with patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             result = main([command, '--config', str(self.path)])
         return result, out.getvalue(), err.getvalue()
 
